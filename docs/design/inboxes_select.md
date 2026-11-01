@@ -54,14 +54,13 @@ provisional (§6). Not implemented.
 
 ## 2. The boundary today
 
-§11.2 gives each flat type one queue, a `gs_qstate` in `runtime_threads.h`:
-nodes that `gs_qput` `malloc`s, under a mutex and a condition variable that
-`gs_qget`, `gs_qwait` and `gs_qpoll` wait on. `B_QGET`'s code copies a 32 KB
-message four times, not two, and worker records (`gs_thread`) live under
-`gs_threads_mutex`. Nothing sends to one thread, waits for two things or wakes
-a thread from C, and `bench/queues.md` measures the rest: one lock serializes
-takers, a put to sleeping takers makes a system call, and the allocator paces
-large messages.
+§11.2 gives each flat type one queue, a `gs_qstate` (`runtime_threads.h`):
+nodes `gs_qput` `malloc`s, under a mutex and condition variable that `gs_qget`,
+`gs_qwait` and `gs_qpoll` wait on. `B_QGET` copies a 32 KB message four times,
+not two, and worker records (`gs_thread`) live under `gs_threads_mutex`.
+Nothing sends to one thread, waits for two things or wakes a thread from C, and
+`bench/queues.md` measures the rest: one lock serializes takers, a put to
+sleeping takers makes a system call, and the allocator paces large messages.
 
 ## 3. The builtins
 
@@ -223,12 +222,11 @@ queue for that thread, which is what addressing is for; priority is the
 program's, a `qpoll` of the urgent type first.
 
 **No lost wake-up, no spurious return.** A message put while threads wait is
-taken, by one of them or by a thread that was awake, never left with all its
-takers asleep: a woken thread takes as any take does, and wakes a sleeper of
-any queue it leaves a message on. A return is a message or the deadline, on the
-monotonic clock; spurious wake-ups are absorbed, and a thread that lost its
-message waits on with its time left. A signal that returns 1 has its owner
-awake or waking.
+taken, by one of them or one that was awake, never left with all its takers
+asleep: a woken thread takes as any take does, waking a sleeper of any queue it
+leaves a message on. A return is a message or the deadline, on the monotonic
+clock; spurious wake-ups are absorbed, and a thread that lost its message waits
+on with its time left. A signal returning 1 has its owner awake or waking.
 
 **The cost of waiting.** With nothing ready, a `select` checks its sources and
 sleeps, using no CPU, its deadline the timeout. A check is a lock per queue in
@@ -275,17 +273,17 @@ one queue's mutex at a time; the inbox limit is one atomic word per type.
 
 **Waiting.** A parker is a mutex, a condition variable and a state word under
 that mutex: a count of waits, which grows at every wait and survives a change
-of owner, and `RUNNING`, `WAITING` or `CLAIMED`. Each queue lists its waiters,
-a record and a count each. A take that finds nothing becomes (its count plus
-one, `WAITING`), joins its sources' lists, looks again, and sleeps while still
-so. A put after linking, or a signal after its hint, claims the first entry
-whose thread is (its count, `WAITING`), setting `CLAIMED` and signalling in one
-critical section of the parker's mutex, so no thread is seen claimed and not
-woken; mutexes nest only queue, then parker. The woken thread becomes
-`RUNNING`, leaves the lists, takes as any take does, and claims a waiter for
-any source it leaves a message on; a deadline that finds its thread `CLAIMED`
-acts on the claim. Claims compare counts, so an ended worker's entry never
-claims its record's next owner.
+of owner, and `RUNNING`, `WAITING` or `CLAIMED`. Each queue lists its waiters
+under its mutex, a record and a count each. A take that finds nothing becomes
+(its count plus one, `WAITING`), joins its sources' lists, looks again, and
+sleeps while still so. A put after linking, or a signal after its hint, claims
+the first entry whose thread is (its count, `WAITING`), setting `CLAIMED` and
+signalling in one critical section of the parker's mutex and removing stale
+entries, so no thread is seen claimed and not woken; mutexes nest only queue,
+then parker. The woken thread becomes `RUNNING`, leaves the lists, takes as any
+take does, and claims a waiter for any source it leaves a message on; a
+deadline that finds its thread `CLAIMED` acts on the claim. Claims compare
+counts, so an ended worker's entry never claims its record's next owner.
 
 **Watches.** A watch sits in its worker's list and its watcher's, each under
 its record's mutex. `thread_watch` links it into both, unless the worker has
@@ -297,24 +295,26 @@ go. A count of two frees each watch with the last list to drop it.
 
 **Events.** Event records are in a table of blocks that never move and are
 never freed. A handle's bits 63 to 24 are its record's serial and bits 23 to 0
-its index (`GS_RES_SERIAL_BITS`, `GS_RES_REGION_BITS`); a serial grows at each
-new event and retires at 2^40 - 1, so no word names two events. At most 2^24
-records are in use, from `event` until closed with nothing pending ("too many
-open events" beyond), on a free list only the owner's side locks. A record
-holds a state word (serial, open, pending), the message, and the place of its
-**hint**, a bit in a never-freed hint word of the owner's inbox that tells
-takes to look. A signal reads the record at the word's index: its serial and
-open is a signal, an older serial or a closed event 0, a newer serial, a zero
-word or an index past the table -1. It sets `pending` by compare-exchange, or
-merges, then sets the hint by atomic `or` and wakes the owner before it returns
-1, finishing the work of a signal stopped before its hint, which at most wakes
-the owner once more. It runs no Goose code, allocates nothing, and reads the
-record's other fields atomically. A take clears the hint by atomic `and`, then
-`pending` by compare-exchange, and copies the message; a hint with nothing
-pending is passed over. Only the owner returns a record, closed with nothing
-pending: at `event_close`, at the take of a closed event's copy (`gs_qdone`),
-or at its end; a close that finds a copy pending sets its hint, so it is still
-taken.
+its index (`GS_RES_SERIAL_BITS`, `GS_RES_REGION_BITS`); a serial grows by one
+at each new event and retires at 2^40 - 1, so no word names two events, and
+serial 0, which no record has, names none. At most 2^24 records are in use,
+from `event` until closed with nothing pending ("too many open events" beyond),
+on a free list only the owner's side locks. A record holds a state word
+(serial, open, pending), the message, and the place of its **hint**, a bit in a
+never-freed hint word of the owner's inbox for the message's type that tells
+takes to look. A signal reads the record at the word's index: the record's
+serial with the event open is a signal (1); an older serial, every one of which
+was handed out, or the same one closed, is stale (0); serial 0, a newer serial
+or an index past the table was never handed out (-1). It sets `pending` by
+compare-exchange, or merges, then sets the hint by atomic `or` and wakes the
+owner before it returns 1, finishing the work of a signal stopped before its
+hint, which at most wakes the owner once more. It runs no Goose code, allocates
+nothing, and reads the record's other fields atomically. A take clears the hint
+by atomic `and`, then `pending` by compare-exchange from (the serial it gave
+that bit, pending), and copies the message; a hint with nothing pending is
+passed over. Only the owner returns a record, closed with nothing pending: at
+`event_close`, at the take of a closed event's copy (`gs_qdone`), or at its
+end; a close that finds a copy pending sets its hint, so it is still taken.
 
 ## 6. Faster queues: phase 2
 
