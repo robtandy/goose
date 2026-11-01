@@ -84,9 +84,10 @@ addressed delivery and `select`; #6 builds phase 2, the queues' speed.
   opaque `resource<U>` as `shared_memory.md` §4.1 specifies it, one `u64`
   that no program can make up or compare, and a `uint64_t` in C. C calls
   `gs_event_signal(e)` from any thread, Goose's or not, and a copy of `v`
-  arrives in the owner's inbox, where `qget` and `select` find it like any
-  other message; signals that come while it waits there are merged into it,
-  and a stale or invalid handle is reported to C, not acted on. The runtime
+  is pending in the owner's inbox, where `qget` and `select` find it like
+  any other message; signals that come while it is pending are merged into
+  it, no signal returns before its copy can be found, and a stale or
+  invalid handle is reported to C, not acted on. The runtime
   therefore wakes a thread only by giving it a message, and `select` needs
   no source but typed queues and a deadline (§6).
 * **Coroutines.** coroutines.md makes `select` and channels libraries over
@@ -416,10 +417,11 @@ worker's spawn and its first statement unbounded, which is when a spawner
 sends the most. And the engine wants the same bound at every receiver. A
 program that wants two bounds for one payload has two types (`struct ToJoin
 { b: Batch }`), as for anything else that has to be told apart; a form per
-destination is an open question (§16). Messages that events and watches
-deliver (§4.6, §6) are queued even into a full inbox, since refusing them
-would lose them; they count while they wait, so puts are refused until the
-inbox is below its limit again.
+destination is an open question (§16). A watch's message (§4.6) is queued
+even into a full inbox, since refusing it would lose it; it counts while it
+waits, so puts are refused until the inbox is below its limit again. An
+event's pending copy is not queued at all, and counts against nothing
+(§6.1).
 
 Nothing blocks. A blocking put would deadlock an exchange as soon as two
 workers both wait for room in each other's inbox, each one no longer taking
@@ -452,11 +454,13 @@ queues, which the stop messages of §8.1 rely on.
 There is no order across queues. A thread's own inbox for `T` comes before
 `T`'s global queue: addressed messages are the more specific ones, and a
 worker that has work meant for it does that first (the affinity of §8.1).
-Between types, `select`'s rotation decides (§5.3). A protocol that needs an
-order between two kinds of message sends them as one type, an enum, or
-puts the order in the messages (the exchange's last batch of §8.2 carries
-its own end-of-stream mark rather than following it with a message of
-another type).
+Between types, `select`'s rotation decides (§5.3). An event's pending copy
+has no place in an inbox's order either: it is a mark that the inbox's takes
+look for, taken by turns with its queued messages (§6.1), since a signal
+from C is ordered with nothing a Goose thread puts. A protocol that needs an
+order between two kinds of message sends them as one type, an enum, or puts
+the order in the messages (the exchange's last batch of §8.2 carries its own
+end-of-stream mark rather than following it with a message of another type).
 
 Phase 2 keeps this exactly: one queue's puts are ordered by the slots
 they claim, and a slot is claimed and filled in one atomic step (§9.3).
@@ -473,8 +477,8 @@ then, in this order:
 1. releases its storage, as today;
 2. closes its inboxes: later `qput_to`s to it are refused, and the
    messages left in them are discarded, never taken by anyone; closes its
-   events, so that later signals return 0 (§6); and cancels the watches it
-   made;
+   events, so that later signals return 0, and discards their pending
+   copies (§6); and cancels the watches it made;
 3. marks it ended, so that `thread_wait` for it returns;
 4. fires the watches on it (below).
 
@@ -589,7 +593,11 @@ rotation is deterministic, so a program that sees the same messages in the
 same order selects them in the same order, which a random choice (Go's,
 tokio's by default) would not give.
 
-Within one type, the inbox comes before the global queue (§4.5). A thread
+Within one type, the inbox comes before the global queue (§4.5), and
+within the inbox, its events' pending copies and its queued messages are
+taken by turns (§6.1). A wake-up changes none of this: a thread woken by a
+put to one of its queues takes as any take does, whichever queue woke it
+(§9.5). A thread
 whose inbox for `T` never empties never takes `T` from the global queue:
 that is the point of addressing. Go's scheduler takes from its global run
 queue every 61st time to avoid exactly this, which trades the starvation
@@ -665,27 +673,34 @@ event_close(done);
 
 * `event(v) -> resource<event>` makes an event belonging to the calling
   thread and holding a copy of `v`, a flat value. The handle is option C's
-  opaque `resource<U>` (`owning_dynamic_data.md`) as
-  [`shared_memory.md` §4.1](shared_memory.md#41-resourceu-the-first-step)
-  specifies it, step 0 of that note's plan, which both tracks build on: a single `u64` that a program can copy, store, put in a message and
-  pass to an `extern fn`, but cannot compare, compute with or make from an
-  integer, so the only handles a program holds are ones the runtime handed
-  out. `event` is a kind the runtime provides, beside that note's
-  `shared`, `mapping` and `frozen<T>`; in its table of kinds it is made by
-  `event` and taken by `event_close` and, in C, by `gs_event_signal`. Like
-  every kind, its default is the zero handle, which names nothing, and its
-  text form is its type alone.
-* Signalling `e` while it is open puts a copy of `v` in its owner's inbox
-  for `v`'s type, unless a copy from `e` is already pending: waiting there,
-  or on its way from another signal. While one is pending, further signals
-  merge into it; once the owner has taken it, the next signal puts a new
-  copy. A signal therefore wakes the owner at
-  least once after it was made, and a burst of signals wakes it once.
-* The copy is queued even into a full inbox (§4.4).
+  opaque `resource<U>` (`owning_dynamic_data.md`) as [`shared_memory.md`
+  §4.1](shared_memory.md#41-resourceu-the-first-step) specifies it, step 0
+  of that note's plan, which both tracks build on: a single `u64` that a
+  program can copy, store, put in a message and pass to an `extern fn`, but
+  cannot compare, compute with or make from an integer, so the only handles
+  a program holds are ones the runtime handed out. `event` is a kind the
+  runtime provides, beside that note's `shared`, `mapping` and `frozen<T>`;
+  in its table of kinds it is made by `event` and taken by `event_close`
+  and, in C, by `gs_event_signal`. Like every kind, its default is the zero
+  handle, which names nothing, and its text form is its type alone.
+* Signalling `e` while it is open makes a copy of `v` **pending** in its
+  owner's inbox for `v`'s type, unless one is pending already. While one
+  is, further signals merge into it; once the owner has taken it, the next
+  signal makes a new one pending. A signal therefore wakes the owner at
+  least once after it was made, and a burst of signals wakes it once. A
+  signal returns only once its copy, or the one it merged into, can be
+  taken, and the owner has been woken for it if it waits (§6.2).
+* To the owner, a pending copy is in its inbox: `qget<V>`, `qpoll<V>` and
+  `select` take it there, before `V`'s global queue. It is not queued among
+  the inbox's messages, though: it has no place in their order (§4.5), it
+  does not count against `qlimit_inbox` (§4.4), and the owner's takes of
+  `V` from its inbox take, by turns, a pending copy and a queued message, so
+  that neither keeps the other waiting.
 * `event_close(e)` closes an event of the calling thread: later signals
-  are ignored, and a copy already in the inbox stays there to be taken.
-  Closing an event of another thread, one that is closed already, or the
-  zero handle aborts. A thread's events close when it ends (§4.6).
+  are ignored, and a copy already pending stays to be taken. Closing an
+  event of another thread, one that is closed already, or the zero handle
+  aborts. A thread's events close when it ends, and their pending copies
+  are discarded with its inboxes (§4.6).
 
 An event carries no data beyond `v`, which is fixed when it is made: what
 happened is the C library's to say when the thread asks it (`reap_reads`
@@ -709,26 +724,26 @@ it back to the runtime:
 ```c
 #include "goose.h"
 
-/* Signals the event `e`: a copy of its message goes to its thread's inbox,
-   unless one is already waiting there. Returns 1 when it queued the copy
-   or merged the signal into a waiting one; 0 when `e` named an event that
+/* Signals the event `e`: a copy of its message becomes pending in its
+   thread's inbox, unless one is pending already, and the thread is woken if
+   it waits. Returns 1 once a copy is pending and can be taken, whether this
+   call made it pending or merged into one; 0 when `e` named an event that
    is closed now, by event_close or by its thread's end; -1 when `e` never
    named an event: the zero handle, or a word the runtime never handed out. */
 int gs_event_signal(gs_res e);
 ```
 
-* **What the word holds.** Bits 63 to 24 are the record's serial and bits
-  23 to 0 the index of the event's record in the runtime's table of
-  events, the split that `GS_RES_SERIAL_BITS` and `GS_RES_REGION_BITS`
-  name for every kind of the runtime's. A record's serial grows by one each time the record
-  holds a new event and is never reused: a record whose serial reaches
-  2^40 - 1 is retired rather than used again. So no word ever names two
-  events, however long a C library keeps a stale one, and the zero word
-  (serial 0, which no record has) names none. The split is checked where
-  handles are made: at most 2^24 event records are in use at once (a
-  record is in use from `event` until the event is closed and no copy of
-  its message is pending, below), and `event` aborts beyond that ("too
-  many open events").
+* **What the word holds.** Bits 63 to 24 are the record's serial and bits 23
+  to 0 the index of the event's record in the runtime's table of events, the
+  split that `GS_RES_SERIAL_BITS` and `GS_RES_REGION_BITS` name for every
+  kind of the runtime's. A record's serial grows by one each time the record
+  holds a new event and is never reused: a record whose serial reaches 2^40
+  - 1 is retired rather than used again. So no word ever names two events,
+  however long a C library keeps a stale one, and the zero word (serial 0,
+  which no record has) names none. The split is checked where handles are
+  made: at most 2^24 event records are in use at once (a record is in use
+  from `event` until the event is closed and no copy of its message is
+  pending, below), and `event` aborts beyond that ("too many open events").
 * **Stale or invalid.** The table is never shrunk or freed while the
   program runs, so the call can always read the record at the word's index
   (an index past the table's end is -1 at once). The record's state word
@@ -743,45 +758,70 @@ int gs_event_signal(gs_res e);
   before the owner first waits, while it waits or while it runs, and after
   it has ended or closed the event, which returns 0, so a C library that
   outlives its user's interest needs no handshake to stop.
-* **Thread-safe by construction.** A record holds the event's state word
-  (its serial; whether it is open; and whether a copy of its message is
-  **pending**, queued or being queued by a signal), its message `v`, and
-  the queue and incarnation of its owner's inbox as they were when the
-  event was made (in phase 1, the owner's thread id, which the put checks
-  under the inbox's mutex, §9.7). A signal changes the state word with one compare-exchange
-  from (its serial, open, not pending) to (its serial, open, pending),
-  which checks in the same step that the record is still the event `e`
-  names, that the event is open and that no copy is pending; a signal that
-  finds a copy pending has merged into it, and returns 1. The signal that
-  set `pending` then puts the copy, as a put to the owner's inbox with the
-  incarnation that the record holds, and wakes the owner if it is parked.
-  It shares no state with Goose code beyond the record, and runs no Goose
-  code. In phase 1 the queueing takes the inbox's mutex for a few tens of
-  nanoseconds and allocates nothing, since the queued copy is the event's
-  own node; in phase 2 it is a put like any other (§9.3, §9.4).
-* **Close, reuse and signals in flight.** `pending` is what keeps a record
-  from being reused under a copy of its message. A record goes back to its
-  free list only once its event is closed and no copy is pending, and the
-  one thread that makes that so returns it: `event_close` of an event with
-  no copy pending; the take, or the discard at the owner's end, of a
-  closed event's copy; or a signal whose put found the owner's inbox sealed
-  or reused. So:
-  * a copy, whether queued or held by a signal that stopped between its
-    compare-exchange and its put, always carries its own event's message,
-    since its record cannot hold another event until the copy is gone;
-  * a signal that stopped there and resumes after `event_close` still puts
-    its copy, with the closed event's message: its compare-exchange came
-    before the close, so it is one of the signals whose copy stays to be
-    taken (§6.1); a signal that starts after the close finds the record
-    closed and returns 0;
+* **Pending, and findable.** A record holds the event's state word (its
+  serial; whether it is open; whether a copy is **pending**), its message
+  `v`, and the place of its **hint**: one bit, in a word of its owner's
+  inbox for `v`'s type, that tells the inbox's takes to look at the
+  record. A signal makes the copy pending with one compare-exchange of the
+  state word from (its serial, open, not pending) to (its serial, open,
+  pending), which checks in the same step that the record is still the
+  event `e` names and that it is open; a signal that finds a copy pending
+  already has merged, and changes nothing there. Either way, the signal
+  then sets the hint bit with one atomic `or` and, after a full fence,
+  wakes the owner if it is parked, as a put does (§9.5); only then does it
+  return 1. So a signal that merges into a copy whose own signal stopped
+  between its compare-exchange and its hint does that signal's remaining
+  work itself, and no signal reports a copy that the owner cannot find, or
+  has not been woken for, whatever the thread that made it pending is
+  doing. Setting a bit that is set changes nothing, and claiming a parked
+  thread that is claimed already does nothing (§9.5), so this help makes
+  no second copy and no second wake-up. The stopped signal, once it
+  resumes, sets a bit that means nothing by then, or wakes its owner once
+  for nothing.
+* **Taking it.** The owner's take clears a hint bit it finds set, with an
+  atomic `and`, and only then clears the record's `pending`, with a
+  compare-exchange from (the serial the owner gave that bit, pending), and
+  copies the message out. In that order, a signal that comes between the
+  two sets the bit again, so no pending copy is ever without its hint; and
+  a signal that comes once the copy is taken, while the owner handles it,
+  makes a new one pending. A bit whose record has nothing pending (a hint
+  that came late, or one for a record since reused) is passed over: a hint
+  is only a reason to look, and the state word decides.
+* **Thread-safe by construction.** A signal shares no state with Goose
+  code beyond the record and its hint word, runs no Goose code, and
+  allocates nothing (the pending copy is the record). It takes no lock
+  except to wake a parked owner: in phase 2 the waiter list's of §9.5,
+  which hands its work on rather than making anyone wait, and in phase 1
+  the mutexes its puts take to wake a thread. Hint words are kept with
+  their thread's record, in blocks that are never freed while the program
+  runs, so a signal that stopped holding the place of one writes, when it
+  resumes, into memory that is still a hint word. Both phases use the same
+  records and hints.
+* **Close, reuse and signals in flight.** `pending` keeps a record from
+  being reused under its copy. A record goes back to its free list only
+  once its event is closed and no copy is pending, and the thread that
+  makes that so returns it, which is always the owner: `event_close` of an
+  event with no copy pending; the take of a closed event's copy, once the
+  copy has been handed over (`gs_qdone`, §10); or, at the owner's end, the
+  discard of its events' pending copies. So:
+  * a pending copy always carries its own event's message, since its
+    record cannot hold another event until the copy is taken or discarded;
+  * a signal that made a copy pending before `event_close` has it taken
+    after the close, with the closed event's message (§6.1), even if it
+    stopped before setting its hint: `event_close` that finds a copy
+    pending sets the hint itself, since a signal that starts after the
+    close finds the record closed and returns 0 without touching it;
   * closing an event and making another before the closed one's copy is
-    taken gives the new event another record, and both copies arrive, each
-    with its own message;
-  * a signal that resumes after the owner has ended finds its put refused,
-    since the inbox it names is sealed, or has another incarnation once its
-    thread record has a new owner (§9.3): it clears `pending`, returns the
-    record and returns 0, and nothing reaches the record's new owner.
-* **Not from a signal handler**, since a put may take a lock (§16).
+    taken gives the new event another record and another hint bit, and
+    both copies are taken, each with its own message;
+  * a signal that made a copy pending before its owner ended returns 1, as
+    a message put to a worker that then ends is `true` (§4.6), and its copy
+    is discarded with the inbox. If it stopped before setting its hint, the
+    bit it sets when it resumes lands in a hint word of that thread record,
+    which a later owner checks against its own records as it checks every
+    hint: it can make that owner look, or wake it once, and nothing more.
+* **Not from a signal handler**: phase 1 wakes a parked owner through a
+  mutex and a condition variable, which a handler may not touch (§16).
 * **Linkable from a package's C.** `gs_event_signal` has external linkage
   in every build of the runtime, the runtime object and the standalone
   unit alike, so that a native part compiled on its own
@@ -1212,10 +1252,10 @@ From §3.4: a contended `pthread_mutex` that puts takers to sleep; a
 `pthread_cond_signal` system call on every put to a queue whose takers
 sleep, and wake-ups of about 6 µs each; `malloc` of fresh pages for a
 growing queue and `free` on another thread (0.95 µs for 32 KB); and four
-copies of a fixed-size message where two are needed. Phase 2 removes each, without
-changing anything a program can observe: each queue first in, first out
-(§4.5), exact limits, `qput` never blocking, inbox before global, the zero
-values of misses, and the deadlines of `qget(ms)` and `select(ms)`.
+copies of a fixed-size message where two are needed. Phase 2 removes each,
+without changing anything a program can observe: each queue first in, first
+out (§4.5), exact limits, `qput` never blocking, inbox before global, the
+zero values of misses, and the deadlines of `qget(ms)` and `select(ms)`.
 
 ### 9.2 Options
 
@@ -1270,20 +1310,23 @@ than a century at a billion a second.
 
 * **Put.** A put to an inbox first checks the inbox's owner (below). The
   putter reads `tail`, `t`, and for a limited queue `head`, `h`: when `t -
-  h` is at least the limit, the queue holds that many messages, and the
-  put is refused. Otherwise it claims slot `t` with one
-  double-width compare-exchange (`cmpxchg16b` on x86-64; `casp`, or an
-  `ldxp`/`stxp` loop, on AArch64: Goose's two native targets) from (empty
-  `t`, the queue's incarnation) to (full `t`, the message), which
-  publishes the message in the same instant, and then moves `tail` from
-  `t` to `t + 1`. Finding the slot full, it moves `tail` on for whoever
-  filled it and tries again. The claim is the put's moment: a refusal is a
-  moment the queue held its limit (`head` only grows, so `t - h` never
-  overstates what the queue held when `h` was read), a claim is a moment
-  it held less, so the limit is exact, and messages are taken in the order
-  of their slots. After a full fence the putter reads the queue's count of
-  parked threads; if it is zero, which is the common case, the put is done
-  (§9.5).
+  h` is at least the limit, the queue holds that many messages, and the put
+  is refused. Otherwise it claims slot `t` with one double-width
+  compare-exchange (`cmpxchg16b` on x86-64; `casp`, or an `ldxp`/`stxp`
+  loop, on AArch64: Goose's two native targets) from (empty `t`, the queue's
+  incarnation) to (full `t`, the message), which publishes the message in
+  the same instant, and then moves `tail` from `t` to `t + 1`. Finding the
+  slot full, it moves `tail` on for whoever filled it and tries again; a
+  slot keeps its full state after its message is taken, until its segment is
+  recycled, so a putter can do this even when takers have already passed the
+  slot, and `tail` may lag behind `head` by the slot of a put that stopped
+  before moving it (`t - h` is then negative, and refuses nothing). The
+  claim is the put's moment: a refusal is a moment the queue held its limit
+  (`head` only grows, so `t - h` never overstates what the queue held when
+  `h` was read), a claim is a moment it held less, so the limit is exact,
+  and messages are taken in the order of their slots. After a full fence the
+  putter reads the queue's count of parked threads; if it is zero, which is
+  the common case, the put is done (§9.5).
 * **Segments.** A thread that needs a segment past the last links one
   with a double-width compare-exchange of the last segment's `next` and
   the **generation** beside it, a count of that segment's reuses that grows
@@ -1299,25 +1342,33 @@ than a century at a billion a second.
   tickets. A thread that loses the race gives its segment back. Segments
   and chunks come from free lists that take no lock (§9.4).
 * **Take.** A taker reads `head`, `h`, and slot `h`. Full: a
-  compare-exchange of `head` from `h` to `h + 1` makes the message its
-  own, and only the winner reads it. Empty, with the queue's incarnation,
-  or no segment for `h` yet: the queue is empty, since a slot is filled
-  only once the slot before it is. No slot is ever half filled, so a take never waits for a put,
-  whatever the putter's thread is doing: a `qpoll` and a `select(0)`
-  answer at once, a timed take returns at its deadline, and a `select`
-  that finds a source empty goes on to its next.
-* **Nothing waits for a stopped thread.** A put that stops before its
-  claim holds nothing. One that stops after its claim and before moving
-  `tail` holds nothing either: the next putter moves `tail` for it, and
-  takers never read `tail`. A thread that stops while linking a segment
-  holds only the segment in its hand. So no take, and no put, waits for a
-  thread that was descheduled in the middle of an operation; the one lock
-  left, the waiter list's of §9.5, hands its work on rather than making
+  compare-exchange of `head` from `h` to `h + 1` makes the message its own,
+  and only the winner reads it. Empty, with the queue's incarnation, or no
+  segment for `h` yet: the queue is empty, since a slot is filled only once
+  the slot before it is. No slot is ever half filled, so a take never waits
+  for a put, whatever the putter's thread is doing: a `qpoll` and a
+  `select(0)` answer at once, a timed take returns at its deadline, and a
+  `select` that finds a source empty goes on to its next.
+* **Nothing waits for a stopped thread.** A put that stops before its claim
+  holds nothing. One that stops after its claim and before moving `tail`
+  holds nothing either: the next putter moves `tail` for it, and takers
+  never read `tail`; until then, the segment `tail` is in stays where that
+  putter can find it (Done, below). A thread that stops while linking a
+  segment holds only the segment in its hand. So no take, and no put, waits
+  for a thread that was descheduled in the middle of an operation; the one
+  lock left, the waiter list's of §9.5, hands its work on rather than making
   anyone wait for its holder.
 * **Done.** After the generated code has copied a message out, its slot
-  is finished. A segment whose 64 slots are finished goes back to its free
-  list once `head` has passed it; going back bumps its generation and
-  clears its `next` in one compare-exchange. Each segment records its queue's
+  is finished. A segment goes back to its free list once its 64 slots are
+  finished and `tail` has passed it. Its count covers both: each finished
+  slot adds one, and so does the compare-exchange that moves `tail` past
+  its last slot, which only one thread makes, and whoever brings the count
+  to 65 returns the segment. Finished slots alone would not do: a put that
+  stops after claiming a segment's last slot and before moving `tail`
+  leaves `tail` in that segment, and the putters that come next need that
+  slot's full state to move `tail` on, after its message has been taken
+  and finished. Going back bumps the segment's generation and clears its
+  `next` in one compare-exchange. Each segment records its queue's
   incarnation and its first ticket, and a reader that followed a pointer
   to a segment checks them before and after it reads a slot: a reader
   holding a pointer to a segment that has since been recycled, even into
@@ -1336,7 +1387,9 @@ than a century at a billion a second.
   last segment's `next`, and every empty slot from the tail on, closed (one
   compare-exchange each, for the few slots of one or two segments; a put
   racing it either fills its slot first, and is discarded with the rest,
-  or finds no empty slot), sets the owner to -2, which no thread has, and
+  or finds no empty slot), counting each closed slot as finished and
+  moving `tail` over them as a put does, so that every segment still sees
+  `tail` pass once, sets the owner to -2, which no thread has, and
   discards what is queued. A record reused for a
   later thread starts its inboxes anew, with a new incarnation and a fresh
   segment from the next ticket on. A sender that read worker X's pair and
@@ -1347,7 +1400,8 @@ than a century at a billion a second.
   a second), so there is no generation to wrap or to run out of.
 * **Inbox first.** A take of `T` looks at the caller's inbox for `T` (a
   load of `head` and of its slot, lines that stay in the caller's cache
-  while nobody addresses it) and then the global queue.
+  while nobody addresses it, and of its hint words if it has events of `T`,
+  by turns with the slots, §6.2) and then the global queue.
 
 The contended operations are one double-width compare-exchange per put and
 one compare-exchange per take, plus, for a message in a chunk, a decrement
@@ -1377,6 +1431,11 @@ comes back to an old value while the program runs:
 The counters are 62 or 64 bits wide, more than any run can count to, except
 an event record's serial, which is 40 bits so that a handle fits in one
 `u64` with its index (§6.2), and whose record retires when it is used up.
+Two kinds of word change without a compare-exchange: event hints, by `or`
+and `and`, and the counts of chunks and segments, by increment and
+decrement. Neither compares anything that could have come round: a hint is
+only a reason to look at a record, whose state word decides (§6.2), and a
+count is brought to its end by exactly one thread.
 
 ### 9.4 Payloads: in the slot, or in the sender's chunks
 
@@ -1389,13 +1448,11 @@ an event record's serial, which is 40 bits so that a handle fits in one
   decrements it, and whoever brings it to zero puts the chunk on the free
   list. A message larger than 64 KB gets a chunk of its own, rounded up to
   a multiple of 64 KB and kept on a free list by size.
-* An event's or a watch's message (§4.6, §6) stays in its record, and its
-  slot points there, or carries it when it has at most 8 bytes. The record
-  is not reused while its message is queued or being put: an event's
-  record goes back to its free list as §6.2 says, and a watch's when its
-  one message has been taken, discarded with an ended watcher's inbox, or
-  refused by it. Taking an event's copy clears its `pending`, which is how
-  signals merge.
+* A watch's message (§4.6) stays in its record, and its slot points
+  there, or carries it when it has at most 8 bytes; the record goes back
+  to its free list once its one message has been taken, discarded with an
+  ended watcher's inbox, or refused by it. An event's copy is never in a
+  slot: it is its record's message, which the take copies from (§6.2).
 
 No message `malloc`s. Segments and chunks are carved from regions that the
 runtime reserves for queues, as it reserves data stacks, and go back to
@@ -1467,11 +1524,16 @@ one entry per thread that has waited on it.
   thread can only be claimed for the wait it registered. A thread already
   claimed, or one whose count has moved on (it woke, at its deadline or
   for another queue's message, and may be waiting again on others), is
-  passed over, and its stale entry removed. The claimed thread checks its
-  sources in its rotation (§5.3) and takes the first message it finds; if
-  another of its sources still holds a message and has threads parked on
-  it, it wakes one of them in turn, so a message that wakes a thread is
-  never left behind with its takers asleep. If it finds nothing, the
+  passed over, and its stale entry removed. The claimed thread then takes
+  as any take does: in its rotation (§5.3), and within a type from its
+  inbox before the global queue, whichever queue's put claimed it. A
+  wake-up carries no message, only the news that one came, so it never
+  changes which message a take prefers: a thread claimed for a global
+  message that an awake thread takes first, while an addressed message and
+  then another global one arrive, takes the addressed one. If another of
+  its sources still holds a message and has threads parked on it, it wakes
+  one of them in turn, so a message that wakes a thread is never left
+  behind with its takers asleep. If it finds nothing, the
   message was taken by a thread that was awake, which is just as good.
   There is no thundering herd, and no wake-up is spent on a thread that has
   stopped waiting for it.
@@ -1500,15 +1562,15 @@ one out.
 
 `qput_to(id, …)` finds thread `id`'s record. Thread records become
 type-stable in phase 1: a record is recycled for a later thread instead of
-freed, with its id changed, so a pointer to one is always safe to read and
-a reader checks the id it finds. The id-to-record map is written under
-`gs_threads_mutex` when a thread starts or ends. Phase 1 reads it under
-that mutex, and checks the inbox's owner under the inbox's own mutex, in
-the same critical section as the link, so a record reused meanwhile is
-seen for what it is. Phase 2 gives each thread a small cache of the
-records it addressed last, so an exchange's puts to the same 16 workers
-never take the mutex; the cache needs no check of its own, since a claim
-can only succeed with the incarnation of the owner it addressed (§9.3). The recycled records keep
+freed, with its id changed, so a pointer to one is always safe to read and a
+reader checks the id it finds. The id-to-record map is written under
+`gs_threads_mutex` when a thread starts or ends. Phase 1 reads it under that
+mutex, and checks the inbox's owner under the inbox's own mutex, in the same
+critical section as the link, so a record reused meanwhile is seen for what
+it is. Phase 2 gives each thread a small cache of the records it addressed
+last, so an exchange's puts to the same 16 workers never take the mutex; the
+cache needs no check of its own, since a claim can only succeed with the
+incarnation of the owner it addressed (§9.3). The recycled records keep
 §11.2's promise that nothing is retained per completed worker (beyond a
 contained abort's bit): they are a pool as large as the most threads that
 were ever live at once, and an ended worker's inboxes, events and watches
@@ -1565,7 +1627,10 @@ int gs_event_signal(gs_res e);                          /* external linkage, als
 `gs_qlimit` keeps its meaning, the global queue's limit, and
 `gs_qlimit_inbox` sets the limit of the type's inboxes. A `resource<event>`
 is the `gs_res` that step 0 gives every `resource<U>`, one `uint64_t`, here
-and at an `extern fn`'s boundary.
+and at an `extern fn`'s boundary. A take's view points into the message's
+slot or chunk, or into the record of the watch or event it came from, and
+`gs_qdone` gives back what the take used: it finishes the slot, and returns
+a closed event's record once its copy has been handed over (§6.2).
 
 `gs_qselect` returns the index of the queue it took from, or -1 at its
 deadline; `ms` below zero blocks, and the code passes `select<E>(ms)`'s
@@ -1604,13 +1669,13 @@ A variant's payload struct has one field, so the message's image is the
 payload's, and one copy into the union builds the variant; for a
 variable-mode `E..` the destination is the data stack's top, with the tag
 first, as for any variable-size value. A missed timed `select` zeroes the
-destination, as a missed `qpoll` does. `event(v)` and `thread_watch(id,
-v)` pack `v` as `qput` does and pass it with its queue; the runtime keeps
-the copy. `qlimit_inbox<T>(n)` is `gs_qlimit_inbox(&q, n, file, line)`, as
-`qlimit` is `gs_qlimit`. `thread_id()` is `gs_thread_self()`. The queues' `gs_qinit`
-calls in `gs_program_init` also number the queue types, in the sorted order
-the compiler already emits them, which is how a thread record finds its
-inbox for a type.
+destination, as a missed `qpoll` does. `event(v)` and `thread_watch(id, v)`
+pack `v` as `qput` does and pass it with its queue; the runtime keeps the
+copy. `qlimit_inbox<T>(n)` is `gs_qlimit_inbox(&q, n, file, line)`, as
+`qlimit` is `gs_qlimit`. `thread_id()` is `gs_thread_self()`. The queues'
+`gs_qinit` calls in `gs_program_init` also number the queue types, in the
+sorted order the compiler already emits them, which is how a thread record
+finds its inbox for a type.
 
 ## 11. The compiler's pieces
 
@@ -1645,24 +1710,23 @@ inbox for a type.
   `usesthreads` is set by every new builtin, so the JIT refuses these
   programs as it refuses any program with queues today.
 * **Runtime** (`runtime.h` declarations, `runtime_threads.h`): phase 1's
-  thread records with inbox tables, main's record, the parker, waiter
-  lists and claims, inbox close at a worker's end, watches, inbox limits,
-  the event table (its index and serial split, checked) and
-  `gs_event_signal`; phase 2's slots claimed by double-width
-  compare-exchange (one helper, `gs_cas128`, over `cmpxchg16b`, `casp` or
-  `ldxp`/`stxp` and MSVC's `_InterlockedCompareExchange128`), incarnations,
-  segments, chunks, lock-free free lists, queue regions and their trim, the
-  fast parker, and the test hooks of §13 (`GS_QTEST_HOOK`, nothing in a
-  normal build). `goose.h` declares `gs_event_signal`, with `gs_res` if
-  step 0 has not put it there. New aborts:
-  `GS_E_NOTHREAD` ("qput_to or thread_watch of a thread id never issued"),
-  `GS_E_WATCH` ("thread_watch of main or of the current thread"),
-  `GS_E_EVENT` ("event_close of a handle that names no open event of this
-  thread"), `GS_E_EVENTS` ("too many open events"); `qlimit_inbox` of zero
-  or less is `GS_E_QBOUND`, as for `qlimit`. The
-  runtime's text changes, so `GS_RUNTIME_VERSION` changes and runtime
-  objects are rebuilt; `runtime_inline.h` is regenerated with
-  `goose --gen-runtime-header`.
+  thread records with inbox tables, main's record, the parker, waiter lists
+  and claims, inbox close at a worker's end, watches, inbox limits, the
+  event table (its index and serial split, checked), the hint words kept
+  with each thread record, and `gs_event_signal`; phase 2's slots claimed by
+  double-width compare-exchange (one helper, `gs_cas128`, over `cmpxchg16b`,
+  `casp` or `ldxp`/`stxp` and MSVC's `_InterlockedCompareExchange128`),
+  incarnations, segments, chunks, lock-free free lists, queue regions and
+  their trim, the fast parker, and the test hooks of §13 (`GS_QTEST_HOOK`,
+  nothing in a normal build). `goose.h` declares `gs_event_signal`, with
+  `gs_res` if step 0 has not put it there. New aborts: `GS_E_NOTHREAD`
+  ("qput_to or thread_watch of a thread id never issued"), `GS_E_WATCH`
+  ("thread_watch of main or of the current thread"), `GS_E_EVENT`
+  ("event_close of a handle that names no open event of this thread"),
+  `GS_E_EVENTS` ("too many open events"); `qlimit_inbox` of zero or less is
+  `GS_E_QBOUND`, as for `qlimit`. The runtime's text changes, so
+  `GS_RUNTIME_VERSION` changes and runtime objects are rebuilt;
+  `runtime_inline.h` is regenerated with `goose --gen-runtime-header`.
 * **Language server** (`lsp_features.h`): hover and signature help for the
   new builtins come from the builtin table; completion offers them.
 * **No syntax.** `select<E>()` is a call with a type argument, as
@@ -1686,6 +1750,16 @@ inbox for a type.
   to variants by position, or by comparing handles, which `resource<U>`
   forbids, and gives a thread a second way to be woken. Delivering an event
   as a message keeps one way.
+* **Events as queued copies**, a slot in the owner's inbox put by the
+  signal that sets `pending`, which an earlier draft of this note had. A
+  signal that merges into a copy whose putter has stopped before its put
+  then reports a success that the owner cannot see, for as long as that
+  thread is stopped; to prevent it, the merging signal must wait for the
+  put, or put the copy itself, and then the signals have to agree on a
+  single slot or the take has to recognize duplicates, whose slots count
+  against the inbox's limit while they wait. A hint that every signal sets
+  has no such window, needs no agreement and makes no duplicate (§6.2), and
+  an event, a "look" from C, never needed a place in the queue's order.
 * **Events as `i64` ids**, as thread ids are. A program could make one up
   and hand it to C, which is the argument against integer channel handles
   (§4.1); `resource<event>` makes a handle something only the runtime
@@ -1761,7 +1835,9 @@ markers. Threads run only natively, so the new fixtures, like
   signalling events of a worker and of main, before and during their waits;
   a burst of signals merging into one message; the handle of a closed event
   and of an ended thread's returning 0, and the zero handle and a word never
-  handed out returning -1; an event's message queued into a full inbox; a
+  handed out returning -1; an event's copy taken from an inbox that is
+  full, against whose limit it does not count; a constantly signalled event
+  and a stream of queued messages of its type, taken by turns; a
   `resource<event>` sent in a message and handed to C by another thread.
 * `threads/exchange_credits.goose`: §8.2 at small scale, 4 workers and
   windows of 2, every row arriving once at its owner.
@@ -1793,8 +1869,9 @@ markers. Threads run only natively, so the new fixtures, like
   and defines `GS_QTEST_HOOK(point, queue)`, which the runtime calls at
   those moments and which is empty in every other build, to park a chosen
   thread at a chosen point until the test lets it go. Phase 1 brings the
-  file and the hooks between a signal's compare-exchange and its put, for
-  the event cases below; phase 2 adds the queue's own points:
+  file and the hooks inside a signal (after its compare-exchange, after its
+  hint) and between a thread's wake-up and its take, for the event and
+  wake-up cases below; phase 2 adds the queue's own points:
   * **interrupted puts**: a put parked during its chunk copy, before its
     claim, after its claim and before it moves `tail`, and while it links
     a segment. Meanwhile a `qpoll` of that queue answers at once (a miss,
@@ -1804,6 +1881,15 @@ markers. Threads run only natively, so the new fixtures, like
     succeed, or, on a limited queue, are refused exactly when it holds its
     limit; let go, the parked put's message is taken once, in its slot's
     order;
+  * **a lagging `tail`**: a put parked after claiming the last slot of a
+    segment and before moving `tail`, while consumers take that segment's
+    messages and the next one's and another thread calls `trim_memory()`:
+    the segment is neither recycled nor trimmed while `tail` is in it, the
+    next put moves `tail` past it and recycles it, and the parked put, let
+    go, finds `tail` moved and does nothing more; then the same with no
+    other put, so that `tail` stays behind `head` until the parked put
+    moves it; and the same with the inbox sealed while it is parked, every
+    segment returned once;
   * **an interrupted waker**: a thread parked holding a queue's waiter
     list's lock, while puts that have to wake a parked thread hand their
     wake-up on, return at once, and the parked threads still wake;
@@ -1829,6 +1915,12 @@ markers. Threads run only natively, so the new fixtures, like
     entry and wakes another thread parked on its queue, if there is one;
     and a woken thread that takes another source's message first passes
     the wake-up on, so no message is left with its takers asleep;
+  * **a wake-up keeps inbox first**: a thread parked in `qget<T>()`,
+    claimed by a global put of `T` and parked by the hook before its take,
+    while an awake thread takes that message and then an addressed message
+    of `T` and another global one arrive; let go, it takes the addressed
+    message, and the global one is left for the next take (phase 1 and
+    phase 2);
   * **trim against reuse**: producers and consumers streaming through
     queues with 4-slot segments and small chunks (`GS_QSEG_SLOTS=4`), so
     that both recycle every few messages, while another thread calls
@@ -1839,14 +1931,26 @@ markers. Threads run only natively, so the new fixtures, like
     gets another record, the owner takes the first event's message and
     then the second's, and the first record is reused only after its copy
     has been taken;
+  * **a paused publisher**: a C signal parked after its compare-exchange
+    and before its hint, while the owner sleeps in `select`: a second
+    signal merges, sets the hint, wakes the owner and returns 1, and the
+    owner takes the copy while the first signal is still parked; let go,
+    the first returns 1 and its hint is passed over, nothing being pending,
+    and once more with a third signal before it is let go, whose copy is
+    taken once. Then the first parked after its hint and before its
+    wake-up: the second signal's wake-up is the one that wakes the owner;
   * **a signal parked across a close**: a C signal parked after its
-    compare-exchange and before its put, while the owner closes the event
-    and makes others; let go, it puts its copy with the closed event's own
-    message, taken once, and the record is reused only after that;
+    compare-exchange and before its hint, while the owner closes the event
+    and makes others, and a signal of the closed handle returns 0: the owner
+    takes the copy, with the closed event's own message, before the parked
+    signal is let go, since the close set its hint; let go, the signal
+    returns 1, and the record is reused only after the copy was taken;
   * **a signal parked across its owner's end**: the same signal parked
-    while the owner ends and its thread record is reused 70,000 times; let
-    go, its put is refused, it returns 0 and returns the record, and no
-    later owner of the thread record receives anything;
+    while the owner ends and its thread record is reused 70,000 times, by
+    workers with events of the same type in the same hint bits; let go, it
+    returns 1, its copy having been discarded with the inbox, and its hint
+    makes the record's current owner look and take nothing that was not
+    signalled to it;
   * **stale event handles**: an event record reused many times: C
     signalling an old handle gets 0 and nothing arrives; with
     `GS_QTEST_EVENT_SERIAL_BITS=3` a record retires after its 7th event and
@@ -1867,9 +1971,10 @@ markers. Threads run only natively, so the new fixtures, like
   and watches, `thread_watch`, `select` and its rules, events as
   `resource<event>` and `gs_event_signal`. §12's builtin table gains the
   seven builtins. The foundation step documents `resource<U>` itself, and
-  §11.2 names `event` among the kinds the runtime provides. Appendix B TODO 9 ("queue fairness/capacity, select")
-  moves to Resolved, keeping its other items (worker-local init, sending
-  self-contained relative-reference values).
+  §11.2 names `event` among the kinds the runtime provides. Appendix B TODO
+  9 ("queue fairness/capacity, select") moves to Resolved, keeping its other
+  items (worker-local init, sending self-contained relative-reference
+  values).
 * **Spec §7.10**: one paragraph naming `gs_event_signal` as the call C
   makes into the runtime, that it may come from any thread, and what its
   three answers mean; that a `resource<U>` crosses as a `uint64_t` is the
@@ -1912,7 +2017,9 @@ to 6 do not depend on it, and step 7 does.
 3. **Waiting.** The per-thread parker (mutex, condition variable, and the
    state word with its count of waits), waiter lists in each `gs_qstate`
    under its mutex, claims by the count of the registered wait, a woken
-   thread passing on what it does not take, absorbed spurious wake-ups;
+   thread taking as any take does (inbox first) and passing on what it
+   does not take, absorbed spurious wake-ups, and the hook between a
+   wake-up and its take for `runtime_queue_stalls.c`'s inbox-first case;
    the condition variable per queue goes. `bench/queues.py` within 10% of
    §3.2.
 4. **`thread_id`, `qput_to` and `qlimit_inbox`**, with ended-worker
@@ -1926,14 +2033,17 @@ to 6 do not depend on it, and step 7 does.
    rotation, `gs_qselect`. Tests: `select_basic`, `select_wait`,
    `exchange_credits`, the `select` rejections.
 7. **Events**, on the foundation's `resource<U>`: the kind `event`, the
-   event table with its index and serial split, `pending` and the return
-   of a record to its free list only when it is closed with no copy
-   pending (§6.2), `event`, `event_close`, and `gs_event_signal` with its
-   three answers, external linkage, and a place in `goose.h`. Tests:
-   `event_signal` with its C, the event aborts and rejections, the
+   event table with its index and serial split, `pending`, the hint words
+   and their bits per inbox, signals that set the hint and wake the owner
+   whether they made the copy pending or merged, takes by turns with the
+   inbox's queued messages, and the return of a record to its free list
+   only when it is closed with no copy pending (§6.2); `event`,
+   `event_close` (which sets a pending copy's hint), and `gs_event_signal`
+   with its three answers, external linkage, and a place in `goose.h`.
+   Tests: `event_signal` with its C, the event aborts and rejections, the
    lifecycle test's foreign signals, and `runtime_queue_stalls.c` with its
-   event cases: events closed under their copies, and signals parked
-   across a close and across the owner's end (§13).
+   event cases: events closed under their copies, a paused publisher, and
+   signals parked across a close and across the owner's end (§13).
 8. **Documentation** (§14), and `bench/queues.md` re-measured.
 
 ### Phase 2 (#6): queue performance
@@ -1945,14 +2055,16 @@ to 6 do not depend on it, and step 7 does.
    waiter list's hand-off; stale entries removed by wakers. Measure `rt2`
    and `tput` 1 × 16.
 2. **Slots claimed and filled at once** (§9.3): `gs_cas128`, segments
-   with their generations, incarnations, messages of up to 8 bytes in
+   with their generations, recycled once their slots are finished and
+   `tail` has passed them, incarnations, messages of up to 8 bytes in
    their slots, exact limits, inboxes sealed and reused, the test hooks and
-   `runtime_queue_stalls.c`'s interrupted puts, owner reuse, stale
-   segments, links reused in their own queue and stale waiter entries;
+   `runtime_queue_stalls.c`'s interrupted puts, a lagging `tail`, owner
+   reuse, stale segments, links reused in their own queue and stale waiter
+   entries;
    `gs_qstate` replaced. Measure `drain` and `tput` 16 B.
 3. **Chunks** for messages over 8 bytes, the queue regions, lock-free free
-   lists for segments and chunks, event and watch records' messages in
-   their records, and `trim_memory()`'s discarding of free queue memory
+   lists for segments and chunks, watch records' messages in their
+   records, and `trim_memory()`'s discarding of free queue memory
    without unmapping it, with the trim-against-reuse test. Measure 32 KB;
    no `malloc` per message (a counting allocator in the lifecycle test).
 4. **Copies**: `qput` from the lvalue, takes into the destination (§9.6).
@@ -1986,13 +2098,15 @@ Each with the answer this note recommends.
   Add them when a library's completions cannot be bridged by a thread of
   its own at acceptable cost: io_uring at very high completion rates is
   the likely first.
-* **`gs_event_signal` from a signal handler?** Not promised: in phase 1 it
-  takes the inbox's mutex, and in phase 2 a put that needs a new segment
-  takes it from its thread's cache of free ones, which a handler that
-  interrupted its own thread in the middle of using that cache would
-  corrupt. If a user needs it, a signal made from a handler can link only
-  segments from the global list, which needs no lock (§9.4), and leave any
-  wake-up to the waiter list's holder, as every put already can (§9.5).
+* **`gs_event_signal` from a signal handler?** Not promised. Phase 1 wakes
+  a parked owner through a mutex and a condition variable, which a handler
+  may not touch. In phase 2 a signal is a compare-exchange, an `or`, a
+  fence and loads (§6.2), plus a wake-up that it leaves with the waiter
+  list's holder when that lock is taken (§9.5), so it never waits for
+  anyone, not even the thread it interrupted; it allocates nothing and
+  puts nothing in a queue. Phase 2 could therefore make the promise, with a
+  test that signals from a handler interrupting the owner in each of
+  those steps, if a user needs it.
 * **Should `qget` take from the global queue now and then even when the
   inbox has messages, as Go's scheduler does every 61st time?** No: inbox
   first is a rule a program can rely on (§5.3).
