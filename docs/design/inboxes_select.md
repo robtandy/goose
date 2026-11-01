@@ -81,8 +81,8 @@ addressed delivery and `select`; #6 builds phase 2, the queues' speed.
   deadline (§5).
 * **Events from C are messages.** `event(v) -> resource<event>` makes an
   event that belongs to the calling thread; its handle is option C's
-  opaque `resource<U>` (`owning_dynamic_data.md`), one `u64` that no
-  program can make up or compare, and a `uint64_t` in C. C calls
+  opaque `resource<U>` as `shared_memory.md` §4.1 specifies it, one `u64`
+  that no program can make up or compare, and a `uint64_t` in C. C calls
   `gs_event_signal(e)` from any thread, Goose's or not, and a copy of `v`
   arrives in the owner's inbox, where `qget` and `select` find it like any
   other message; signals that come while it waits there are merged into it,
@@ -334,9 +334,9 @@ name, and its taking threads must be told apart again). When it is freed:
 with its creator (then every copy is a dangling handle, which needs a
 generation check: the never-reused id inboxes already have), or explicitly
 (then a program can free a channel others still hold). Option C's
-`resource<U>` (`owning_dynamic_data.md`), which the shared-memory track
-builds first, would keep a program from making a channel up out of an
-integer, as it does for events (§6); it would not answer those questions.
+`resource<U>` (`owning_dynamic_data.md`; step 0 of `shared_memory.md`)
+would keep a program from making a channel up out of an integer, as it
+does for events (§6); it would not answer those questions.
 What channels add over inboxes is several queues of one type per thread,
 which a wrapper type gives (`struct ToJoin { b: Batch }`), and queues that
 are not tied to a thread, which the global queues are. The engine needs
@@ -665,14 +665,16 @@ event_close(done);
 
 * `event(v) -> resource<event>` makes an event belonging to the calling
   thread and holding a copy of `v`, a flat value. The handle is option C's
-  opaque `resource<U>` (`owning_dynamic_data.md`), which the shared-memory
-  track builds first, as the foundation both tracks use: a single `u64`
-  that a program can copy, store, put in a message and pass to an `extern
-  fn`, but cannot compare, compute with or make from an integer, so the
-  only handles a program holds are ones the runtime handed out. `event` is
-  a kind the runtime provides, beside that track's `shared`, `mapping` and
-  `frozen<T>`; like theirs, its default is the zero handle, which names
-  nothing.
+  opaque `resource<U>` (`owning_dynamic_data.md`) as
+  [`shared_memory.md` §4.1](shared_memory.md#41-resourceu-the-first-step)
+  specifies it, step 0 of that note's plan, which both tracks build on: a single `u64` that a program can copy, store, put in a message and
+  pass to an `extern fn`, but cannot compare, compute with or make from an
+  integer, so the only handles a program holds are ones the runtime handed
+  out. `event` is a kind the runtime provides, beside that note's
+  `shared`, `mapping` and `frozen<T>`; in its table of kinds it is made by
+  `event` and taken by `event_close` and, in C, by `gs_event_signal`. Like
+  every kind, its default is the zero handle, which names nothing, and its
+  text form is its type alone.
 * Signalling `e` while it is open puts a copy of `v` in its owner's inbox
   for `v`'s type, unless a copy from `e` is already pending: waiting there,
   or on its way from another signal. While one is pending, further signals
@@ -696,10 +698,13 @@ where the library keeps it.
 
 ### 6.2 The C side
 
-A `resource<U>` crosses the C boundary (§7.10) as the 64-bit word it is: a
-`resource<event>` parameter of an `extern fn` is a `uint64_t` in C. C may
-keep the word as long as it likes, since it is a name, not a pointer, and
-gives it back to the runtime:
+A `resource<U>` crosses the C boundary (§7.10) as the 64-bit word it is,
+`gs_res`, a `uint64_t`: a `resource<event>` parameter of an `extern fn` is
+one. As for every kind of the runtime's, C may take an event's handle but
+never return one, nor a value holding one (`shared_memory.md` §4.1), so no
+C function hands Goose a handle that the runtime did not make. C may keep
+the word as long as it likes, since it is a name, not a pointer, and gives
+it back to the runtime:
 
 ```c
 #include "goose.h"
@@ -709,12 +714,13 @@ gives it back to the runtime:
    or merged the signal into a waiting one; 0 when `e` named an event that
    is closed now, by event_close or by its thread's end; -1 when `e` never
    named an event: the zero handle, or a word the runtime never handed out. */
-int gs_event_signal(uint64_t e);
+int gs_event_signal(gs_res e);
 ```
 
-* **What the word holds.** Its low 24 bits are the index of the event's
-  record in the runtime's table of events, and its high 40 bits are the
-  record's serial. A record's serial grows by one each time the record
+* **What the word holds.** Bits 63 to 24 are the record's serial and bits
+  23 to 0 the index of the event's record in the runtime's table of
+  events, the split that `GS_RES_SERIAL_BITS` and `GS_RES_REGION_BITS`
+  name for every kind of the runtime's. A record's serial grows by one each time the record
   holds a new event and is never reused: a record whose serial reaches
   2^40 - 1 is retired rather than used again. So no word ever names two
   events, however long a C library keeps a stale one, and the zero word
@@ -799,10 +805,10 @@ call:
 ```c
 /* src/c/shim.c (sketch): the shim's I/O thread. Jobs and completions are
    the shim's own, under its own lock; a job keeps its event's word. */
-struct job { int64_t fd, offset, length, tag, result; uint64_t done; void *buf; };
+struct job { int64_t fd, offset, length, tag, result; gs_res done; void *buf; };
 
 bool shim_read_async(int64_t fd, int64_t offset, int64_t length, int64_t tag,
-                     uint64_t done);                     /* queues a job */
+                     gs_res done);                       /* queues a job */
 
 static void *io_thread(void *arg) {
     for (;;) {
@@ -1548,18 +1554,18 @@ GS_API int64_t gs_qselect(gs_queue *const *qs, int64_t n, int64_t ms, uint32_t *
 GS_API void gs_qdone(gs_qmsg *m);                      /* after the copy */
 GS_API void gs_qlimit_inbox(gs_queue *q, int64_t n, const char *file, int line);
 GS_API int64_t gs_thread_self(void);                   /* thread_id() */
-GS_API uint64_t gs_event_new(gs_queue *q, const void *data, int64_t size,
-                             const char *file, int line);   /* a resource<event> */
-GS_API void gs_event_close(uint64_t e, const char *file, int line);
+GS_API gs_res gs_event_new(gs_queue *q, const void *data, int64_t size,
+                           const char *file, int line);   /* a resource<event> */
+GS_API void gs_event_close(gs_res e, const char *file, int line);
 GS_API void gs_thread_watch(int64_t id, gs_queue *q, const void *data, int64_t size,
                             const char *file, int line);
-int gs_event_signal(uint64_t e);                        /* external linkage, also in goose.h */
+int gs_event_signal(gs_res e);                          /* external linkage, also in goose.h */
 ```
 
 `gs_qlimit` keeps its meaning, the global queue's limit, and
 `gs_qlimit_inbox` sets the limit of the type's inboxes. A `resource<event>`
-is the 64-bit word the foundation step gives every `resource<U>`, so it is
-a `uint64_t` here and at an `extern fn`'s boundary.
+is the `gs_res` that step 0 gives every `resource<U>`, one `uint64_t`, here
+and at an `extern fn`'s boundary.
 
 `gs_qselect` returns the index of the queue it took from, or -1 at its
 deadline; `ms` below zero blocks, and the code passes `select<E>(ms)`'s
@@ -1647,7 +1653,8 @@ inbox for a type.
   `ldxp`/`stxp` and MSVC's `_InterlockedCompareExchange128`), incarnations,
   segments, chunks, lock-free free lists, queue regions and their trim, the
   fast parker, and the test hooks of §13 (`GS_QTEST_HOOK`, nothing in a
-  normal build). `goose.h` declares `gs_event_signal`. New aborts:
+  normal build). `goose.h` declares `gs_event_signal`, with `gs_res` if
+  step 0 has not put it there. New aborts:
   `GS_E_NOTHREAD` ("qput_to or thread_watch of a thread id never issued"),
   `GS_E_WATCH` ("thread_watch of main or of the current thread"),
   `GS_E_EVENT` ("event_close of a handle that names no open event of this
@@ -1882,14 +1889,16 @@ markers. Threads run only natively, so the new fixtures, like
 
 Each step is one working commit with the suite green.
 
-Phase 1 builds on the **foundation step** that both tracks share and that
-lands first: option C's `resource<U>` (`owning_dynamic_data.md`), which the
-shared-memory track (#1, #3) implements: one `u64` that packs a
+Phase 1 builds on the **foundation step** that both tracks share:
+[step 0](shared_memory.md#step-0-resourceu-both-tracks) of
+`shared_memory.md` §16, option C's `resource<U>` as that note's §4.1
+specifies it. A handle is one `u64` (`gs_res` in C) that packs a
 never-reused serial with a table index, flat and copyable, with no `==`, no
-arithmetic and no conversion from an integer, crossing the C boundary as a
-`uint64_t`, and with kinds that the runtime or a binding provides. Phase 1
-adds the kind `event` to it, and uses it unchanged; steps 1 to 6 do not
-depend on it, and step 7 does.
+arithmetic and no conversion from an integer; it crosses an `extern fn` as
+a `uint64_t`, and C may take a handle of the runtime's kinds but not return
+one. Whichever of #3 and #5 comes to it first lands step 0, as that note
+says. Phase 1 adds the kind `event` to it and uses it unchanged; steps 1
+to 6 do not depend on it, and step 7 does.
 
 ### Phase 1 (#5): addressed delivery and `select`
 
@@ -2030,6 +2039,7 @@ Spec: [§3.4 placement](../goose_spec.md#34-placement-rules-what-may-contain-wha
 [testing.md](../testing.md);
 [coroutines.md](coroutines.md),
 [owning_dynamic_data.md](owning_dynamic_data.md) (option C),
+[shared_memory.md](shared_memory.md) (§4.1, `resource<U>`; step 0 of §16),
 [dynamic_externs.md](dynamic_externs.md);
 [bench/queues.md](../../bench/queues.md).
 
