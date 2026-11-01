@@ -544,7 +544,17 @@ interface (§9, §10).
   record's mutex the first time a put, a take or an event (§6.2) needs it,
   and found by the type's index (§10); a put makes one only after checking,
   under that mutex, that the record's owner is still the id it addresses and
-  that the record takes new inboxes, and is refused otherwise. An inbox is a
+  that the record takes new inboxes, and is refused otherwise. The record's
+  table of inboxes is an array of pointers, one per type, each written once,
+  under the record's mutex, with a release store, and read without that
+  mutex with an acquire load; a put or a take that finds no inbox there
+  takes the mutex, looks again, and makes one. Inboxes are never freed while
+  the program runs: they stay with their record when it is recycled, emptied
+  and closed by the old owner's end, and are reopened, with the next owner's
+  id, under their own mutexes when that owner starts, before its record
+  takes new inboxes again. So a pointer to an inbox is always safe to
+  follow, and a put that followed one into a record that has since been
+  reused finds another owner's id there, and is refused. An inbox is a
   `gs_qstate`, with its owner's id and a closed flag beside it, all under
   the inbox's mutex. `qput_to(id, v)` finds `id`'s record under
   `gs_threads_mutex`, which it holds for the lookup only, and then, under
@@ -953,8 +963,14 @@ int gs_event_signal(gs_res e);
   (§9.5); in phase 1 it takes the mutexes that a put takes to wake a thread.
   Hint words are kept with their thread's record, in blocks that are never
   freed while the program runs, so a signal that stopped holding the place
-  of one writes, when it resumes, into memory that is still a hint word.
-  Both phases use the same records and hints.
+  of one writes, when it resumes, into memory that is still a hint word. A
+  signal reads the record's other fields that it uses, the place of the hint
+  and the inbox whose waiters it wakes, with atomic loads, as words that the
+  record's next event may rewrite: a signal that merged, or one that
+  stopped, can read them after the record has been reused, and what it finds
+  then is the hint word and the waiters of some inbox, a reason to look and
+  a wake-up, both absorbed (above). Both phases use the same records and
+  hints.
 * **Close, reuse and signals in flight.** `pending` keeps a record from
   being reused under its copy. A record goes back to its free list only
   once its event is closed and no copy is pending, and the thread that
@@ -2168,8 +2184,12 @@ markers. Threads run only natively, so the new fixtures, like
   sanitize profile, and ThreadSanitizer by hand, report nothing.
 * `threads/inbox_ended.goose`: puts to a worker that returned and to a
   contained worker that aborted are `false`; messages left in its inbox are
-  gone after `thread_wait`; `qput_to` to a worker before it first takes;
-  a child's inbox outliving its parent.
+  gone after `thread_wait`; `qput_to` to a worker before it first takes; a
+  child's inbox outliving its parent; and puts racing their worker's end and
+  its record's reuse, eight threads putting to workers that end and are
+  replaced a thousand times, none of the puts landing in a later owner's
+  inbox, with the sanitize profile, and ThreadSanitizer by hand, reporting
+  nothing.
 * `threads/thread_watch.goose`: a watch on a running worker, on one that has
   ended (at once), several watches on one worker, a watch made by a worker
   that ends first (dropped); the report-before-end guarantee of §4.6;
@@ -2418,10 +2438,11 @@ to 6 do not depend on it, and step 7 does.
 ### Phase 1 (#5): addressed delivery and `select`
 
 1. **Thread records.** Recycled `gs_thread` records with a table of inboxes
-   (a `gs_qstate` per queue type, made on first use), main's record, a
-   thread-local pointer to the caller's own; queue type numbers from
-   `gs_qinit`; the id-to-record map; the record's mutex (§4.7). No behavior
-   changes.
+   (a `gs_qstate` per queue type, made on first use, its pointer published
+   with a release store and read with an acquire load, and kept with the
+   record, to be reopened for its next owner), main's record, a thread-local
+   pointer to the caller's own; queue type numbers from `gs_qinit`; the
+   id-to-record map; the record's mutex (§4.7). No behavior changes.
 2. **The take interface.** `gs_qmsg` and `gs_qdone`, `gs_qget`/`gs_qwait`
    taking from the inbox first; codegen of `qget`/`qpoll`/`qget(ms)`
    switched to them. No behavior changes: inboxes stay empty.
