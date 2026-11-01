@@ -540,20 +540,20 @@ interface (§9, §10).
   were ever live at once, and an ended worker's inboxes, events and watches
   are emptied before its record goes back to it.
 * **Inboxes.** A record holds an inbox per message type, made under the
-  record's mutex the first time a put or a take needs it, and found by the
-  type's index (§10); a put makes one only after checking, under that mutex,
-  that the record's owner is still the id it addresses and that the record
-  takes new inboxes, and is refused otherwise. An inbox is a `gs_qstate`,
-  with its owner's id and a closed flag beside it, all under the inbox's
-  mutex. `qput_to(id, v)` finds `id`'s record under `gs_threads_mutex`,
-  which it holds for the lookup only, and then, under the inbox's mutex,
-  checks that the inbox's owner is `id` and that it is open, and that it
-  holds fewer messages than `qlimit_inbox<T>`'s limit, links its node, and
-  wakes a waiter if one is registered (§5.7). A refusal at any of these
-  checks is `false`. Since the checks and the link are one critical section,
-  a record reused in the meantime is seen for what it is, and a put either
-  lands before the inbox closes, to be discarded with the rest, or is
-  refused.
+  record's mutex the first time a put, a take or an event (§6.2) needs it,
+  and found by the type's index (§10); a put makes one only after checking,
+  under that mutex, that the record's owner is still the id it addresses and
+  that the record takes new inboxes, and is refused otherwise. An inbox is a
+  `gs_qstate`, with its owner's id and a closed flag beside it, all under
+  the inbox's mutex. `qput_to(id, v)` finds `id`'s record under
+  `gs_threads_mutex`, which it holds for the lookup only, and then, under
+  the inbox's mutex, checks that the inbox's owner is `id` and that it is
+  open, and that it holds fewer messages than `qlimit_inbox<T>`'s limit,
+  links its node, and wakes a waiter if one is registered (§5.7). A refusal
+  at any of these checks is `false`. Since the checks and the link are one
+  critical section, a record reused in the meantime is seen for what it is,
+  and a put either lands before the inbox closes, to be discarded with the
+  rest, or is refused.
 * **A worker's end** (§4.6, step 2) first closes its record to new inboxes,
   under the record's mutex, and then takes each of its inboxes' mutexes in
   turn, marks the inbox closed and unlinks its nodes, which it frees after
@@ -886,8 +886,9 @@ int gs_event_signal(gs_res e);
   Records come from a free list under a mutex of the table's, which only
   `event`, `event_close`, the take of a closed event's copy and a thread's
   end take, all on the owner's side; a signal never touches it.
-* **Stale or invalid.** The table is never shrunk or freed while the
-  program runs, so the call can always read the record at the word's index
+* **Stale or invalid.** The table grows by blocks that never move, and is
+  never shrunk or freed while the program runs, so the call can always read
+  the record at the word's index, even while another thread grows the table
   (an index past the table's end is -1 at once). The record's state word
   holds its current serial beside its state. The word's serial equal to it,
   with the event open, is a signal (1). A smaller one, or the same one with
