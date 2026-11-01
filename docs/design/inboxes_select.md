@@ -1392,13 +1392,15 @@ Phase 2 (#6) changes only the runtime, behind §10's interface; phase 1 is
 complete without it (§4.7, §5.7, §6). This section settles phase 2's
 approach, the invariants any implementation must keep, and the targets it
 must meet (§9.8). The exact lock-free protocol of §9.3, §9.4, §9.5 and §9.7
-(how segments are linked, numbered by generation, recycled and trimmed,
-how a slot's message is published, and how a parked thread is woken) is
-**provisional**: it is the design as review has left it, and #6 owns it.
-#6 must prove its protocol correct before it merges, with a stress test for
-every hazard on §9.9's checklist passing under the sanitize profile and
-under ThreadSanitizer, and it may change any part of the provisional
-protocol to get there, as long as the invariants and the targets hold.
+(how segments are linked, numbered by generation, recycled and trimmed, how
+a slot's message is published, and how a parked thread is woken) is
+**provisional**: it is the design as review has left it, and #6 owns it. #6
+must prove its protocol correct before it merges: with an argument, which
+review can check, that each invariant below holds, and with a deterministic
+test of every hazard on §9.9's checklist, which, with §13's stress runs,
+passes under the sanitize profile and under ThreadSanitizer. It may change
+any part of the provisional protocol to get there, as long as the invariants
+and the targets hold, and nothing in it is established until then.
 
 **The approach**, settled: a queue is a sequence of ticketed slots in
 segments that are recycled, never freed, each slot claimed and filled in
@@ -1841,11 +1843,14 @@ the baseline, with `select`, inboxes and events added.
 ### 9.9 What #6 must prove: the checklist from review
 
 Review of this note found the hazards below in phase 2's protocol. Each has
-a proposal above, which #6 may keep or replace, and each needs a stress
-test, in `runtime_queue_stalls.c` (§13) unless said otherwise, that #6
-lands with its protocol and that passes, under the sanitize profile and
-under ThreadSanitizer, before #6 merges. A "review" is one of PR #7's
-review rounds; "revision" marks what the note's own revisions found.
+a proposal above, which #6 may keep or replace, and each needs a
+deterministic test that #6 lands with its protocol: the item's schedule
+played out in `runtime_queue_stalls.c` (§13), whose hooks park threads at
+exactly the points the schedule names, unless the item names another test.
+These, with §13's stress runs (trim against reuse, and many producers and
+consumers), pass under the sanitize profile and under ThreadSanitizer before
+#6 merges, beside the argument that §9 asks for. A "review" is one of PR
+#7's review rounds; "revision" marks what the note's own revisions found.
 
 1. **A put stopped before its message is published** (review 1). A ticket
    that a putter has taken and not yet filled made takes wait for it,
@@ -2436,10 +2441,11 @@ to 6 do not depend on it, and step 7 does.
 ### Phase 2 (#6): queue performance
 
 Provisional, as §9 says: #6 owns the exact protocol, and may change it and
-these steps. What does not change is the gate: #6 merges only once every
-item of §9.9's checklist has its stress test in `runtime_queue_stalls.c`
-(or the test the item names), passing under the sanitize profile and under
-ThreadSanitizer, and §9's invariants and §9.8's targets hold.
+these steps. What does not change is the gate: #6 merges only once its
+protocol comes with the argument §9 asks for, every item of §9.9's checklist
+has its deterministic test, and those tests and §13's stress runs pass under
+the sanitize profile and under ThreadSanitizer, with §9's invariants and
+§9.8's targets holding.
 
 1. **The parker.** `futex`, `WaitOnAddress` and `os_sync_wait_on_address` on
    the 64-bit state word with its count of waits, a dispatch semaphore on
