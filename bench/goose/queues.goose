@@ -11,7 +11,8 @@
 //   queues tput <p> <c> <n> <size>    p producers put n messages in all
 //                                     while c consumers take them
 //   queues drain <c> <n> <size>       n messages queued first, then c
-//                                     consumers take them, as morsels are
+//                                     consumers take them, as a work
+//                                     queue's jobs are
 //
 // <size> is 16 or 32768, the bytes of a message. Each run prints one line of
 // name=value fields, with times in nanoseconds.

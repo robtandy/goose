@@ -2,8 +2,8 @@
 
 The runtime's typed queues (spec §11.2) as they are at `b7815879`, measured
 for [the design of addressed inboxes, `select` and faster
-queues](../docs/design/inboxes_select.md), whose §3 reads these numbers and
-whose §9.8 sets the targets the queue work (#6) has to meet against them.
+queues](../docs/design/inboxes_select.md), whose §6.1 sets the targets the
+queue work (#6) has to meet against them.
 `bench/goose/queues.goose` is the program, `bench/queues.py` the harness,
 and `bench/queues_floor.c` measures what the machine allows a queue without
 one. Every sample is in [queues_results.json](queues_results.json).
@@ -32,8 +32,7 @@ modes:
 * `rt2`: a message to a worker waiting in `qget<T>()`, and its answer back
   on a queue of its own: two wake-ups per round trip;
 * `drain`: n messages queued before 1, 2, 4, 8 or 16 consumers start, which
-  then take them all, as the workers of a query take the morsels main
-  queued;
+  then take them all, as a pool of workers drains the jobs main queued;
 * `tput`: 1, 2, 4, 8 or 16 producers putting n messages in all while 1, 2,
   4, 8 or 16 consumers take them, every pair of counts. Producers and
   consumers wait for a start message; the time runs from it to the last
@@ -56,7 +55,7 @@ Measured 2026-11-01 15:59 UTC at commit `b7815879` (goose v2026.3-257-gb7815879 
 
 A `qpoll` of an empty queue (`empty`) costs 13 ns.
 
-**Draining a full queue** (`drain`): n messages queued before the consumers start, then taken by all of them, as the engine's workers take the morsels main queued. Wall time per message, and the total rate.
+**Draining a full queue** (`drain`): n messages queued before the consumers start, then taken by all of them, as a pool of workers takes the jobs main queued. Wall time per message, and the total rate.
 
 | consumers | 1 | 2 | 4 | 8 | 16 |
 |---|---:|---:|---:|---:|---:|
@@ -103,13 +102,52 @@ A `qpoll` of an empty queue (`empty`) costs 13 ns.
 | `memcpy` of 32 KB in cache | 827 ns |
 | `memcpy` of 32 KB streamed from memory | 1,845 ns |
 
+## What the numbers say
+
+The build used clang 20. The figures below are from the tables above, and
+the [design note](../docs/design/inboxes_select.md)'s targets (its §6.1) are
+set against them.
+
+* **Alone, a queue is cheap.** A put and a take of 16 bytes cost 51 ns on one
+  thread, and finding a queue empty 13 ns. Faster queues must not make these
+  slower.
+* **One lock serializes the takers.** One consumer drains 16-byte messages at
+  22.9 M/s; two drain 3.8 M/s between them, and sixteen 3.4 M/s. Adding
+  consumers makes the queue six times slower in total, and a take costs a
+  worker 16 × 298 ns, about 4.8 µs, when sixteen collide. The lock is held
+  for tens of nanoseconds, but a contended `pthread_mutex` puts its waiters
+  to sleep, and waking them is what costs.
+* **Wake-ups cost microseconds, and every put to a waiting queue makes one.**
+  A futex round trip is 11.8 µs, about 6 µs a wake-up, and `rt2` is that
+  plus the queue (13.6 µs). One producer feeding four or more consumers
+  manages 0.20 to 0.31 M/s, a tenth of what it does into one, because the
+  consumers are mostly asleep and `pthread_cond_signal` makes a system call
+  on every put. Waking must become rare: only when a thread is actually
+  parked, and not when it would be awake within the time a wake-up takes.
+* **Large messages are the allocator's.** A 32 KB put into a growing queue
+  costs 14.7 µs, against 59 ns for a warm `malloc` and `free`: the queue's
+  memory is fresh pages, faulted in one message at a time, and a block freed
+  on another thread costs 0.95 µs. Throughput is erratic, 18.5 GB/s at
+  2 × 2, 5.8 at 4 × 4 and 38.6 at 8 × 8, each with a tight spread over its
+  runs, and the allocator's policies move it (below).
+* **The floor is far below.** `fetch_add` stays at about 10 ns per increment
+  however many of the 16 cores contend for it, and a compare-exchange loop
+  costs about 35 ns, so a queue whose puts and takes are one atomic
+  operation each on a shared line can serve tens of millions of messages a
+  second. A message between two cores costs about 120 ns each way, and a
+  32 KB message needs one copy in and one out, 1.7 to 3.7 µs between a pair.
+  What separates today's queues from the floor is the lock, the sleeping on
+  it, the wake-up per put, the allocator and two extra copies, none of it the
+  per-message bookkeeping that a batched API would save.
+
 ## The allocator's share
 
 Each `qput` `malloc`s a node and each `qget` `free`s it, usually on another
-thread. glibc's policies then decide much of a 32 KB queue's speed: with its
-heap trimming turned off (`MALLOC_TRIM_THRESHOLD_=4000000000
-MALLOC_TOP_PAD_=1073741824`), the same program, at the same commit and in the
-same session, gave (GB/s, medians of three runs):
+thread. The C library allocator's policies then decide much of a 32 KB
+queue's speed: with its heap trimming turned off
+(`MALLOC_TRIM_THRESHOLD_=4000000000 MALLOC_TOP_PAD_=1073741824`), the same
+program, at the same commit and in the same session, gave (GB/s, medians of
+three runs):
 
 | producers × consumers | default | trimming off |
 |---|---:|---:|
