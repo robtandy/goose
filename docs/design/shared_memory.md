@@ -664,11 +664,22 @@ handed over.
   shrink. So no writable view of the elements survives into the time they
   are shared, and no view of `ds.items` sees the new, empty array as the old
   one. `T` must also be freezable (4.7), which is checked at the call.
+* **References to the whole array survive it.** §5.1 lets a reference to a
+  whole array, as against one into its elements, stay live across a
+  shrink, and a freeze keeps that: a `T[>..]&` to `ds.items` taken before
+  the freeze, in a variable, a holder or a caller's parameter, still refers
+  to `ds.items` afterwards, which is then empty, as after a `clear()`, and
+  pushing through it grows `ds.items` on its fresh slot. Nothing such a
+  reference can reach is in the frozen slot, because it names the dynamic
+  stack's own header and stack control block, never a slot (5.2). What is
+  new is that the array's base has moved, so codegen reloads it wherever it
+  had cached it (section 9).
 * **What it does.** The slot holding `ds.items`'s elements, exactly
   `ds.items.len` of them, becomes a frozen region of `sh`'s arena; its
   handle is the result. Nothing is copied. `ds` is left with an empty
-  `items` on a slot of its own again and can be filled and frozen again; at
-  its scope's exit, an unfrozen slot goes back to the free list (5.3).
+  `items` on a fresh slot, its header and stack starting there, and can be
+  filled and frozen again; at its scope's exit, an unfrozen slot goes back
+  to the free list (5.3).
 * **The arena.** `sh` can be any attachment, in any thread; the region
   joins that attachment's arena and lives as long as the arena does.
 
@@ -687,7 +698,7 @@ reference safety and identity:
 
 | Option A's direction | `dynamic_stack<T>` |
 |---|---|
-| **Stable data**: "growth within an inner stack's reservation preserves its element addresses" | `items` grows by bumping its stack's top, and nothing moves it: not growth, not freezing, not a frozen region's whole life |
+| **Stable data**: "growth within an inner stack's reservation preserves its element addresses" | `items` grows by bumping its stack's top, and no element ever moves: freezing hands the elements over where they are, and `items` starts again, empty, on a fresh slot |
 | **Independent release**: "closing a document decommits its pages and recycles its region slot independently of other documents" | the slot is released at the declaration's scope exit, or handed by `freeze` to an arena and released with it, in either case apart from every other dynamic stack. Its pages are decommitted by `trim_memory()` rather than at once, because releases come in bursts and the system serializes them (5.3, 11.2) |
 | **A budgeted reservation**: "the configured total stack count must satisfy N * (R + G) + H <= B" | every slot comes from one reservation of B bytes in slots of R + G, with N documented, and a dynamic stack that finds all N in use aborts with the budget's numbers (5.2) |
 | **Explicit limits**: "the configured bounds permit explicit checks rather than relying on an overflow guard to abort the process" | `ds.items.check_length(n)` checks a count against R before growing, as it checks against a data stack's reservation; growth that goes past R ends the program at the guard, as a data stack's does |
@@ -776,7 +787,8 @@ as `checkfree` today over `const` slices, 11.6).
   region, and it is a root owner in one thread, which no other thread can
   name. Freezing is checked as a shrink, so no writable view of a dynamic
   stack's elements is live once they are shared (4.6). After freezing, the
-  dynamic stack no longer owns the region.
+  dynamic stack no longer owns the region, and nothing it or a reference to
+  its `items` can reach lies in the region (4.6, 5.2).
 * **By the hardware**, as a backstop. A mapping is read-only (`PROT_READ`,
   `PAGE_READONLY`), so a write that a defect in the compiler let through
   faults, and the fault handler reports it. In a debug build (`GS_DEBUG`),
@@ -819,7 +831,7 @@ Compile-time:
 | an attachment or a dynamic stack is not copied, returned, stored by value, sent, or a temporary | §3.4's root owners, unchanged |
 | `view<T>` of a mapping takes plain data only, at an aligned constant offset | 4.5 |
 | `dynamic_stack<T>` takes a fixed-size `T` | 4.6 |
-| `freeze(ds)` leaves no reference or slice into `ds.items` live | §5.1's shrink rule (4.6) |
+| `freeze(ds)` leaves no reference or slice into `ds.items`' elements live; a reference to the whole array may stay live and sees it empty, as after a shrink | §5.1's shrink rule (4.6) |
 | `freeze(ds)` takes a freezable `T` | 4.7 |
 | no attachment or dynamic stack is in scope at a coroutine's suspension point | [coroutines.md](coroutines.md) R1, extended (section 6) |
 
@@ -894,11 +906,16 @@ A dynamic stack's elements live in a **slot** of the dynamic stacks'
   committed). A dynamic stack takes a free slot first, whose pages are warm,
   and a fresh one otherwise, whose usable part is then made read-write
   (`mprotect`; on Windows the vectored handler commits it on first touch, as
-  it does a data stack). A slot carries its own `gs_stack` control block,
-  so `ds.items` is a resizable whose stack is the slot's: a push is the same
-  bump, a `T[>..]&` to it is the same `gs_rref` as for any other array, and
-  every function that grows an array through a reference grows a dynamic
-  stack unchanged.
+  it does a data stack).
+* **The stack control block is the dynamic stack's, not the slot's.** It is
+  part of the dynamic stack's descriptor, beside the header of `items`, and
+  points into whichever slot the dynamic stack has at the time; `ds.items`
+  is a resizable whose stack is that block. A push is the same bump, a
+  `T[>..]&` to it is the same `gs_rref` as for any other array, and every
+  function that grows an array through a reference grows a dynamic stack
+  unchanged. Neither the header nor the block ever moves, so a `gs_rref`
+  taken at any point stays good for the declaration's whole life, across
+  every freeze, and none names a slot.
 * **The limit.** A dynamic stack that finds all N slots live or frozen
   aborts, with a message giving B, R and N and the flag that raises B: the
   explicit limit option A asks for, reported, and not an `mmap` failure at
@@ -918,9 +935,12 @@ A dynamic stack's elements live in a **slot** of the dynamic stacks'
   region registry, and they take nothing from the regions a thread program
   counts, so `hardware_threads()` is unchanged.
 * **Freezing** marks the slot frozen and records it in the arena with the
-  array's byte length, and gives the dynamic stack a slot again, a free one
-  where there is one. In a debug build it makes the frozen slot read-only
-  first (4.9).
+  array's byte length, takes a fresh slot (a free one where there is one),
+  and points the dynamic stack's block and header at the fresh slot's start
+  with a length of 0. That is the one change of a grow-only array's base in
+  the language, and codegen treats it as a rebind of the array, reloading
+  every cache of its base, length and top (section 9). In a debug build the
+  frozen slot is made read-only first (4.9).
 * **Frozen** slots belong to their arena, not to any thread. Each keeps its
   whole R; a program that freezes many small arrays packs them onto a few
   dynamic stacks (section 8.2), since a slot of the budget, not memory, is
@@ -1045,8 +1065,9 @@ processes write access while the file is mapped (section 7).
 
 * **Per-thread holds.** Each thread keeps its attachments and dynamic
   stacks on a stack of its own, in runtime memory: an attachment's
-  declaration pushes its arena, a dynamic stack's pushes its slot, and their
-  scope exits pop them, in the reverse order scopes end in.
+  declaration pushes its arena, a dynamic stack's pushes its slot (which a
+  freeze replaces with the fresh one), and their scope exits pop them, in
+  the reverse order scopes end in.
 * **A contained worker's abort** (§11.2) jumps out of the worker's frames
   without running their exits. After the jump, `gs_run_contained`'s caller
   pops the whole stack, ending each attachment and returning each unfrozen
@@ -1115,8 +1136,9 @@ section 22); the runtime has them, as it has for queues and `thread_wait`.
   value (a frozen view); loops over it are check-free as loops over any
   slice are, which section 11.6 checks with today's compiler, including
   probing chains of self-relative links. A view's own checks do not count
-  for `checkfree` (4.5). `freeze(ds)` kills what the analysis knew of
-  `ds.items`' length, as a `clear()` would.
+  for `checkfree` (4.5). `freeze(ds)` kills what the analysis knew of the
+  length of `ds.items`, and of every reference that may alias it, as a
+  shrink through a call does.
 * **Root structs.** A root struct may hold a reference to an attachment
   (`struct Ctx { sh: shared& }`, or a field of a worker's state), as it may
   hold a reference to any owner. Neither owner nests by value.
@@ -1584,9 +1606,13 @@ typedef uint64_t gs_res;                    /* resource<U>, every kind: one u64;
 #define GS_RES_REGION_BITS 24               /* and the region's number in it, low bits */
 _Static_assert(GS_RES_SERIAL_BITS + GS_RES_REGION_BITS == 64, "a handle is one u64");
 typedef struct gs_arena gs_arena;           /* runtime-private */
-typedef struct gs_slot gs_slot;             /* a slot of the dynamic stacks' budget: its gs_stack first */
+typedef struct gs_slot gs_slot;             /* a slot of the dynamic stacks' budget: memory and a state */
 typedef struct { gs_arena *a; } gs_att;     /* a shared attachment, in its frame */
-typedef struct { gs_slot *slot; gs_stack *stk; gs_rhdr items; } gs_dstack;  /* a dynamic_stack<T> */
+typedef struct {                            /* a dynamic_stack<T>, in its frame */
+    gs_slot *slot;                          /* the slot it has now; freeze replaces it */
+    gs_stack stack;                         /* its own stack block, pointing into that slot */
+    gs_rhdr items;                          /* the header of items: base, len */
+} gs_dstack;
 
 /* let sh = shared {};   ...   and on every exit of its scope: */
 gs_att sh_g;
@@ -1613,17 +1639,24 @@ for (int64_t t9 = 0; t9 < (xs_g.len); t9++) {      /* today's loop over a slice 
 }
 
 /* var ds = dynamic_stack<Row> {};  on every exit of its scope, gs_dstack_close(&ds_g).
-   ds.items is a resizable whose stack is the slot's: a push is today's push,
-   and a Row[>..]& to it is today's gs_rref { &ds_g.items, ds_g.stk }. */
+   ds.items is a resizable whose stack is ds_g.stack: a push is today's push,
+   and a Row[>..]& to it is gs_rref { &ds_g.items, &ds_g.stack }, which no
+   freeze changes. */
 gs_dstack ds_g;
 gs_dstack_open(&ds_g, gs_file0, 16);                 /* aborts when every slot is in use */
-uint8_t *t3 = ds_g.stk->top;                         /* the top, cached as for any stack */
+uint8_t *t3 = ds_g.stack.top;                        /* the top, cached as for any stack */
 *(Row_g *)t3 = row_g; t3 += 16; ds_g.items.len++;
-ds_g.stk->top = t3;
-fill_g(&ds_g.items, ds_g.stk);                       /* fn fill(out: Row[>..]&) */
+ds_g.stack.top = t3;                                 /* written back before a call that grows it */
+fill_g(&ds_g.items, &ds_g.stack);                    /* fn fill(out: Row[>..]&) */
+t3 = ds_g.stack.top;                                 /* and reloaded after it */
 
-/* let r = sh.freeze(ds);  cached tops are written back first, as before a shrink */
+/* let r = sh.freeze(ds);  cached tops are written back first. Afterwards
+   ds_g.items.base and ds_g.stack.top point at a fresh slot, len 0, so every
+   cached base, length or top of ds.items is reloaded, here and in each
+   caller that holds a reference to it, as after a rebind. */
+ds_g.stack.top = t3;
 gs_res r_g = gs_shm_freeze(&sh_g, &ds_g, 16, gs_file0, 18);
+t3 = ds_g.stack.top;                                 /* the fresh slot's start */
 
 /* let rows = sh.view(r);  and following a link, e .= e.next, as today */
 sl_Entry rows_g;
@@ -1639,11 +1672,24 @@ e_g = (Entry_g *)(t29 ? ((uint8_t *)&(*e_g).next_g) + t29 : NULL);
   copied and packed as the eight bytes it is; nothing compares it. An
   `extern fn` passes it as `uint64_t`.
 * An attachment is one pointer in its frame. `shared&` parameters pass a
-  `gs_att *`. A dynamic stack in a frame is its slot, its stack and its
-  component's header; a `dynamic_stack<T>&` parameter is passed field by
-  field, as a root parameter is (`FindSplitRootParams`, implementation.md
-  and root_structs.md), and `ds.items` as `T[>..]&` is the `gs_rref` it is
-  for every resizable.
+  `gs_att *`. A dynamic stack in a frame is its slot pointer, its own stack
+  block and its component's header. A `dynamic_stack<T>&` parameter is
+  passed field by field, as a root parameter is (`FindSplitRootParams`,
+  implementation.md and root_structs.md), and `ds.items` as `T[>..]&` is
+  `{ &items, &stack }`, which never changes. A parameter that is frozen is
+  handed to a builtin, so it keeps the descriptor's address, by that
+  function's existing rule, and the freeze updates the caller's descriptor.
+* **A freeze rebases `ds.items`**, the only operation that changes a
+  grow-only array's base, and codegen treats it as a rebind of the array
+  for every cache it keeps. In the freezing function, no cached base,
+  length or top of `ds.items` is carried across the freeze, and a loop that
+  may freeze it hoists none of them (`hoistrefs`, `hoistfields`). A
+  specialization that may freeze, itself or through a call, records in its
+  effect summary the dynamic stack components it may rebase, and a call to
+  it reloads, in the caller, the caches of every reference that may reach
+  one, as calls already write back and reload the stack tops their callees
+  may move (`SyncReach`). Without this, a base cached before the freeze
+  would read and write the frozen slot.
 * The scope exits are emitted by `EmitExitRestores`, as entries of the
   scope beside the stack restores and `defer`s, in reverse declaration
   order, so every exit path (`break`, `continue`, `return`, `return …
@@ -1719,7 +1765,8 @@ Phases 1 and 2:
   at a yield) includes the two owners.
 * **Bounds-check elimination** (`bce.h`). A mapping view's length is its
   `count` argument; a frozen view's is unknown and fixed; `freeze` kills
-  `ds.items`' length facts, as `clear` does. A view's checks are not kept
+  the length facts of `ds.items` and of every reference that may alias it,
+  as a shrink through a call does. A view's checks are not kept
   checks for `checkfree` (`Call::nobc` is not involved; they are aborts of
   their own).
 * **Codegen.** `codegen_types.h`: `CT` of the owners, `gs_att` and
@@ -1727,9 +1774,13 @@ Phases 1 and 2:
   shows. Scope exits: the two owners' end actions as scope entries
   (`EmitExitRestores`, `RegisterDefer`'s neighbor). `codegen_frames.h`:
   `shared&` as one pointer, `dynamic_stack<T>&` split as root parameters
-  are. Stack-top caching (implementation.md §6.10): a dynamic stack's stack
-  is reached through its slot, as a fat reference's is; `freeze` is a shrink
-  of it for the caches (write back before, reload after).
+  are. Stack-top caching and view hoisting (implementation.md §6.10): a
+  dynamic stack's stack is its descriptor's own block, reached as a fat
+  reference's is; `freeze` rebases `ds.items`, so the caches treat it as a
+  rebind (section 9): nothing cached is carried across it, and the
+  dynamic stack components a specialization may rebase join its effect
+  summary, so that its callers reload what they cached of references that
+  may reach them.
 * **Driver.** `--dynamic-budget size` writes `-DGS_DYNAMIC_BUDGET`, as
   `--stack-reserve` writes `GS_STACK_RESERVE`.
 * **Runtime.** `runtime_shared.h` (new): the arena registry and records,
@@ -2023,7 +2074,10 @@ scope can own it, and no one scope's exit can be the moment it is freed.
 ### 13.3 Additions that contradict nothing
 
 The specification grows in places without any rule of it changing: §1.1's
-root class gains the two builtin owners; §3.12 (new) is `resource<U>`; §7.10
+root class gains the two builtin owners; §3.12 (new) is `resource<U>`; §5.1
+gains `freeze` among the shrinks of a grow-only array, the one that also
+starts the array again on new memory, which no live view of the old
+elements can see and every reference to the whole array follows; §7.10
 gains `resource<U>` as a shape that crosses, as `uint64_t`; §9.3 gains the
 new aborts; §10.4 gains the dynamic stacks' budget beside the data stacks';
 §11.2's list of what ends the program in a contained worker gains a
@@ -2094,6 +2148,8 @@ maps under a scratch directory of its own.
 | `shared_regions_reuse` (`GS_SHARED_STATS=1`) | arenas made and released repeatedly take no fresh slot after the first round; `trim_memory` returns the free slots' pages |
 | `shared_dstack_budget` (abort, `runtime-define: GS_DYNAMIC_BUDGET=…`) | a budget of a few slots: the dynamic stack that finds them all in use aborts with the budget, the slot size, the count and the flag; frozen and live slots both count |
 | `shared_dstack_limits` | `ds.items.check_length(n)` against the slot's reservation, refusing a count before any growth |
+| `shared_freeze_aliases` (and again with `runtime-define: GS_DEBUG=1`) | whole-array references to `ds.items` kept across a freeze: a local `T[>..]&`, one in a holder, and a caller's `T[>..]&` parameter while the callee freezes through `dynamic_stack<T>&`. Afterwards each sees an empty array, a push through each lands in `ds.items` on its fresh slot (checked through `ds` and through the alias), and the frozen view still holds exactly what was frozen. Under `GS_DEBUG` the frozen slot is read-only, so a push that reached it would fault |
+| `shared_freeze_alias_loops` | a loop that indexes and pushes through an alias of `ds.items` and freezes `ds` in its body, directly and through a callee, gives the results of the same loop over a fresh array per round; at `-O1`, read as `loop_shapes.goose` is, its C reloads the base after the freeze instead of hoisting it |
 
 **Phase 2**, rejections:
 
@@ -2101,7 +2157,7 @@ maps under a scratch directory of its own.
 |---|---|
 | `shared_frozen_write` | writing a frozen view, and through a link loaded from one |
 | `shared_frozen_outlives` | a frozen view, or a reference loaded from one, outliving its attachment |
-| `shared_freeze_live_view` | freezing a dynamic stack while a slice or reference into `ds.items` is live, directly and through a call |
+| `shared_freeze_live_view` | freezing a dynamic stack while a slice or reference into `ds.items`' elements is live, directly, through a call, and taken through a whole-array alias (`a[..]` for `a: T[>..]&`) |
 | `shared_freeze_types` | `freeze` of a dynamic stack whose `T` holds a plain reference, a slice, an optional, an `in pool` reference, an index type, an owner, or a variable-size field; each names the field |
 | `shared_dstack_rules` | a dynamic stack copied, returned, sent, or made as a temporary; a `dynamic_stack<T>` of a variable-size `T` |
 | `shared_freeze_kind` | freezing an ordinary array; `view` of a frozen handle at the wrong `T` |
@@ -2199,9 +2255,10 @@ handles are not yet made.
 2. **Builtins.** `freeze` (the shrink check, `Freezable`, the result),
    `view` of a frozen handle, `view<T>` with `T` checked against the
    handle.
-3. **Codegen.** `gs_dstack`; the component as a resizable whose stack is
-   the slot's; stack-top caching and `freeze`; `dynamic_stack<T>&`
-   parameters split; `--dynamic-budget`.
+3. **Codegen.** `gs_dstack` with its own stack block; the component as a
+   resizable whose stack is that block; `freeze` as a rebase of `ds.items`
+   for the caches, in the freezing function and through effect summaries
+   (section 9); `dynamic_stack<T>&` parameters split; `--dynamic-budget`.
 4. **Runtime.** The budget (one reservation, slots, their states and free
    list, the limit's abort), the fault handlers' slot lookup, `trim_memory`,
    freeze, frozen views, the debug-build protection.
