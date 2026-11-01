@@ -99,22 +99,21 @@ literal's `..`, a global declared by type and a missed `qpoll` give; `print`
 writes its type, `resource<mapping>`; and it has no image, so `to_bytes`,
 `bytes_of` and `from_bytes` reject a type holding one.
 
-A binding's tag is a type it declares (`struct GpuBuffer {}`, never made), and
-its `extern fn`s make and take its handles as `uint64_t`, by value (§7.10). The
-runtime binds `resource<shared>` (made by `sh.handle`, taken by `attach`),
-`resource<mapping>` (by `sh.map_file`; `view<T>`, `size`) and
+**Kinds.** A binding's tag is a type it declares (`struct GpuBuffer {}`, never
+made), and its `extern fn`s make and take its handles as `uint64_t`, by value
+(§7.10). The runtime binds `resource<shared>` (made by `sh.handle`, taken by
+`attach`), `resource<mapping>` (by `sh.map_file`; `view<T>`, `size`) and
 `resource<frozen<T>>` (by `sh.freeze`; `view`), where `mapping` and `frozen<T>`
 name kinds, written only as `resource`'s argument. C may take these, seeing the
 bits, as `gs_event_signal` does, but not return one, nor a value holding one.
 Cleanup stays open for bindings' kinds, as in option C; the runtime's need none.
 A runtime handle's bits 63..24 are its arena's serial, 1 to 2^40 - 1 and never
 reused, and bits 23..0 are 0 for the arena itself or the region's number, 1 to
-2^24 - 1 (`GS_RES_SERIAL_BITS`, `GS_RES_REGION_BITS` in `runtime.h`, asserted
-to sum to 64); the runtime aborts rather than wrap either. Every handle is
-decoded against the runtime's tables: an unknown serial is stale (5.1), and a
-region past its arena's count is a defect it reports. Every runtime kind,
-events included, documents its encoding so that a stale value never names a
-newer resource.
+2^24 - 1 (`GS_RES_SERIAL_BITS`, `GS_RES_REGION_BITS` in `runtime.h`, asserted to
+sum to 64); the runtime aborts, never wrapping. Every handle is decoded against
+the runtime's tables: an unknown serial is stale (5.1), and a region past its
+arena's count is a defect it reports. Every runtime kind, events included,
+documents its encoding so a stale value never names a newer resource.
 
 ### 4.2 Attachments and views
 
@@ -124,9 +123,9 @@ let sh2 = attach(h);     // h: resource<shared>; another attachment to h's arena
 let h2 = sh.handle;      // resource<shared>, for other threads
 ```
 
-`shared` is a builtin root-class type (§3.4), made only by an owning
-declaration, local or global, under every rule of root owners: functions take
-`sh: shared&`, an unannotated binding borrows it, a root struct may hold a
+**Attachments.** `shared` is a builtin root-class type (§3.4), made only by an
+owning declaration, local or global, under every rule of root owners: functions
+take `sh: shared&`, an unannotated binding borrows it, a root struct may hold a
 `shared&`, and a worker attaches a handle, as it cannot use main's global
 attachment, which lasts the run and may root views in globals. An attachment
 ends at each exit of its scope, `return … from` included, in reverse order with
@@ -134,17 +133,17 @@ the scope's restores and `defer`s (implementation.md §6.2), and after a
 contained abort (5.4). Two attachments in one thread both count; having no
 components, one may be live across a call into a recursive cycle (§7.8).
 
-A view is an ordinary `const T[:]` (C.2), used as any slice, kept in `const`
-slots and checked once, when made. It is rooted exactly at its attachment or,
-through a `shared&` parameter, at the class of the caller's (implementation.md
-§3.4). An attachment's storage is every region of its arena, and it is never an
-array receiver, so `index_of`, `range_index` and `free_slice` never meet one.
-§9.2, unchanged, keeps views out of globals, outer holders and messages and in
-the attachment's scope, while the runtime keeps the arena. An attachment is also
-a read-back candidate (§9.5) for every plain-data and freezable type, as
-`StaticCanContain` makes static data, so a view read back from a container is
-held to an attachment in scope, as may be, at a cost in precision, a slice the
-store record cannot resolve.
+**Views.** A view is an ordinary `const T[:]` (C.2), used as any slice, kept in
+`const` slots and checked once, when made. It is rooted exactly at its
+attachment or, through a `shared&` parameter, at the class of the caller's
+(implementation.md §3.4). An attachment's storage is every region of its arena,
+and it is never an array receiver, so `index_of`, `range_index` and `free_slice`
+never meet one. §9.2, unchanged, keeps views out of globals, outer holders and
+messages and in the attachment's scope, while the runtime keeps the arena. An
+attachment is also a read-back candidate (§9.5) for every plain-data and
+freezable type, as `StaticCanContain` makes static data, so a view read back
+from a container is held to an attachment in scope, as may be, at a cost in
+precision, a slice the store record cannot resolve.
 
 ### 4.3 Mapped files: `map_file` and `view<T>`
 
@@ -231,16 +230,16 @@ proves (`bench/shared_memory/join_loops.goose`).
 
 ### 4.6 Mutation, threads and the rest of the language
 
-Mutation is rejected by type, as views and their links are `const` (§9.5); by
-ownership, as a region's only writable access is a dynamic stack in one thread,
-which reaches nothing of it once frozen; and, against compiler defects, by the
-hardware: mappings are read-only (`PROT_READ`, `PAGE_READONLY`), as frozen
-regions are in a debug build (`GS_DEBUG`) only, since protecting costs about 20
-µs per MB with other threads running (`bench/shared_memory/mprot.c`). Handles
-cross threads as spawn arguments, messages, copied globals or fields of a frozen
-region. A thread attaches once, for an atomic increment (11 ns alone, 1.0 µs
-with 16 threads at once; `bench/shared_memory/attach.c`), and then makes views
-freely. Generics are checked per instantiation, naming the chain, and a
+**Mutation** is rejected by type, as views and their links are `const` (§9.5);
+by ownership, as a region's only writable access is a dynamic stack in one
+thread, which reaches nothing of it once frozen; and, against compiler defects,
+by the hardware: mappings are read-only (`PROT_READ`, `PAGE_READONLY`), as
+frozen regions are in a debug build (`GS_DEBUG`) only, since protecting costs
+about 20 µs per MB with other threads running (`bench/shared_memory/mprot.c`).
+Handles cross threads as spawn arguments, messages, copied globals or fields of
+a frozen region. A thread attaches once, for an atomic increment (11 ns alone,
+1.0 µs with 16 threads at once; `bench/shared_memory/attach.c`), and then makes
+views freely. Generics are checked per instantiation, naming the chain, and a
 binding's tag may be generic (`resource<Texture<f32>>`). For bounds-check
 elimination a mapping view's length is its `count`, a frozen view's is fixed,
 and `freeze` kills the length facts of `ds.items` and of its aliases. C takes a
@@ -289,9 +288,8 @@ waits, its scope's exit is the release point, as `thread_wait` returns only
 after a worker's attachments end. Handing an arena on takes an attachment until
 the receiver has its own, or the receiver's `attach` aborts: a reported liveness
 error, never a dangling view. A stale handle can be copied and sent but not
-attached, and without an attachment there is no view; as handles are never
-forged nor returned by C, and serials never recur, a stale handle never names a
-newer arena.
+attached, so no view of released memory exists; as handles are never forged or
+returned by C and serials never recur, none names a newer arena.
 
 ### 5.2 The dynamic stacks' budget, release and reuse
 
@@ -300,35 +298,35 @@ The first slot needed reserves `GS_DYNAMIC_BUDGET` bytes, B (16 TB by default,
 `MEM_RESERVE`) of slots of R + G: R usable, a data stack's `GS_STACK_RESERVE` (2
 GB), and a guard gap G, `GS_STACK_GAP` (1 MB). N = B / (R + G), 8,188 by
 default, meets option A's N * (R + G) + H <= B, the slot records H apart; a
-refused range is halved, down to one slot, as `gs_reserve_region` does, and
+refused range is halved, down to one slot, as `gs_reserve_region` does;
 `GS_SHARED_STATS` reports it. A slot is fresh, live, frozen or free (released,
 pages committed). A dynamic stack takes a free slot, else a fresh one, opened by
 `mprotect` or committed on touch (Windows), and with all N live or frozen aborts
 with B, R, N and the flag that raises B. R being a data stack's reservation, a
 `u32` link needs no range check (§3.9); growth past R hits the gap and ends the
-program, unless `ds.items.check_length(n)` refused the count. The stack control
-block is the dynamic stack's, not the slot's: it sits in the descriptor beside
-`items`' header and points into the current slot, so pushes, `gs_rref`s and
-functions that grow arrays through references work unchanged, and a `gs_rref`
-stays good across freezes.
+program unless `ds.items.check_length(n)` refused it. The stack control block is
+the dynamic stack's, not the slot's: it sits in the descriptor beside `items`'
+header and points into the current slot, so pushes and functions that grow
+arrays through references work unchanged, and a `gs_rref` stays good across
+freezes.
 
-Freezing records the slot in the arena with the array's byte length (protecting
-it first in a debug build), takes a fresh slot, a free one if it can, and points
-block and header at its start with length 0: the one change of a grow-only
-array's base, a rebind to codegen (section 7). A frozen slot keeps all of R, so
-small arrays share dynamic stacks; per-morsel dictionaries take three regions,
-offsets, bytes and a directory. The fault handlers find a slot arithmetically
-and commit (Windows) in a live slot, or report an overrun in a gap or a write to
-a protected frozen slot; slots need no region-registry entry, so
-`hardware_threads()` holds. Releasing an arena puts its frozen slots on the free
-list, pages committed, has the releasing thread unmap its mappings (`munmap`,
-`UnmapViewOfFile`), and frees the record. A free slot is taken before a fresh
-one, so arenas built and dropped repeatedly fault no pages after the first
-round; an unfrozen slot joins the list at its exit or after a contained abort.
-No slot is unmapped while the program runs, which keeps, as option A says, the
-reservation that guarantees reuse of the budget; `trim_memory()` (§1.2) returns
-free slots' pages as it does stacks', since unmaps by threads ending together
-serialize: 80 ms for 16 threads, 4.8 ms for one
+**Freezing** records the slot in the arena with the array's byte length
+(protecting it first in a debug build), takes a fresh slot, a free one if it
+can, and points block and header at its start with length 0: the one change of a
+grow-only array's base, a rebind to codegen (section 7). A frozen slot keeps all
+of R, so small arrays share dynamic stacks; per-morsel dictionaries take three
+regions, offsets, bytes and a directory. The fault handlers find a slot
+arithmetically and commit (Windows) in a live slot, or report an overrun in a
+gap or a write to a protected frozen slot; slots need no region-registry entry,
+so `hardware_threads()` holds. Releasing an arena puts its frozen slots on the
+free list, pages committed, has the releasing thread unmap its mappings
+(`munmap`, `UnmapViewOfFile`), and frees the record. A free slot is taken before
+a fresh one, so arenas built and dropped repeatedly fault no pages after the
+first round; an unfrozen slot joins the list at its exit or after a contained
+abort. No slot is unmapped while the program runs, which keeps, as option A
+says, the reservation that guarantees reuse of the budget; `trim_memory()`
+(§1.2) returns free slots' pages as it does stacks', since unmaps by threads
+ending together serialize: 80 ms for 16 threads, 4.8 ms for one
 (`bench/shared_memory/release.c`).
 
 ### 5.3 Mapping a file
@@ -378,15 +376,15 @@ attachments left. `exit`, an uncontained abort, a fault, or `main` returning
 while workers run releases nothing, leaving it to the process's end. A worker
 may outlive its spawner, keeping its arenas.
 
-A region is complete before its handle exists, and a handle reaches a thread
-only by a spawn, a queue, a global copied at spawn or a frozen region that came
-so, each ordering the sender's earlier writes before the receiver's reads: a
-queue by its lock today, and by the release and acquire that any correct queue,
-the messaging design's faster ones included, keeps. Region tables are written
-under the arena's lock and read without it, as an entry is complete before a
-handle names it and never changes; the count is an acquire-release atomic, so
-whoever releases an arena sees every reader done. These are the runtime's, as
-for queues; the language has no locks, atomics or orderings (reference 22).
+**Ordering.** A region is complete before its handle exists, and a handle
+reaches a thread only by a spawn, a queue, a global copied at spawn or a frozen
+region that came so, each ordering the sender's writes before the receiver's
+reads: a queue by its lock now, or the release and acquire that any correct
+queue, the messaging design's included, keeps. Region tables are written under
+the arena's lock and read without it, as an entry is complete before a handle
+names it and never changes; the count is an acquire-release atomic, so whoever
+releases an arena sees every reader done. These belong to the runtime, as for
+queues, not to the language (reference section 22).
 
 ## 6. A partitioned hash join
 
@@ -442,7 +440,7 @@ owners' ends are scope entries beside restores and `defer`s
 the region's record, three compares and an `and`; the loop over it is today's,
 and a program using none of this compiles to the C it does today.
 
-A freeze is a rebind of `ds.items`, the one operation that moves a grow-only
+**A freeze is a rebind** of `ds.items`, the one operation that moves a grow-only
 array's base: the cached top is written back first, no cached base, length or
 top crosses it, and a loop that may freeze hoists none (`hoistrefs`,
 `hoistfields`). A specialization that may freeze, itself or through a call,
