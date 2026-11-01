@@ -787,15 +787,15 @@ int gs_event_signal(gs_res e);
   makes a new one pending. A bit whose record has nothing pending (a hint
   that came late, or one for a record since reused) is passed over: a hint
   is only a reason to look, and the state word decides.
-* **Thread-safe by construction.** A signal shares no state with Goose
-  code beyond the record and its hint word, runs no Goose code, and
-  allocates nothing (the pending copy is the record). In phase 2 it takes
-  no lock, since waking a parked owner takes none (§9.5); in phase 1 it
-  takes the mutexes that a put takes to wake a thread. Hint words are kept with
-  their thread's record, in blocks that are never freed while the program
-  runs, so a signal that stopped holding the place of one writes, when it
-  resumes, into memory that is still a hint word. Both phases use the same
-  records and hints.
+* **Thread-safe by construction.** A signal shares no state with Goose code
+  beyond the record and its hint word, runs no Goose code, and allocates
+  nothing (the pending copy is the record). In phase 2 it takes no lock on
+  Linux, Windows or macOS, since waking a parked owner takes none there
+  (§9.5); in phase 1 it takes the mutexes that a put takes to wake a thread.
+  Hint words are kept with their thread's record, in blocks that are never
+  freed while the program runs, so a signal that stopped holding the place
+  of one writes, when it resumes, into memory that is still a hint word.
+  Both phases use the same records and hints.
 * **Close, reuse and signals in flight.** `pending` keeps a record from
   being reused under its copy. A record goes back to its free list only
   once its event is closed and no copy is pending, and the thread that
@@ -1356,10 +1356,11 @@ than a century at a billion a second.
   holds nothing either: the next putter moves `tail` for it, and takers
   never read `tail`; until then, the segment `tail` is in stays where that
   putter can find it (Done, below). A thread that stops while linking a
-  segment holds only the segment in its hand. A waker that stops in its
-  scan of a queue's waiters delays only its own wake-up, since waking and
-  registering take no lock (§9.5). So no take, no put and no wake-up waits
-  for a thread that was descheduled in the middle of an operation.
+  segment holds only the segment in its hand. A waker that stops in its scan
+  of a queue's waiters delays only its own wake-up, since waking and
+  registering take no lock (§9.5). So, on the systems Goose supports, no
+  take, no put and no wake-up waits for a thread that was descheduled in the
+  middle of an operation.
 * **Done.** After the generated code has copied a message out, its slot
   is finished. A segment goes back to its free list once its 64 slots are
   finished and `tail` has passed it. Its count covers both: each finished
@@ -1501,24 +1502,33 @@ Every thread has a **parker**: a 64-bit state word holding the thread's
 count of waits, which grows by one at every wait and is never reset, and
 whether the thread is `RUNNING`, `WAITING` or `CLAIMED`. The thread sleeps
 on the word: on its low half with `futex` on Linux (a new wait or a claim
-always changes the low half), on all of it with `WaitOnAddress` on
-Windows 8 and later and with `os_sync_wait_on_address` on macOS 14.4 and
-later; elsewhere the parker is phase 1's mutex and condition variable.
+always changes the low half), on all of it with `WaitOnAddress` on Windows 8
+and later and with `os_sync_wait_on_address` on macOS 14.4 and later. Goose
+supports macOS from 13.3, and before 14.4 the thread sleeps on a
+`dispatch_semaphore_t` beside the word, which its claimer signals once, and
+`dispatch_semaphore_signal` never waits for anyone. A signal that comes
+after the wait it was for has ended, at its deadline, is left in the
+semaphore and wakes the thread's next wait once for nothing; like every
+wake-up, that one rereads the word, and sleeps again while it says `WAITING`
+(a futex wake-up that comes late is absorbed the same way). On any other
+system the parker is phase 1's mutex and condition variable, and there a
+waker can wait for the few instructions in which the thread it wakes holds
+its own mutex.
+
 Every queue counts the threads parked on it, and keeps a **waiter entry**
-for each thread that has ever waited on it: the thread's record, fixed
-when the entry is made, and the count of the wait the thread registered on
-this queue, or zero. An inbox has one entry, its owner's; a global queue's
-entries are an array that grows by blocks, never freed, and a thread
-appends its entry, with one increment of the array's length, the first
-time it waits on that queue, then keeps the entry's place. Only its thread
-writes an entry, so registering is a store of the count, then an
-increment of the queue's count of parked threads, and unregistering, when
-the thread wakes, a store of zero, then a decrement. **Waking takes no
-lock**: a put that has to wake a thread reads the entries with plain
-atomic loads and claims one with a compare-exchange of that thread's
-parker (below), so no thread, stopped anywhere, can delay a wake-up but
-the thread making it. There is no lock at all in the waiting path of
-phase 2.
+for each thread that has ever waited on it: the thread's record, fixed when
+the entry is made, and the count of the wait the thread registered on this
+queue, or zero. An inbox has one entry, its owner's; a global queue's
+entries are an array that grows by blocks, never freed, and a thread appends
+its entry, with one increment of the array's length, the first time it waits
+on that queue, then keeps the entry's place. Only its thread writes an
+entry, so registering is a store of the count, then an increment of the
+queue's count of parked threads, and unregistering, when the thread wakes, a
+store of zero, then a decrement. **Waking takes no lock**: a put that has to
+wake a thread reads the entries with plain atomic loads and claims one with
+a compare-exchange of that thread's parker (below), so no thread, stopped
+anywhere, can delay a wake-up but the thread making it. On Linux, Windows
+and macOS there is no lock at all in the waiting path of phase 2.
 
 * **Spin, then park.** A take or `select` that finds nothing checks again,
   pausing between checks, for about the time a wake-up costs (6 µs here;
@@ -1728,21 +1738,21 @@ finds its inbox for a type.
   `usesthreads` is set by every new builtin, so the JIT refuses these
   programs as it refuses any program with queues today.
 * **Runtime** (`runtime.h` declarations, `runtime_threads.h`): phase 1's
-  thread records with inbox tables, main's record, the parker, waiters
-  and claims, inbox close at a worker's end, watches, inbox limits, the
-  event table (its index and serial split, checked), the hint words kept
-  with each thread record, and `gs_event_signal`; phase 2's slots claimed by
+  thread records with inbox tables, main's record, the parker, waiters and
+  claims, inbox close at a worker's end, watches, inbox limits, the event
+  table (its index and serial split, checked), the hint words kept with each
+  thread record, and `gs_event_signal`; phase 2's slots claimed by
   double-width compare-exchange (one helper, `gs_cas128`, over `cmpxchg16b`,
   `casp` or `ldxp`/`stxp` and MSVC's `_InterlockedCompareExchange128`),
   incarnations, segments, chunks, lock-free free lists, queue regions and
   their trim, the fast parker, and the test hooks of §13 (`GS_QTEST_HOOK`,
-  nothing in a normal build). `goose.h` declares `gs_event_signal`, with
-  `gs_res` if step 0 has not put it there. New aborts: `GS_E_NOTHREAD`
-  ("qput_to or thread_watch of a thread id never issued"), `GS_E_WATCH`
-  ("thread_watch of main or of the current thread"), `GS_E_EVENT`
-  ("event_close of a handle that names no open event of this thread"),
-  `GS_E_EVENTS` ("too many open events"); `qlimit_inbox` of zero or less is
-  `GS_E_QBOUND`, as for `qlimit`. The runtime's text changes, so
+  `GS_QTEST_PARKER_SEM`, nothing in a normal build). `goose.h` declares
+  `gs_event_signal`, with `gs_res` if step 0 has not put it there. New
+  aborts: `GS_E_NOTHREAD` ("qput_to or thread_watch of a thread id never
+  issued"), `GS_E_WATCH` ("thread_watch of main or of the current thread"),
+  `GS_E_EVENT` ("event_close of a handle that names no open event of this
+  thread"), `GS_E_EVENTS` ("too many open events"); `qlimit_inbox` of zero
+  or less is `GS_E_QBOUND`, as for `qlimit`. The runtime's text changes, so
   `GS_RUNTIME_VERSION` changes and runtime objects are rebuilt;
   `runtime_inline.h` is regenerated with `goose --gen-runtime-header`.
 * **Language server** (`lsp_features.h`): hover and signature help for the
@@ -1844,12 +1854,17 @@ markers. Threads run only natively, so the new fixtures, like
   in an order; the rotation order `select` takes them in; the timed form's
   zero value and `false`; `select<E>(0)` and a negative `ms` not waiting;
   a generic `E`; a variable-mode `E..` with a string field.
-* `threads/select_wait.goose`: workers sleeping in `select` woken by each
-  of their types, from the inbox and from the global queue; many workers
+* `threads/select_wait.goose`: workers sleeping in `select` woken by each of
+  their types, from the inbox and from the global queue; many workers
   selecting on one global queue and their inboxes, every message taken
-  exactly once and none left with its takers asleep (claims and passing
-  on); a thread woken for one queue taking another's message first; a
-  deadline that passes with nothing, within its time.
+  exactly once and none left with its takers asleep (claims and passing on);
+  a thread woken for one queue taking another's message first; a deadline
+  that passes with nothing, within its time; deadlines that end while a put
+  claims the waiter, each returning at its deadline, and the late wake-up
+  absorbed by the next wait. On macOS it runs a second time with the
+  dispatch-semaphore parker forced (`GS_QTEST_PARKER_SEM`, nothing in a
+  normal build), so that the path of macOS before 14.4 is tested on any
+  macOS.
 * `threads/event_signal.goose` with `event_signal.build` and
   `event_signal_impl.c`, a fixture with a sidecar, which the runner builds
   with `goose build`: C threads (pthreads, or `CreateThread` on Windows)
@@ -1937,13 +1952,13 @@ markers. Threads run only natively, so the new fixtures, like
     in order. Then the same with `trim_memory()` run while the parent is
     free, between its recycling and its reuse: the trim leaves the header,
     and so the generation, as they were, and the link fails as before;
-  * **stale waiter entries**: a waker parked after reading a queue's
-    waiter entry, while that waiter times out, returns, and parks again on other
+  * **stale waiter entries**: a waker parked after reading a queue's waiter
+    entry, while that waiter times out, returns, and parks again on other
     queues; let go, its claim fails on the count of waits, and it claims
     another thread parked on its queue, if there is one, leaving the entry
-    for its own thread to clear;
-    and a woken thread that takes another source's message first passes
-    the wake-up on, so no message is left with its takers asleep;
+    for its own thread to clear; and a woken thread that takes another
+    source's message first passes the wake-up on, so no message is left with
+    its takers asleep;
   * **a wake-up keeps inbox first**: a thread parked in `qget<T>()`,
     claimed by a global put of `T` and parked by the hook before its take,
     while an awake thread takes that message and then an addressed message
@@ -2077,13 +2092,13 @@ to 6 do not depend on it, and step 7 does.
 
 ### Phase 2 (#6): queue performance
 
-1. **The parker.** `futex`, `WaitOnAddress` and
-   `os_sync_wait_on_address` on the 64-bit state word with its count of
-   waits, with phase 1's as the fallback; spin, then park, with
-   `GS_QSPIN_NS` measured; a put's parked-count check after a fence;
-   waiter entries that only their threads write, and that wakers claim
-   from without a lock, passing stale ones over. Measure `rt2`
-   and `tput` 1 × 16.
+1. **The parker.** `futex`, `WaitOnAddress` and `os_sync_wait_on_address` on
+   the 64-bit state word with its count of waits, a dispatch semaphore on
+   macOS before 14.4, and phase 1's as the fallback elsewhere; spin, then
+   park, with `GS_QSPIN_NS` measured; a put's parked-count check after a
+   fence; waiter entries that only their threads write, and that wakers
+   claim from without a lock, passing stale ones over. Measure `rt2` and
+   `tput` 1 × 16.
 2. **Slots claimed and filled at once** (§9.3): `gs_cas128`, segments with
    their generations, in headers kept apart from their slots, recycled once
    their slots are finished and `tail` has passed them, incarnations,
@@ -2128,15 +2143,17 @@ Each with the answer this note recommends.
   Add them when a library's completions cannot be bridged by a thread of
   its own at acceptable cost: io_uring at very high completion rates is
   the likely first.
-* **`gs_event_signal` from a signal handler?** Not promised. Phase 1 wakes
-  a parked owner through a mutex and a condition variable, which a handler
-  may not touch. In phase 2 a signal is a compare-exchange, an `or`, a
-  fence and loads (§6.2), plus, for a parked owner, a compare-exchange of
-  its parker and a system call (§9.5); it takes no lock, so it never waits
-  for anyone, not even the thread it interrupted, and it allocates nothing
-  and puts nothing in a queue. Phase 2 could therefore make the promise, with a
-  test that signals from a handler interrupting the owner in each of
-  those steps, if a user needs it.
+* **`gs_event_signal` from a signal handler?** Not promised. Phase 1 wakes a
+  parked owner through a mutex and a condition variable, which a handler may
+  not touch. In phase 2 a signal is a compare-exchange, an `or`, a fence and
+  loads (§6.2), plus, for a parked owner, a compare-exchange of its parker
+  and a system call (§9.5); it takes no lock, so it never waits for anyone,
+  not even the thread it interrupted, and it allocates nothing and puts
+  nothing in a queue. That holds where the parker is a futex,
+  `WaitOnAddress` or `os_sync_wait_on_address`; macOS's dispatch semaphores,
+  before 14.4, are not documented as safe in a handler. Phase 2 could
+  therefore make the promise, with a test that signals from a handler
+  interrupting the owner in each of those steps, if a user needs it.
 * **Should `qget` take from the global queue now and then even when the
   inbox has messages, as Go's scheduler does every 61st time?** No: inbox
   first is a rule a program can rely on (§5.3).
