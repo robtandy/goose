@@ -842,8 +842,10 @@ properties:
   the loop a message; nothing calls into Goose code, and the loop decides
   what to resume, as coroutines.md §2.7 wants.
 * **Zero cost otherwise.** A program without `qput_to`, `select`, events
-  or watches runs its queues as it does today; the inbox checks in `qget`
-  cost a load that finds them empty (§9.3).
+  or watches runs its queues as it does today; the inbox check in a `qget`
+  costs a test of an inbox nobody has made in phase 1, and in phase 2 a
+  load of the inbox's `head` and one of its slot, lines that stay in the
+  caller's cache (§9.3).
 * **Thread-per-core.** Each loop is a thread with its own inbox, so
   addressing a loop is addressing its thread, and a request and its reply
   find their way without a shared queue.
