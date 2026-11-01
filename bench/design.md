@@ -17,6 +17,10 @@ stdlib allocator against the existing `reusable` builtin with identical
 allocation policies and workloads; run it with `bench/slot_pool.py`.
 The [slice_pool comparison](slice_pool.md) covers first-fit span reuse,
 coalescing and relocation against `reusable[]`; run `bench/slice_pool.py`.
+The [typed queue baseline](queues.md) measures the runtime's queues (round
+trips, and 1 to 16 producers against 1 to 16 consumers) and what the
+machine allows a queue, for the queue work of
+[inboxes_select.md](../docs/design/inboxes_select.md); run `bench/queues.py`.
 
 The suite tests the effects of these features:
 
