@@ -99,6 +99,11 @@ and the reference describe what was built; these say why.
 * [Coroutines](design/coroutines.md): stackless coroutines whose frame is
   an ordinary fixed-size value, driven by `resume` and scheduled by
   libraries; what Rust, C++, Kotlin, Go and Zig learned; a proposal.
+* [Immutable shared memory](design/shared_memory.md): mapped files and
+  frozen dynamic stacks that every thread reads through `const` views
+  rooted at an attachment, in arenas released when their last attachment
+  ends; option C's `resource<U>` handles as the first step, and §11.3's
+  dynamic stacks begun; measured against copies; a proposal.
 * [Addressed inboxes, `select` and faster queues](design/inboxes_select.md):
   a message to one thread by its id, a wait on several message types at
   once, events that C signals as messages, and queues without a `malloc`
