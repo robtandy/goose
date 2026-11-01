@@ -496,14 +496,15 @@ ever take them, since nobody else reads an inbox, and ids are never
 reused.
 
 `thread_watch(id, v)` registers a copy of `v`, a flat value, to be put in
-the caller's inbox for `v`'s type when worker `id` ends, at step 4 above;
-if `id` has already ended, the copy is put at once. A worker may be watched
+the caller's inbox for `v`'s type when worker `id` ends, at step 4 above; if
+`id` has already ended, the copy is put at once, and a watch made while `id`
+is ending fires exactly once, one way or the other. A worker may be watched
 any number of times, by any threads. Watching main, oneself or a
 never-issued id aborts, as `thread_wait` does. The watch message is queued
 even into a full inbox; it is dropped if the watcher has ended by then.
 Since the message comes after step 3, the watcher's `thread_wait(id)` then
-returns at once with the worker's answer, and since every message the
-worker put came before its end, a report it sent is already queued.
+returns at once with the worker's answer, and since every message the worker
+put came before its end, a report it sent is already queued.
 
 This is what lets main take reports as they arrive and still learn of an
 abort without blocking, which today's run protocol cannot (§2.3, and §8.1
@@ -1455,12 +1456,25 @@ a claim, which its thread's parker decides.
   a multiple of 64 KB and kept on a free list by size.
 * A watch's message (§4.6) is copied when the watch fires, as any put's
   message is: into its slot when it has at most 8 bytes, otherwise into a
-  chunk of the thread that fires it. No slot ever points at a watch's
-  record, which goes back to its free list as soon as the watch has fired,
-  or has been cancelled by its watcher's end; one compare-exchange of the
-  record's state decides which of the two happens, and the thread that
-  wins returns the record. An event's copy is never in a slot: it is its
-  record's message, which the take copies from (§6.2).
+  chunk of the thread that fires it, so no slot ever points at a watch's
+  record. A worker's watches are a list in its thread record, which
+  `thread_watch`, the worker's end and a watcher's end change under a mutex
+  of that record's own: a watch is made, cancelled or fired once, far from
+  any queue's hot path, and no put or take ever takes that mutex.
+  `thread_watch` adds to the list if the record's owner, read under the
+  mutex, is still the worker its id names and the list has not fired, and
+  otherwise puts the message at once; the worker's end takes the whole list
+  and marks it fired, holding the mutex for that moment only, and fires what
+  it took, its puts made after letting go; a watcher's end unlinks, under
+  the mutex, each watch it made that is still listed, finding them through
+  its own list of (record, serial) pairs, in which a pair whose watch has
+  fired and whose record has since been reused names nothing and is passed
+  over. So a watch made as its worker ends fires exactly once, before or
+  after that moment; a cancelled watch is out of every list before its
+  record goes back; and the record goes back once, from the list by the
+  watcher's end, or after its put by the end that fired it. An event's copy
+  is never in a slot: it is its record's message, which the take copies from
+  (§6.2).
 
 No message `malloc`s. Segments and chunks are carved from regions that the
 runtime reserves for queues, as it reserves data stacks, and go back to
@@ -1498,8 +1512,9 @@ recycled one.
 
 ### 9.5 Waiting: a parker per thread
 
-Every thread has a **parker**: a 64-bit state word holding the thread's
-count of waits, which grows by one at every wait and is never reset, and
+Every thread has a **parker**: a 64-bit state word, kept in its thread
+record, holding the thread's count of waits, which grows by one at every
+wait and is never reset, not even when the record gets a new owner, and
 whether the thread is `RUNNING`, `WAITING` or `CLAIMED`. The thread sleeps
 on the word: on its low half with `futex` on Linux (a new wait or a claim
 always changes the low half), on all of it with `WaitOnAddress` on Windows 8
@@ -1547,23 +1562,32 @@ and macOS there is no lock at all in the waiting path of phase 2.
 * **One message, one thread.** A put that finds parked threads claims one: a
   compare-exchange of the thread's state from (the count of the wait its
   entry registered, `WAITING`) to (that count, `CLAIMED`), so a thread can
-  only be claimed for the wait it registered. A thread already claimed, or
-  one whose count has moved on (it woke, at its deadline or for another
-  queue's message, and may be waiting again on others), is passed over, and
-  its entry left for its own thread to clear. A put starts its scan where
-  the queue's last claim left off, so that claims go round the waiters, and
-  stops at its first claim. The claimed thread then takes as any take does:
-  in its rotation (§5.3), and within a type from its inbox before the global
-  queue, whichever queue's put claimed it. A wake-up carries no message,
-  only the news that one came, so it never changes which message a take
-  prefers: a thread claimed for a global message that an awake thread takes
-  first, while an addressed message and then another global one arrive,
-  takes the addressed one. If another of its sources still holds a message
-  and has threads parked on it, it wakes one of them in turn, so a message
-  that wakes a thread is never left behind with its takers asleep. If it
-  finds nothing, the message was taken by a thread that was awake, which is
-  just as good. There is no thundering herd, and no wake-up is spent on a
-  thread that has stopped waiting for it.
+  only be claimed for the wait it registered, and, since the count goes on
+  in the record from one owner to the next, never a later owner for the wait
+  of an earlier one. A thread already claimed, or one whose count has moved
+  on (it woke, at its deadline or for another queue's message, and may be
+  waiting again on others), is passed over, and its entry left for its own
+  thread to clear. A put starts its scan where the queue's last claim left
+  off, so that claims go round the waiters, and stops at its first claim.
+  The claimed thread then takes as any take does: in its rotation (§5.3),
+  and within a type from its inbox before the global queue, whichever
+  queue's put claimed it. A wake-up carries no message, only the news that
+  one came, so it never changes which message a take prefers: a thread
+  claimed for a global message that an awake thread takes first, while an
+  addressed message and then another global one arrive, takes the addressed
+  one. If another of its sources still holds a message and has threads
+  parked on it, it wakes one of them in turn, so a message that wakes a
+  thread is never left behind with its takers asleep. If it finds nothing,
+  the message was taken by a thread that was awake, which is just as good.
+  There is no thundering herd, and no wake-up is spent on a thread that has
+  stopped waiting for it.
+* **A deadline that meets a claim.** A thread whose deadline passes ends
+  its wait with a compare-exchange from (its count, `WAITING`) to (its
+  count, `RUNNING`). If that fails, a put has claimed it at the last
+  moment, and it does what a claimed thread does: it takes, or passes the
+  wake-up on, before its `qget(ms)` or `select(ms)` returns. Neither waits
+  for anything, so it still returns at its deadline, with a message if it
+  took one, and no claim is ever lost to a deadline.
 
 Phase 1 implements the same protocol with each queue's mutex in place of
 the fences and the per-thread mutex and condition variable as the parker.
@@ -1849,7 +1873,11 @@ markers. Threads run only natively, so the new fixtures, like
   §4.6; `thread_wait` returning at once after the watch message; watches
   whose messages have at most 8 bytes and larger ones, made and fired ten
   thousand times, each message arriving once with its own value and every
-  watch record returned (the lifecycle test's live-record count).
+  watch record returned (the lifecycle test's live-record count); watches
+  made from several threads while their worker ends, a thousand times,
+  each firing exactly once; watchers that end before the worker they
+  watch, their watches unlinked and their records returned before it
+  ends.
 * `threads/select_basic.goose`: one thread, messages of three types put
   in an order; the rotation order `select` takes them in; the timed form's
   zero value and `false`; `select<E>(0)` and a negative `ms` not waiting;
@@ -1860,8 +1888,9 @@ markers. Threads run only natively, so the new fixtures, like
   exactly once and none left with its takers asleep (claims and passing on);
   a thread woken for one queue taking another's message first; a deadline
   that passes with nothing, within its time; deadlines that end while a put
-  claims the waiter, each returning at its deadline, and the late wake-up
-  absorbed by the next wait. On macOS it runs a second time with the
+  claims the waiter, each returning at its deadline, the claim's message
+  taken by that thread or by one it passes the wake-up to, and the late
+  wake-up absorbed by the next wait. On macOS it runs a second time with the
   dispatch-semaphore parker forced (`GS_QTEST_PARKER_SEM`, nothing in a
   normal build), so that the path of macOS before 14.4 is tested on any
   macOS.
@@ -1959,6 +1988,14 @@ markers. Threads run only natively, so the new fixtures, like
     for its own thread to clear; and a woken thread that takes another
     source's message first passes the wake-up on, so no message is left with
     its takers asleep;
+  * **a deadline that meets a claim**: a waiter in `qget(ms)` parked by
+    the hook at its deadline, before the compare-exchange that ends its
+    wait, while a put claims it; let go, its compare-exchange fails, it
+    takes the message, or passes the wake-up to another thread parked on
+    the queue if an awake thread took the message first, and returns at
+    once; and again with record reuse, a waiter entry left by an ended
+    worker whose record's next owner waits on the same queue, which a
+    stale claim never wakes;
   * **a wake-up keeps inbox first**: a thread parked in `qget<T>()`,
     claimed by a global put of `T` and parked by the hook before its take,
     while an awake thread takes that message and then an addressed message
@@ -2061,18 +2098,20 @@ to 6 do not depend on it, and step 7 does.
 3. **Waiting.** The per-thread parker (mutex, condition variable, and the
    state word with its count of waits), waiter lists in each `gs_qstate`
    under its mutex, claims by the count of the registered wait, a woken
-   thread taking as any take does (inbox first) and passing on what it
-   does not take, absorbed spurious wake-ups, and the hook between a
-   wake-up and its take for `runtime_queue_stalls.c`'s inbox-first case;
-   the condition variable per queue goes. `bench/queues.py` within 10% of
-   §3.2.
+   thread taking as any take does (inbox first) and passing on what it does
+   not take, a deadline that meets a claim acting on the claim, absorbed
+   spurious wake-ups, and the hook between a wake-up and its take for
+   `runtime_queue_stalls.c`'s inbox-first case; the condition variable per
+   queue goes. `bench/queues.py` within 10% of §3.2.
 4. **`thread_id`, `qput_to` and `qlimit_inbox`**, with ended-worker
    refusal and never-issued aborts, inboxes closed and discarded at a
    worker's end before it is marked ended, and `qlimit` left as it is.
    Tests: `inbox_basic`, `inbox_limits`, `inbox_ended`, `qput_to_unknown`,
    `qlimit_inbox_zero`, the `qput_to` and `qlimit_inbox` rejections.
-5. **`thread_watch`.** Tests: `thread_watch`, `reports_watched`, the watch
-   aborts.
+5. **`thread_watch`**, with each worker's watches listed in its thread
+   record under a mutex of their own, taken whole by its end and unlinked
+   by its watchers' ends (§9.4). Tests: `thread_watch`, `reports_watched`,
+   the watch aborts.
 6. **`select<E>`**, fixed and variable mode: checker rules, the site
    rotation, `gs_qselect`. Tests: `select_basic`, `select_wait`,
    `exchange_credits`, the `select` rejections.
@@ -2097,7 +2136,8 @@ to 6 do not depend on it, and step 7 does.
    macOS before 14.4, and phase 1's as the fallback elsewhere; spin, then
    park, with `GS_QSPIN_NS` measured; a put's parked-count check after a
    fence; waiter entries that only their threads write, and that wakers
-   claim from without a lock, passing stale ones over. Measure `rt2` and
+   claim from without a lock, passing stale ones over;
+   `runtime_queue_stalls.c`'s deadline that meets a claim. Measure `rt2` and
    `tput` 1 × 16.
 2. **Slots claimed and filled at once** (§9.3): `gs_cas128`, segments with
    their generations, in headers kept apart from their slots, recycled once
