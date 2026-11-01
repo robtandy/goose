@@ -1,0 +1,5004 @@
+{
+ "meta": {
+  "date": "2026-11-01 15:59 UTC",
+  "commit": "b7815879",
+  "goose": "goose v2026.3-257-gb7815879 (runtime 3901ec457ba9)",
+  "cc": "clang",
+  "cpu": "Neoverse-N1",
+  "cpus": 16,
+  "os": "Linux 7.0.0-1014-aws aarch64",
+  "reps": 5,
+  "quick": false,
+  "load_before": 0.43,
+  "load_after": 3.47
+ },
+ "results": [
+  {
+   "config": {
+    "mode": "rt1",
+    "size": 16,
+    "n": 2000000
+   },
+   "samples": [
+    {
+     "mode": "rt1",
+     "n": 2000000,
+     "ns_per_round_trip": 51
+    },
+    {
+     "mode": "rt1",
+     "n": 2000000,
+     "ns_per_round_trip": 51
+    },
+    {
+     "mode": "rt1",
+     "n": 2000000,
+     "ns_per_round_trip": 51
+    },
+    {
+     "mode": "rt1",
+     "n": 2000000,
+     "ns_per_round_trip": 51
+    },
+    {
+     "mode": "rt1",
+     "n": 2000000,
+     "ns_per_round_trip": 51
+    }
+   ],
+   "median": {
+    "ns_per_round_trip": 51
+   },
+   "attempts": 4,
+   "background_cpus": 0.159
+  },
+  {
+   "config": {
+    "mode": "rt1",
+    "size": 32768,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "rt1",
+     "n": 20000,
+     "ns_per_round_trip": 4092
+    },
+    {
+     "mode": "rt1",
+     "n": 20000,
+     "ns_per_round_trip": 4108
+    },
+    {
+     "mode": "rt1",
+     "n": 20000,
+     "ns_per_round_trip": 4091
+    },
+    {
+     "mode": "rt1",
+     "n": 20000,
+     "ns_per_round_trip": 4060
+    },
+    {
+     "mode": "rt1",
+     "n": 20000,
+     "ns_per_round_trip": 4057
+    }
+   ],
+   "median": {
+    "ns_per_round_trip": 4091
+   },
+   "attempts": 1,
+   "background_cpus": 0.057
+  },
+  {
+   "config": {
+    "mode": "burst",
+    "size": 16,
+    "n": 1000000
+   },
+   "samples": [
+    {
+     "mode": "burst",
+     "n": 1000000,
+     "ns_per_put": 64,
+     "ns_per_get": 26
+    },
+    {
+     "mode": "burst",
+     "n": 1000000,
+     "ns_per_put": 63,
+     "ns_per_get": 26
+    },
+    {
+     "mode": "burst",
+     "n": 1000000,
+     "ns_per_put": 62,
+     "ns_per_get": 26
+    },
+    {
+     "mode": "burst",
+     "n": 1000000,
+     "ns_per_put": 63,
+     "ns_per_get": 26
+    },
+    {
+     "mode": "burst",
+     "n": 1000000,
+     "ns_per_put": 62,
+     "ns_per_get": 26
+    }
+   ],
+   "median": {
+    "ns_per_put": 63,
+    "ns_per_get": 26
+   },
+   "attempts": 1,
+   "background_cpus": 0.052
+  },
+  {
+   "config": {
+    "mode": "burst",
+    "size": 32768,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "burst",
+     "n": 20000,
+     "ns_per_put": 14711,
+     "ns_per_get": 5749
+    },
+    {
+     "mode": "burst",
+     "n": 20000,
+     "ns_per_put": 14304,
+     "ns_per_get": 5612
+    },
+    {
+     "mode": "burst",
+     "n": 20000,
+     "ns_per_put": 14679,
+     "ns_per_get": 5668
+    },
+    {
+     "mode": "burst",
+     "n": 20000,
+     "ns_per_put": 14483,
+     "ns_per_get": 5803
+    },
+    {
+     "mode": "burst",
+     "n": 20000,
+     "ns_per_put": 14686,
+     "ns_per_get": 5694
+    }
+   ],
+   "median": {
+    "ns_per_put": 14679,
+    "ns_per_get": 5694
+   },
+   "attempts": 1,
+   "background_cpus": 0.154
+  },
+  {
+   "config": {
+    "mode": "empty",
+    "size": 16,
+    "n": 2000000
+   },
+   "samples": [
+    {
+     "mode": "empty",
+     "n": 2000000,
+     "ns_per_poll": 13
+    },
+    {
+     "mode": "empty",
+     "n": 2000000,
+     "ns_per_poll": 13
+    },
+    {
+     "mode": "empty",
+     "n": 2000000,
+     "ns_per_poll": 13
+    },
+    {
+     "mode": "empty",
+     "n": 2000000,
+     "ns_per_poll": 13
+    },
+    {
+     "mode": "empty",
+     "n": 2000000,
+     "ns_per_poll": 13
+    }
+   ],
+   "median": {
+    "ns_per_poll": 13
+   },
+   "attempts": 1,
+   "background_cpus": 0.109
+  },
+  {
+   "config": {
+    "mode": "rt2",
+    "size": 16,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "rt2",
+     "n": 20000,
+     "ns_mean": 13741,
+     "ns_p50": 13612,
+     "ns_p90": 13965,
+     "ns_p99": 18199,
+     "ns_min": 8213
+    },
+    {
+     "mode": "rt2",
+     "n": 20000,
+     "ns_mean": 13556,
+     "ns_p50": 13391,
+     "ns_p90": 13768,
+     "ns_p99": 17665,
+     "ns_min": 1485
+    },
+    {
+     "mode": "rt2",
+     "n": 20000,
+     "ns_mean": 13600,
+     "ns_p50": 13521,
+     "ns_p90": 13867,
+     "ns_p99": 17723,
+     "ns_min": 1469
+    },
+    {
+     "mode": "rt2",
+     "n": 20000,
+     "ns_mean": 13852,
+     "ns_p50": 13735,
+     "ns_p90": 14080,
+     "ns_p99": 17862,
+     "ns_min": 7967
+    },
+    {
+     "mode": "rt2",
+     "n": 20000,
+     "ns_mean": 13680,
+     "ns_p50": 13554,
+     "ns_p90": 13907,
+     "ns_p99": 17641,
+     "ns_min": 7876
+    }
+   ],
+   "median": {
+    "ns_p50": 13554,
+    "ns_p99": 17723,
+    "ns_mean": 13680,
+    "ns_min": 7876
+   },
+   "attempts": 1,
+   "background_cpus": 0.312
+  },
+  {
+   "config": {
+    "mode": "rt2",
+    "size": 32768,
+    "n": 5000
+   },
+   "samples": [
+    {
+     "mode": "rt2",
+     "n": 5000,
+     "ns_mean": 25886,
+     "ns_p50": 25607,
+     "ns_p90": 26223,
+     "ns_p99": 32303,
+     "ns_min": 25008
+    },
+    {
+     "mode": "rt2",
+     "n": 5000,
+     "ns_mean": 26103,
+     "ns_p50": 25805,
+     "ns_p90": 26354,
+     "ns_p99": 32722,
+     "ns_min": 25337
+    },
+    {
+     "mode": "rt2",
+     "n": 5000,
+     "ns_mean": 26337,
+     "ns_p50": 26083,
+     "ns_p90": 26600,
+     "ns_p99": 33238,
+     "ns_min": 25353
+    },
+    {
+     "mode": "rt2",
+     "n": 5000,
+     "ns_mean": 26201,
+     "ns_p50": 25985,
+     "ns_p90": 26387,
+     "ns_p99": 32279,
+     "ns_min": 25296
+    },
+    {
+     "mode": "rt2",
+     "n": 5000,
+     "ns_mean": 26103,
+     "ns_p50": 25813,
+     "ns_p90": 26354,
+     "ns_p99": 33017,
+     "ns_min": 25206
+    }
+   ],
+   "median": {
+    "ns_p50": 25813,
+    "ns_p99": 32722,
+    "ns_mean": 26103,
+    "ns_min": 25296
+   },
+   "attempts": 1,
+   "background_cpus": 0.252
+  },
+  {
+   "config": {
+    "mode": "drain",
+    "size": 16,
+    "consumers": 1,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 17482432,
+     "msgs_per_s": 22880111,
+     "mb_per_s": 366,
+     "ns_per_msg": 43
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 17494066,
+     "msgs_per_s": 22864896,
+     "mb_per_s": 365,
+     "ns_per_msg": 43
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 17492244,
+     "msgs_per_s": 22867277,
+     "mb_per_s": 365,
+     "ns_per_msg": 43
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 17522406,
+     "msgs_per_s": 22827915,
+     "mb_per_s": 365,
+     "ns_per_msg": 43
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 17545536,
+     "msgs_per_s": 22797821,
+     "mb_per_s": 364,
+     "ns_per_msg": 43
+    }
+   ],
+   "median": {
+    "ns_per_msg": 43,
+    "msgs_per_s": 22864896,
+    "mb_per_s": 365
+   },
+   "attempts": 1,
+   "background_cpus": 0.213
+  },
+  {
+   "config": {
+    "mode": "drain",
+    "size": 16,
+    "consumers": 2,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 148315239,
+     "msgs_per_s": 2696958,
+     "mb_per_s": 43,
+     "ns_per_msg": 370
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 122426570,
+     "msgs_per_s": 3267264,
+     "mb_per_s": 52,
+     "ns_per_msg": 306
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 106521370,
+     "msgs_per_s": 3755115,
+     "mb_per_s": 60,
+     "ns_per_msg": 266
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 102746467,
+     "msgs_per_s": 3893077,
+     "mb_per_s": 62,
+     "ns_per_msg": 256
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 81283254,
+     "msgs_per_s": 4921062,
+     "mb_per_s": 78,
+     "ns_per_msg": 203
+    }
+   ],
+   "median": {
+    "ns_per_msg": 266,
+    "msgs_per_s": 3755115,
+    "mb_per_s": 60
+   },
+   "attempts": 1,
+   "background_cpus": 0.176
+  },
+  {
+   "config": {
+    "mode": "drain",
+    "size": 16,
+    "consumers": 4,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 93132990,
+     "msgs_per_s": 4294933,
+     "mb_per_s": 68,
+     "ns_per_msg": 232
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 90683706,
+     "msgs_per_s": 4410935,
+     "mb_per_s": 70,
+     "ns_per_msg": 226
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 81384921,
+     "msgs_per_s": 4914915,
+     "mb_per_s": 78,
+     "ns_per_msg": 203
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 96481337,
+     "msgs_per_s": 4145879,
+     "mb_per_s": 66,
+     "ns_per_msg": 241
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 82870864,
+     "msgs_per_s": 4826786,
+     "mb_per_s": 77,
+     "ns_per_msg": 207
+    }
+   ],
+   "median": {
+    "ns_per_msg": 226,
+    "msgs_per_s": 4410935,
+    "mb_per_s": 70
+   },
+   "attempts": 1,
+   "background_cpus": 0.467
+  },
+  {
+   "config": {
+    "mode": "drain",
+    "size": 16,
+    "consumers": 8,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 104079528,
+     "msgs_per_s": 3843214,
+     "mb_per_s": 61,
+     "ns_per_msg": 260
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 116854731,
+     "msgs_per_s": 3423053,
+     "mb_per_s": 54,
+     "ns_per_msg": 292
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 115511799,
+     "msgs_per_s": 3462849,
+     "mb_per_s": 55,
+     "ns_per_msg": 288
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 109969366,
+     "msgs_per_s": 3637376,
+     "mb_per_s": 58,
+     "ns_per_msg": 274
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 113143825,
+     "msgs_per_s": 3535323,
+     "mb_per_s": 56,
+     "ns_per_msg": 282
+    }
+   ],
+   "median": {
+    "ns_per_msg": 282,
+    "msgs_per_s": 3535323,
+    "mb_per_s": 56
+   },
+   "attempts": 1,
+   "background_cpus": 0.0
+  },
+  {
+   "config": {
+    "mode": "drain",
+    "size": 16,
+    "consumers": 16,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 120982889,
+     "msgs_per_s": 3306252,
+     "mb_per_s": 52,
+     "ns_per_msg": 302
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 111628672,
+     "msgs_per_s": 3583308,
+     "mb_per_s": 57,
+     "ns_per_msg": 279
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 142239338,
+     "msgs_per_s": 2812161,
+     "mb_per_s": 44,
+     "ns_per_msg": 355
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 119359521,
+     "msgs_per_s": 3351219,
+     "mb_per_s": 53,
+     "ns_per_msg": 298
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 111102950,
+     "msgs_per_s": 3600264,
+     "mb_per_s": 57,
+     "ns_per_msg": 277
+    }
+   ],
+   "median": {
+    "ns_per_msg": 298,
+    "msgs_per_s": 3351219,
+    "mb_per_s": 53
+   },
+   "attempts": 1,
+   "background_cpus": 0.036
+  },
+  {
+   "config": {
+    "mode": "drain",
+    "size": 32768,
+    "consumers": 1,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 64745750,
+     "msgs_per_s": 308900,
+     "mb_per_s": 10122,
+     "ns_per_msg": 3237
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 64740934,
+     "msgs_per_s": 308923,
+     "mb_per_s": 10122,
+     "ns_per_msg": 3237
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 64211585,
+     "msgs_per_s": 311470,
+     "mb_per_s": 10206,
+     "ns_per_msg": 3210
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 64076827,
+     "msgs_per_s": 312125,
+     "mb_per_s": 10227,
+     "ns_per_msg": 3203
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 64899157,
+     "msgs_per_s": 308170,
+     "mb_per_s": 10098,
+     "ns_per_msg": 3244
+    }
+   ],
+   "median": {
+    "ns_per_msg": 3237,
+    "msgs_per_s": 308923,
+    "mb_per_s": 10122
+   },
+   "attempts": 1,
+   "background_cpus": 0.254
+  },
+  {
+   "config": {
+    "mode": "drain",
+    "size": 32768,
+    "consumers": 2,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 35423691,
+     "msgs_per_s": 564593,
+     "mb_per_s": 18500,
+     "ns_per_msg": 1771
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 36104756,
+     "msgs_per_s": 553943,
+     "mb_per_s": 18151,
+     "ns_per_msg": 1805
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 35755588,
+     "msgs_per_s": 559353,
+     "mb_per_s": 18328,
+     "ns_per_msg": 1787
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 35290984,
+     "msgs_per_s": 566716,
+     "mb_per_s": 18570,
+     "ns_per_msg": 1764
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 35773409,
+     "msgs_per_s": 559074,
+     "mb_per_s": 18319,
+     "ns_per_msg": 1788
+    }
+   ],
+   "median": {
+    "ns_per_msg": 1787,
+    "msgs_per_s": 559353,
+    "mb_per_s": 18328
+   },
+   "attempts": 1,
+   "background_cpus": 0.356
+  },
+  {
+   "config": {
+    "mode": "drain",
+    "size": 32768,
+    "consumers": 4,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 19632236,
+     "msgs_per_s": 1018732,
+     "mb_per_s": 33381,
+     "ns_per_msg": 981
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 19500957,
+     "msgs_per_s": 1025590,
+     "mb_per_s": 33606,
+     "ns_per_msg": 975
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 19144502,
+     "msgs_per_s": 1044686,
+     "mb_per_s": 34232,
+     "ns_per_msg": 957
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 19638266,
+     "msgs_per_s": 1018419,
+     "mb_per_s": 33371,
+     "ns_per_msg": 981
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 19258732,
+     "msgs_per_s": 1038489,
+     "mb_per_s": 34029,
+     "ns_per_msg": 962
+    }
+   ],
+   "median": {
+    "ns_per_msg": 975,
+    "msgs_per_s": 1025590,
+    "mb_per_s": 33606
+   },
+   "attempts": 1,
+   "background_cpus": 0.396
+  },
+  {
+   "config": {
+    "mode": "drain",
+    "size": 32768,
+    "consumers": 8,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 13304559,
+     "msgs_per_s": 1503244,
+     "mb_per_s": 49258,
+     "ns_per_msg": 665
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 13107789,
+     "msgs_per_s": 1525810,
+     "mb_per_s": 49997,
+     "ns_per_msg": 655
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 13165756,
+     "msgs_per_s": 1519092,
+     "mb_per_s": 49777,
+     "ns_per_msg": 658
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 13839447,
+     "msgs_per_s": 1445144,
+     "mb_per_s": 47354,
+     "ns_per_msg": 691
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 13058650,
+     "msgs_per_s": 1531551,
+     "mb_per_s": 50185,
+     "ns_per_msg": 652
+    }
+   ],
+   "median": {
+    "ns_per_msg": 658,
+    "msgs_per_s": 1519092,
+    "mb_per_s": 49777
+   },
+   "attempts": 2,
+   "background_cpus": 0.369
+  },
+  {
+   "config": {
+    "mode": "drain",
+    "size": 32768,
+    "consumers": 16,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 12334680,
+     "msgs_per_s": 1621444,
+     "mb_per_s": 53131,
+     "ns_per_msg": 616
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 12167013,
+     "msgs_per_s": 1643788,
+     "mb_per_s": 53863,
+     "ns_per_msg": 608
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 12107421,
+     "msgs_per_s": 1651879,
+     "mb_per_s": 54128,
+     "ns_per_msg": 605
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 12345691,
+     "msgs_per_s": 1619998,
+     "mb_per_s": 53084,
+     "ns_per_msg": 617
+    },
+    {
+     "mode": "drain",
+     "producers": 0,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 12443320,
+     "msgs_per_s": 1607288,
+     "mb_per_s": 52667,
+     "ns_per_msg": 622
+    }
+   ],
+   "median": {
+    "ns_per_msg": 616,
+    "msgs_per_s": 1621444,
+    "mb_per_s": 53131
+   },
+   "attempts": 1,
+   "background_cpus": 0.236
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 16,
+    "producers": 1,
+    "consumers": 1,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 220128052,
+     "msgs_per_s": 1817124,
+     "mb_per_s": 29,
+     "ns_per_msg": 550
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 218093833,
+     "msgs_per_s": 1834072,
+     "mb_per_s": 29,
+     "ns_per_msg": 545
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 171175518,
+     "msgs_per_s": 2336782,
+     "mb_per_s": 37,
+     "ns_per_msg": 427
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 168857081,
+     "msgs_per_s": 2368867,
+     "mb_per_s": 37,
+     "ns_per_msg": 422
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 187332495,
+     "msgs_per_s": 2135240,
+     "mb_per_s": 34,
+     "ns_per_msg": 468
+    }
+   ],
+   "median": {
+    "ns_per_msg": 468,
+    "msgs_per_s": 2135240,
+    "mb_per_s": 34
+   },
+   "attempts": 1,
+   "background_cpus": 0.174
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 16,
+    "producers": 1,
+    "consumers": 2,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 238861863,
+     "msgs_per_s": 1674608,
+     "mb_per_s": 26,
+     "ns_per_msg": 597
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 204099343,
+     "msgs_per_s": 1959829,
+     "mb_per_s": 31,
+     "ns_per_msg": 510
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 319079221,
+     "msgs_per_s": 1253607,
+     "mb_per_s": 20,
+     "ns_per_msg": 797
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 320950096,
+     "msgs_per_s": 1246299,
+     "mb_per_s": 19,
+     "ns_per_msg": 802
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 356167776,
+     "msgs_per_s": 1123066,
+     "mb_per_s": 17,
+     "ns_per_msg": 890
+    }
+   ],
+   "median": {
+    "ns_per_msg": 797,
+    "msgs_per_s": 1253607,
+    "mb_per_s": 20
+   },
+   "attempts": 1,
+   "background_cpus": 0.033
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 16,
+    "producers": 1,
+    "consumers": 4,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 2009234756,
+     "msgs_per_s": 199080,
+     "mb_per_s": 3,
+     "ns_per_msg": 5023
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 2014454801,
+     "msgs_per_s": 198564,
+     "mb_per_s": 3,
+     "ns_per_msg": 5036
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 1985136993,
+     "msgs_per_s": 201497,
+     "mb_per_s": 3,
+     "ns_per_msg": 4962
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 1997961447,
+     "msgs_per_s": 200204,
+     "mb_per_s": 3,
+     "ns_per_msg": 4994
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 2011577594,
+     "msgs_per_s": 198848,
+     "mb_per_s": 3,
+     "ns_per_msg": 5028
+    }
+   ],
+   "median": {
+    "ns_per_msg": 5023,
+    "msgs_per_s": 199080,
+    "mb_per_s": 3
+   },
+   "attempts": 1,
+   "background_cpus": 0.197
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 16,
+    "producers": 1,
+    "consumers": 8,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 1524819947,
+     "msgs_per_s": 262326,
+     "mb_per_s": 4,
+     "ns_per_msg": 3812
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 1521664153,
+     "msgs_per_s": 262870,
+     "mb_per_s": 4,
+     "ns_per_msg": 3804
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 1521608410,
+     "msgs_per_s": 262879,
+     "mb_per_s": 4,
+     "ns_per_msg": 3804
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 1540627751,
+     "msgs_per_s": 259634,
+     "mb_per_s": 4,
+     "ns_per_msg": 3851
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 1546599768,
+     "msgs_per_s": 258631,
+     "mb_per_s": 4,
+     "ns_per_msg": 3866
+    }
+   ],
+   "median": {
+    "ns_per_msg": 3812,
+    "msgs_per_s": 262326,
+    "mb_per_s": 4
+   },
+   "attempts": 1,
+   "background_cpus": 0.0
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 16,
+    "producers": 1,
+    "consumers": 16,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 1296890772,
+     "msgs_per_s": 308429,
+     "mb_per_s": 4,
+     "ns_per_msg": 3242
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 1290026649,
+     "msgs_per_s": 310071,
+     "mb_per_s": 4,
+     "ns_per_msg": 3225
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 1319524360,
+     "msgs_per_s": 303139,
+     "mb_per_s": 4,
+     "ns_per_msg": 3298
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 1316016814,
+     "msgs_per_s": 303947,
+     "mb_per_s": 4,
+     "ns_per_msg": 3290
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 1303267357,
+     "msgs_per_s": 306920,
+     "mb_per_s": 4,
+     "ns_per_msg": 3258
+    }
+   ],
+   "median": {
+    "ns_per_msg": 3258,
+    "msgs_per_s": 306920,
+    "mb_per_s": 4
+   },
+   "attempts": 1,
+   "background_cpus": 0.167
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 16,
+    "producers": 2,
+    "consumers": 1,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 119627623,
+     "msgs_per_s": 3343709,
+     "mb_per_s": 53,
+     "ns_per_msg": 299
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 104484027,
+     "msgs_per_s": 3828336,
+     "mb_per_s": 61,
+     "ns_per_msg": 261
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 112802046,
+     "msgs_per_s": 3546034,
+     "mb_per_s": 56,
+     "ns_per_msg": 282
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 108664747,
+     "msgs_per_s": 3681046,
+     "mb_per_s": 58,
+     "ns_per_msg": 271
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 112311261,
+     "msgs_per_s": 3561530,
+     "mb_per_s": 56,
+     "ns_per_msg": 280
+    }
+   ],
+   "median": {
+    "ns_per_msg": 280,
+    "msgs_per_s": 3561530,
+    "mb_per_s": 56
+   },
+   "attempts": 1,
+   "background_cpus": 0.044
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 16,
+    "producers": 2,
+    "consumers": 2,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 175998406,
+     "msgs_per_s": 2272747,
+     "mb_per_s": 36,
+     "ns_per_msg": 439
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 197419350,
+     "msgs_per_s": 2026143,
+     "mb_per_s": 32,
+     "ns_per_msg": 493
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 211296432,
+     "msgs_per_s": 1893075,
+     "mb_per_s": 30,
+     "ns_per_msg": 528
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 202683242,
+     "msgs_per_s": 1973522,
+     "mb_per_s": 31,
+     "ns_per_msg": 506
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 168100915,
+     "msgs_per_s": 2379523,
+     "mb_per_s": 38,
+     "ns_per_msg": 420
+    }
+   ],
+   "median": {
+    "ns_per_msg": 493,
+    "msgs_per_s": 2026143,
+    "mb_per_s": 32
+   },
+   "attempts": 1,
+   "background_cpus": 0.195
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 16,
+    "producers": 2,
+    "consumers": 4,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 929949144,
+     "msgs_per_s": 430131,
+     "mb_per_s": 6,
+     "ns_per_msg": 2324
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 1043772909,
+     "msgs_per_s": 383225,
+     "mb_per_s": 6,
+     "ns_per_msg": 2609
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 1208213009,
+     "msgs_per_s": 331067,
+     "mb_per_s": 5,
+     "ns_per_msg": 3020
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 819883152,
+     "msgs_per_s": 487874,
+     "mb_per_s": 7,
+     "ns_per_msg": 2049
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 1066529167,
+     "msgs_per_s": 375048,
+     "mb_per_s": 6,
+     "ns_per_msg": 2666
+    }
+   ],
+   "median": {
+    "ns_per_msg": 2609,
+    "msgs_per_s": 383225,
+    "mb_per_s": 6
+   },
+   "attempts": 1,
+   "background_cpus": 0.0
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 16,
+    "producers": 2,
+    "consumers": 8,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 1298490778,
+     "msgs_per_s": 308049,
+     "mb_per_s": 4,
+     "ns_per_msg": 3246
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 1313547780,
+     "msgs_per_s": 304518,
+     "mb_per_s": 4,
+     "ns_per_msg": 3283
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 1324808622,
+     "msgs_per_s": 301930,
+     "mb_per_s": 4,
+     "ns_per_msg": 3312
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 1330018393,
+     "msgs_per_s": 300747,
+     "mb_per_s": 4,
+     "ns_per_msg": 3325
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 1336081405,
+     "msgs_per_s": 299382,
+     "mb_per_s": 4,
+     "ns_per_msg": 3340
+    }
+   ],
+   "median": {
+    "ns_per_msg": 3312,
+    "msgs_per_s": 301930,
+    "mb_per_s": 4
+   },
+   "attempts": 1,
+   "background_cpus": 0.347
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 16,
+    "producers": 2,
+    "consumers": 16,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 1028621803,
+     "msgs_per_s": 388869,
+     "mb_per_s": 6,
+     "ns_per_msg": 2571
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 965679837,
+     "msgs_per_s": 414215,
+     "mb_per_s": 6,
+     "ns_per_msg": 2414
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 999812641,
+     "msgs_per_s": 400074,
+     "mb_per_s": 6,
+     "ns_per_msg": 2499
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 1017904851,
+     "msgs_per_s": 392964,
+     "mb_per_s": 6,
+     "ns_per_msg": 2544
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 979522905,
+     "msgs_per_s": 408362,
+     "mb_per_s": 6,
+     "ns_per_msg": 2448
+    }
+   ],
+   "median": {
+    "ns_per_msg": 2499,
+    "msgs_per_s": 400074,
+    "mb_per_s": 6
+   },
+   "attempts": 1,
+   "background_cpus": 0.0
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 16,
+    "producers": 4,
+    "consumers": 1,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 105510555,
+     "msgs_per_s": 3791089,
+     "mb_per_s": 60,
+     "ns_per_msg": 263
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 111816712,
+     "msgs_per_s": 3577282,
+     "mb_per_s": 57,
+     "ns_per_msg": 279
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 121468943,
+     "msgs_per_s": 3293022,
+     "mb_per_s": 52,
+     "ns_per_msg": 303
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 127944877,
+     "msgs_per_s": 3126346,
+     "mb_per_s": 50,
+     "ns_per_msg": 319
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 119872134,
+     "msgs_per_s": 3336888,
+     "mb_per_s": 53,
+     "ns_per_msg": 299
+    }
+   ],
+   "median": {
+    "ns_per_msg": 299,
+    "msgs_per_s": 3336888,
+    "mb_per_s": 53
+   },
+   "attempts": 1,
+   "background_cpus": 0.105
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 16,
+    "producers": 4,
+    "consumers": 2,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 180159700,
+     "msgs_per_s": 2220252,
+     "mb_per_s": 35,
+     "ns_per_msg": 450
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 221082726,
+     "msgs_per_s": 1809277,
+     "mb_per_s": 28,
+     "ns_per_msg": 552
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 209011470,
+     "msgs_per_s": 1913770,
+     "mb_per_s": 30,
+     "ns_per_msg": 522
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 207332249,
+     "msgs_per_s": 1929270,
+     "mb_per_s": 30,
+     "ns_per_msg": 518
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 190771743,
+     "msgs_per_s": 2096746,
+     "mb_per_s": 33,
+     "ns_per_msg": 476
+    }
+   ],
+   "median": {
+    "ns_per_msg": 518,
+    "msgs_per_s": 1929270,
+    "mb_per_s": 30
+   },
+   "attempts": 1,
+   "background_cpus": 0.326
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 16,
+    "producers": 4,
+    "consumers": 4,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 202471964,
+     "msgs_per_s": 1975582,
+     "mb_per_s": 31,
+     "ns_per_msg": 506
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 207534624,
+     "msgs_per_s": 1927389,
+     "mb_per_s": 30,
+     "ns_per_msg": 518
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 247405541,
+     "msgs_per_s": 1616778,
+     "mb_per_s": 25,
+     "ns_per_msg": 618
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 229280627,
+     "msgs_per_s": 1744586,
+     "mb_per_s": 27,
+     "ns_per_msg": 573
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 223280095,
+     "msgs_per_s": 1791471,
+     "mb_per_s": 28,
+     "ns_per_msg": 558
+    }
+   ],
+   "median": {
+    "ns_per_msg": 558,
+    "msgs_per_s": 1791471,
+    "mb_per_s": 28
+   },
+   "attempts": 1,
+   "background_cpus": 0.0
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 16,
+    "producers": 4,
+    "consumers": 8,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 1372668409,
+     "msgs_per_s": 291403,
+     "mb_per_s": 4,
+     "ns_per_msg": 3431
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 1386969355,
+     "msgs_per_s": 288398,
+     "mb_per_s": 4,
+     "ns_per_msg": 3467
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 1379726532,
+     "msgs_per_s": 289912,
+     "mb_per_s": 4,
+     "ns_per_msg": 3449
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 1376909421,
+     "msgs_per_s": 290505,
+     "mb_per_s": 4,
+     "ns_per_msg": 3442
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 1376373655,
+     "msgs_per_s": 290618,
+     "mb_per_s": 4,
+     "ns_per_msg": 3440
+    }
+   ],
+   "median": {
+    "ns_per_msg": 3442,
+    "msgs_per_s": 290505,
+    "mb_per_s": 4
+   },
+   "attempts": 1,
+   "background_cpus": 0.0
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 16,
+    "producers": 4,
+    "consumers": 16,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 928868242,
+     "msgs_per_s": 430631,
+     "mb_per_s": 6,
+     "ns_per_msg": 2322
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 934131455,
+     "msgs_per_s": 428205,
+     "mb_per_s": 6,
+     "ns_per_msg": 2335
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 1023657841,
+     "msgs_per_s": 390755,
+     "mb_per_s": 6,
+     "ns_per_msg": 2559
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 903774155,
+     "msgs_per_s": 442588,
+     "mb_per_s": 7,
+     "ns_per_msg": 2259
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 899266148,
+     "msgs_per_s": 444807,
+     "mb_per_s": 7,
+     "ns_per_msg": 2248
+    }
+   ],
+   "median": {
+    "ns_per_msg": 2322,
+    "msgs_per_s": 430631,
+    "mb_per_s": 6
+   },
+   "attempts": 1,
+   "background_cpus": 0.0
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 16,
+    "producers": 8,
+    "consumers": 1,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 133013263,
+     "msgs_per_s": 3007218,
+     "mb_per_s": 48,
+     "ns_per_msg": 332
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 127115621,
+     "msgs_per_s": 3146741,
+     "mb_per_s": 50,
+     "ns_per_msg": 317
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 137887981,
+     "msgs_per_s": 2900905,
+     "mb_per_s": 46,
+     "ns_per_msg": 344
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 136031625,
+     "msgs_per_s": 2940492,
+     "mb_per_s": 47,
+     "ns_per_msg": 340
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 137384026,
+     "msgs_per_s": 2911546,
+     "mb_per_s": 46,
+     "ns_per_msg": 343
+    }
+   ],
+   "median": {
+    "ns_per_msg": 340,
+    "msgs_per_s": 2940492,
+    "mb_per_s": 47
+   },
+   "attempts": 1,
+   "background_cpus": 0.018
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 16,
+    "producers": 8,
+    "consumers": 2,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 196061704,
+     "msgs_per_s": 2040174,
+     "mb_per_s": 32,
+     "ns_per_msg": 490
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 204953249,
+     "msgs_per_s": 1951664,
+     "mb_per_s": 31,
+     "ns_per_msg": 512
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 206932704,
+     "msgs_per_s": 1932995,
+     "mb_per_s": 30,
+     "ns_per_msg": 517
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 200691414,
+     "msgs_per_s": 1993109,
+     "mb_per_s": 31,
+     "ns_per_msg": 501
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 193511105,
+     "msgs_per_s": 2067064,
+     "mb_per_s": 33,
+     "ns_per_msg": 483
+    }
+   ],
+   "median": {
+    "ns_per_msg": 501,
+    "msgs_per_s": 1993109,
+    "mb_per_s": 31
+   },
+   "attempts": 1,
+   "background_cpus": 0.012
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 16,
+    "producers": 8,
+    "consumers": 4,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 200995703,
+     "msgs_per_s": 1990092,
+     "mb_per_s": 31,
+     "ns_per_msg": 502
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 221492169,
+     "msgs_per_s": 1805932,
+     "mb_per_s": 28,
+     "ns_per_msg": 553
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 207747230,
+     "msgs_per_s": 1925416,
+     "mb_per_s": 30,
+     "ns_per_msg": 519
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 205801277,
+     "msgs_per_s": 1943622,
+     "mb_per_s": 31,
+     "ns_per_msg": 514
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 212686217,
+     "msgs_per_s": 1880704,
+     "mb_per_s": 30,
+     "ns_per_msg": 531
+    }
+   ],
+   "median": {
+    "ns_per_msg": 519,
+    "msgs_per_s": 1925416,
+    "mb_per_s": 30
+   },
+   "attempts": 1,
+   "background_cpus": 0.0
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 16,
+    "producers": 8,
+    "consumers": 8,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 257972007,
+     "msgs_per_s": 1550555,
+     "mb_per_s": 24,
+     "ns_per_msg": 644
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 245730351,
+     "msgs_per_s": 1627800,
+     "mb_per_s": 26,
+     "ns_per_msg": 614
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 232656822,
+     "msgs_per_s": 1719270,
+     "mb_per_s": 27,
+     "ns_per_msg": 581
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 232982409,
+     "msgs_per_s": 1716867,
+     "mb_per_s": 27,
+     "ns_per_msg": 582
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 237326441,
+     "msgs_per_s": 1685442,
+     "mb_per_s": 26,
+     "ns_per_msg": 593
+    }
+   ],
+   "median": {
+    "ns_per_msg": 593,
+    "msgs_per_s": 1685442,
+    "mb_per_s": 26
+   },
+   "attempts": 1,
+   "background_cpus": 0.0
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 16,
+    "producers": 8,
+    "consumers": 16,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 1012430543,
+     "msgs_per_s": 395088,
+     "mb_per_s": 6,
+     "ns_per_msg": 2531
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 971021913,
+     "msgs_per_s": 411937,
+     "mb_per_s": 6,
+     "ns_per_msg": 2427
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 1047234550,
+     "msgs_per_s": 381958,
+     "mb_per_s": 6,
+     "ns_per_msg": 2618
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 1040211982,
+     "msgs_per_s": 384537,
+     "mb_per_s": 6,
+     "ns_per_msg": 2600
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 1008296087,
+     "msgs_per_s": 396708,
+     "mb_per_s": 6,
+     "ns_per_msg": 2520
+    }
+   ],
+   "median": {
+    "ns_per_msg": 2531,
+    "msgs_per_s": 395088,
+    "mb_per_s": 6
+   },
+   "attempts": 1,
+   "background_cpus": 0.017
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 16,
+    "producers": 16,
+    "consumers": 1,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 150735918,
+     "msgs_per_s": 2653647,
+     "mb_per_s": 42,
+     "ns_per_msg": 376
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 145813129,
+     "msgs_per_s": 2743237,
+     "mb_per_s": 43,
+     "ns_per_msg": 364
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 137229255,
+     "msgs_per_s": 2914830,
+     "mb_per_s": 46,
+     "ns_per_msg": 343
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 138284655,
+     "msgs_per_s": 2892584,
+     "mb_per_s": 46,
+     "ns_per_msg": 345
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 1,
+     "n": 400000,
+     "size": 16,
+     "ns": 148391747,
+     "msgs_per_s": 2695567,
+     "mb_per_s": 43,
+     "ns_per_msg": 370
+    }
+   ],
+   "median": {
+    "ns_per_msg": 364,
+    "msgs_per_s": 2743237,
+    "mb_per_s": 43
+   },
+   "attempts": 1,
+   "background_cpus": 0.0
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 16,
+    "producers": 16,
+    "consumers": 2,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 225222421,
+     "msgs_per_s": 1776022,
+     "mb_per_s": 28,
+     "ns_per_msg": 563
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 188871077,
+     "msgs_per_s": 2117846,
+     "mb_per_s": 33,
+     "ns_per_msg": 472
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 225631748,
+     "msgs_per_s": 1772800,
+     "mb_per_s": 28,
+     "ns_per_msg": 564
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 202242185,
+     "msgs_per_s": 1977826,
+     "mb_per_s": 31,
+     "ns_per_msg": 505
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 2,
+     "n": 400000,
+     "size": 16,
+     "ns": 224194574,
+     "msgs_per_s": 1784164,
+     "mb_per_s": 28,
+     "ns_per_msg": 560
+    }
+   ],
+   "median": {
+    "ns_per_msg": 560,
+    "msgs_per_s": 1784164,
+    "mb_per_s": 28
+   },
+   "attempts": 1,
+   "background_cpus": 0.088
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 16,
+    "producers": 16,
+    "consumers": 4,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 218029438,
+     "msgs_per_s": 1834614,
+     "mb_per_s": 29,
+     "ns_per_msg": 545
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 241773108,
+     "msgs_per_s": 1654443,
+     "mb_per_s": 26,
+     "ns_per_msg": 604
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 213015034,
+     "msgs_per_s": 1877801,
+     "mb_per_s": 30,
+     "ns_per_msg": 532
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 219258920,
+     "msgs_per_s": 1824327,
+     "mb_per_s": 29,
+     "ns_per_msg": 548
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 4,
+     "n": 400000,
+     "size": 16,
+     "ns": 250116824,
+     "msgs_per_s": 1599252,
+     "mb_per_s": 25,
+     "ns_per_msg": 625
+    }
+   ],
+   "median": {
+    "ns_per_msg": 548,
+    "msgs_per_s": 1824327,
+    "mb_per_s": 29
+   },
+   "attempts": 1,
+   "background_cpus": 0.026
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 16,
+    "producers": 16,
+    "consumers": 8,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 222178995,
+     "msgs_per_s": 1800350,
+     "mb_per_s": 28,
+     "ns_per_msg": 555
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 241593356,
+     "msgs_per_s": 1655674,
+     "mb_per_s": 26,
+     "ns_per_msg": 603
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 240845501,
+     "msgs_per_s": 1660815,
+     "mb_per_s": 26,
+     "ns_per_msg": 602
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 231033031,
+     "msgs_per_s": 1731354,
+     "mb_per_s": 27,
+     "ns_per_msg": 577
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 8,
+     "n": 400000,
+     "size": 16,
+     "ns": 258768643,
+     "msgs_per_s": 1545782,
+     "mb_per_s": 24,
+     "ns_per_msg": 646
+    }
+   ],
+   "median": {
+    "ns_per_msg": 602,
+    "msgs_per_s": 1660815,
+    "mb_per_s": 26
+   },
+   "attempts": 1,
+   "background_cpus": 0.277
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 16,
+    "producers": 16,
+    "consumers": 16,
+    "n": 400000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 226526487,
+     "msgs_per_s": 1765797,
+     "mb_per_s": 28,
+     "ns_per_msg": 566
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 258386457,
+     "msgs_per_s": 1548068,
+     "mb_per_s": 24,
+     "ns_per_msg": 645
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 253800932,
+     "msgs_per_s": 1576038,
+     "mb_per_s": 25,
+     "ns_per_msg": 634
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 242170424,
+     "msgs_per_s": 1651729,
+     "mb_per_s": 26,
+     "ns_per_msg": 605
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 16,
+     "n": 400000,
+     "size": 16,
+     "ns": 258343152,
+     "msgs_per_s": 1548328,
+     "mb_per_s": 24,
+     "ns_per_msg": 645
+    }
+   ],
+   "median": {
+    "ns_per_msg": 634,
+    "msgs_per_s": 1576038,
+    "mb_per_s": 25
+   },
+   "attempts": 1,
+   "background_cpus": 0.307
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 32768,
+    "producers": 1,
+    "consumers": 1,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 66596586,
+     "msgs_per_s": 300315,
+     "mb_per_s": 9840,
+     "ns_per_msg": 3329
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 69403096,
+     "msgs_per_s": 288171,
+     "mb_per_s": 9442,
+     "ns_per_msg": 3470
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 66861802,
+     "msgs_per_s": 299124,
+     "mb_per_s": 9801,
+     "ns_per_msg": 3343
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 66687800,
+     "msgs_per_s": 299904,
+     "mb_per_s": 9827,
+     "ns_per_msg": 3334
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 66912312,
+     "msgs_per_s": 298898,
+     "mb_per_s": 9794,
+     "ns_per_msg": 3345
+    }
+   ],
+   "median": {
+    "ns_per_msg": 3343,
+    "msgs_per_s": 299124,
+    "mb_per_s": 9801
+   },
+   "attempts": 1,
+   "background_cpus": 0.113
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 32768,
+    "producers": 1,
+    "consumers": 2,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 126358794,
+     "msgs_per_s": 158279,
+     "mb_per_s": 5186,
+     "ns_per_msg": 6317
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 125210761,
+     "msgs_per_s": 159730,
+     "mb_per_s": 5234,
+     "ns_per_msg": 6260
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 125242883,
+     "msgs_per_s": 159689,
+     "mb_per_s": 5232,
+     "ns_per_msg": 6262
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 126948103,
+     "msgs_per_s": 157544,
+     "mb_per_s": 5162,
+     "ns_per_msg": 6347
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 138916449,
+     "msgs_per_s": 143971,
+     "mb_per_s": 4717,
+     "ns_per_msg": 6945
+    }
+   ],
+   "median": {
+    "ns_per_msg": 6317,
+    "msgs_per_s": 158279,
+    "mb_per_s": 5186
+   },
+   "attempts": 1,
+   "background_cpus": 0.064
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 32768,
+    "producers": 1,
+    "consumers": 4,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 119896811,
+     "msgs_per_s": 166810,
+     "mb_per_s": 5466,
+     "ns_per_msg": 5994
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 119881985,
+     "msgs_per_s": 166830,
+     "mb_per_s": 5466,
+     "ns_per_msg": 5994
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 118288359,
+     "msgs_per_s": 169078,
+     "mb_per_s": 5540,
+     "ns_per_msg": 5914
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 118287055,
+     "msgs_per_s": 169080,
+     "mb_per_s": 5540,
+     "ns_per_msg": 5914
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 120631537,
+     "msgs_per_s": 165794,
+     "mb_per_s": 5432,
+     "ns_per_msg": 6031
+    }
+   ],
+   "median": {
+    "ns_per_msg": 5994,
+    "msgs_per_s": 166830,
+    "mb_per_s": 5466
+   },
+   "attempts": 1,
+   "background_cpus": 0.241
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 32768,
+    "producers": 1,
+    "consumers": 8,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 117502147,
+     "msgs_per_s": 170209,
+     "mb_per_s": 5577,
+     "ns_per_msg": 5875
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 117393751,
+     "msgs_per_s": 170366,
+     "mb_per_s": 5582,
+     "ns_per_msg": 5869
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 116749353,
+     "msgs_per_s": 171307,
+     "mb_per_s": 5613,
+     "ns_per_msg": 5837
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 117537756,
+     "msgs_per_s": 170158,
+     "mb_per_s": 5575,
+     "ns_per_msg": 5876
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 116401891,
+     "msgs_per_s": 171818,
+     "mb_per_s": 5630,
+     "ns_per_msg": 5820
+    }
+   ],
+   "median": {
+    "ns_per_msg": 5869,
+    "msgs_per_s": 170366,
+    "mb_per_s": 5582
+   },
+   "attempts": 2,
+   "background_cpus": 0.114
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 32768,
+    "producers": 1,
+    "consumers": 16,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 118027442,
+     "msgs_per_s": 169452,
+     "mb_per_s": 5552,
+     "ns_per_msg": 5901
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 116002303,
+     "msgs_per_s": 172410,
+     "mb_per_s": 5649,
+     "ns_per_msg": 5800
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 117557850,
+     "msgs_per_s": 170129,
+     "mb_per_s": 5574,
+     "ns_per_msg": 5877
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 117634656,
+     "msgs_per_s": 170017,
+     "mb_per_s": 5571,
+     "ns_per_msg": 5881
+    },
+    {
+     "mode": "tput",
+     "producers": 1,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 115188966,
+     "msgs_per_s": 173627,
+     "mb_per_s": 5689,
+     "ns_per_msg": 5759
+    }
+   ],
+   "median": {
+    "ns_per_msg": 5877,
+    "msgs_per_s": 170129,
+    "mb_per_s": 5574
+   },
+   "attempts": 1,
+   "background_cpus": 0.059
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 32768,
+    "producers": 2,
+    "consumers": 1,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 103289957,
+     "msgs_per_s": 193629,
+     "mb_per_s": 6344,
+     "ns_per_msg": 5164
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 104181832,
+     "msgs_per_s": 191972,
+     "mb_per_s": 6290,
+     "ns_per_msg": 5209
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 105327436,
+     "msgs_per_s": 189884,
+     "mb_per_s": 6222,
+     "ns_per_msg": 5266
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 99367315,
+     "msgs_per_s": 201273,
+     "mb_per_s": 6595,
+     "ns_per_msg": 4968
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 111083829,
+     "msgs_per_s": 180044,
+     "mb_per_s": 5899,
+     "ns_per_msg": 5554
+    }
+   ],
+   "median": {
+    "ns_per_msg": 5209,
+    "msgs_per_s": 191972,
+    "mb_per_s": 6290
+   },
+   "attempts": 1,
+   "background_cpus": 0.189
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 32768,
+    "producers": 2,
+    "consumers": 2,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 35356645,
+     "msgs_per_s": 565664,
+     "mb_per_s": 18535,
+     "ns_per_msg": 1767
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 35577135,
+     "msgs_per_s": 562158,
+     "mb_per_s": 18420,
+     "ns_per_msg": 1778
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 38437740,
+     "msgs_per_s": 520321,
+     "mb_per_s": 17049,
+     "ns_per_msg": 1921
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 35416040,
+     "msgs_per_s": 564715,
+     "mb_per_s": 18504,
+     "ns_per_msg": 1770
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 35409550,
+     "msgs_per_s": 564819,
+     "mb_per_s": 18508,
+     "ns_per_msg": 1770
+    }
+   ],
+   "median": {
+    "ns_per_msg": 1770,
+    "msgs_per_s": 564715,
+    "mb_per_s": 18504
+   },
+   "attempts": 2,
+   "background_cpus": 0.23
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 32768,
+    "producers": 2,
+    "consumers": 4,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 117077796,
+     "msgs_per_s": 170826,
+     "mb_per_s": 5597,
+     "ns_per_msg": 5853
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 114325028,
+     "msgs_per_s": 174939,
+     "mb_per_s": 5732,
+     "ns_per_msg": 5716
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 120691351,
+     "msgs_per_s": 165711,
+     "mb_per_s": 5430,
+     "ns_per_msg": 6034
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 116701765,
+     "msgs_per_s": 171377,
+     "mb_per_s": 5615,
+     "ns_per_msg": 5835
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 114738376,
+     "msgs_per_s": 174309,
+     "mb_per_s": 5711,
+     "ns_per_msg": 5736
+    }
+   ],
+   "median": {
+    "ns_per_msg": 5835,
+    "msgs_per_s": 171377,
+    "mb_per_s": 5615
+   },
+   "attempts": 1,
+   "background_cpus": 0.067
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 32768,
+    "producers": 2,
+    "consumers": 8,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 87716841,
+     "msgs_per_s": 228006,
+     "mb_per_s": 7471,
+     "ns_per_msg": 4385
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 88495103,
+     "msgs_per_s": 226001,
+     "mb_per_s": 7405,
+     "ns_per_msg": 4424
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 84604354,
+     "msgs_per_s": 236394,
+     "mb_per_s": 7746,
+     "ns_per_msg": 4230
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 83651771,
+     "msgs_per_s": 239086,
+     "mb_per_s": 7834,
+     "ns_per_msg": 4182
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 85246323,
+     "msgs_per_s": 234614,
+     "mb_per_s": 7687,
+     "ns_per_msg": 4262
+    }
+   ],
+   "median": {
+    "ns_per_msg": 4262,
+    "msgs_per_s": 234614,
+    "mb_per_s": 7687
+   },
+   "attempts": 1,
+   "background_cpus": 0.049
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 32768,
+    "producers": 2,
+    "consumers": 16,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 71229550,
+     "msgs_per_s": 280782,
+     "mb_per_s": 9200,
+     "ns_per_msg": 3561
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 74310614,
+     "msgs_per_s": 269140,
+     "mb_per_s": 8819,
+     "ns_per_msg": 3715
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 76814953,
+     "msgs_per_s": 260365,
+     "mb_per_s": 8531,
+     "ns_per_msg": 3840
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 73104400,
+     "msgs_per_s": 273581,
+     "mb_per_s": 8964,
+     "ns_per_msg": 3655
+    },
+    {
+     "mode": "tput",
+     "producers": 2,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 74327237,
+     "msgs_per_s": 269080,
+     "mb_per_s": 8817,
+     "ns_per_msg": 3716
+    }
+   ],
+   "median": {
+    "ns_per_msg": 3715,
+    "msgs_per_s": 269140,
+    "mb_per_s": 8819
+   },
+   "attempts": 1,
+   "background_cpus": 0.109
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 32768,
+    "producers": 4,
+    "consumers": 1,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 120208081,
+     "msgs_per_s": 166378,
+     "mb_per_s": 5451,
+     "ns_per_msg": 6010
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 119698990,
+     "msgs_per_s": 167085,
+     "mb_per_s": 5475,
+     "ns_per_msg": 5984
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 123031789,
+     "msgs_per_s": 162559,
+     "mb_per_s": 5326,
+     "ns_per_msg": 6151
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 125586153,
+     "msgs_per_s": 159253,
+     "mb_per_s": 5218,
+     "ns_per_msg": 6279
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 121518547,
+     "msgs_per_s": 164583,
+     "mb_per_s": 5393,
+     "ns_per_msg": 6075
+    }
+   ],
+   "median": {
+    "ns_per_msg": 6075,
+    "msgs_per_s": 164583,
+    "mb_per_s": 5393
+   },
+   "attempts": 1,
+   "background_cpus": 0.197
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 32768,
+    "producers": 4,
+    "consumers": 2,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 59252858,
+     "msgs_per_s": 337536,
+     "mb_per_s": 11060,
+     "ns_per_msg": 2962
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 56805887,
+     "msgs_per_s": 352076,
+     "mb_per_s": 11536,
+     "ns_per_msg": 2840
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 58169988,
+     "msgs_per_s": 343819,
+     "mb_per_s": 11266,
+     "ns_per_msg": 2908
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 56655179,
+     "msgs_per_s": 353012,
+     "mb_per_s": 11567,
+     "ns_per_msg": 2832
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 57452509,
+     "msgs_per_s": 348113,
+     "mb_per_s": 11406,
+     "ns_per_msg": 2872
+    }
+   ],
+   "median": {
+    "ns_per_msg": 2872,
+    "msgs_per_s": 348113,
+    "mb_per_s": 11406
+   },
+   "attempts": 1,
+   "background_cpus": 0.289
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 32768,
+    "producers": 4,
+    "consumers": 4,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 109263272,
+     "msgs_per_s": 183044,
+     "mb_per_s": 5997,
+     "ns_per_msg": 5463
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 121113223,
+     "msgs_per_s": 165134,
+     "mb_per_s": 5411,
+     "ns_per_msg": 6055
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 122061023,
+     "msgs_per_s": 163852,
+     "mb_per_s": 5369,
+     "ns_per_msg": 6103
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 112201200,
+     "msgs_per_s": 178251,
+     "mb_per_s": 5840,
+     "ns_per_msg": 5610
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 108438365,
+     "msgs_per_s": 184436,
+     "mb_per_s": 6043,
+     "ns_per_msg": 5421
+    }
+   ],
+   "median": {
+    "ns_per_msg": 5610,
+    "msgs_per_s": 178251,
+    "mb_per_s": 5840
+   },
+   "attempts": 1,
+   "background_cpus": 0.048
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 32768,
+    "producers": 4,
+    "consumers": 8,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 85763947,
+     "msgs_per_s": 233198,
+     "mb_per_s": 7641,
+     "ns_per_msg": 4288
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 87630198,
+     "msgs_per_s": 228231,
+     "mb_per_s": 7478,
+     "ns_per_msg": 4381
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 85421810,
+     "msgs_per_s": 234132,
+     "mb_per_s": 7672,
+     "ns_per_msg": 4271
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 88054991,
+     "msgs_per_s": 227130,
+     "mb_per_s": 7442,
+     "ns_per_msg": 4402
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 84469801,
+     "msgs_per_s": 236771,
+     "mb_per_s": 7758,
+     "ns_per_msg": 4223
+    }
+   ],
+   "median": {
+    "ns_per_msg": 4288,
+    "msgs_per_s": 233198,
+    "mb_per_s": 7641
+   },
+   "attempts": 1,
+   "background_cpus": 0.476
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 32768,
+    "producers": 4,
+    "consumers": 16,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 60094896,
+     "msgs_per_s": 332806,
+     "mb_per_s": 10905,
+     "ns_per_msg": 3004
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 58987650,
+     "msgs_per_s": 339054,
+     "mb_per_s": 11110,
+     "ns_per_msg": 2949
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 60643436,
+     "msgs_per_s": 329796,
+     "mb_per_s": 10806,
+     "ns_per_msg": 3032
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 61253760,
+     "msgs_per_s": 326510,
+     "mb_per_s": 10699,
+     "ns_per_msg": 3062
+    },
+    {
+     "mode": "tput",
+     "producers": 4,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 61106916,
+     "msgs_per_s": 327295,
+     "mb_per_s": 10724,
+     "ns_per_msg": 3055
+    }
+   ],
+   "median": {
+    "ns_per_msg": 3032,
+    "msgs_per_s": 329796,
+    "mb_per_s": 10806
+   },
+   "attempts": 1,
+   "background_cpus": 0.18
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 32768,
+    "producers": 8,
+    "consumers": 1,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 130767750,
+     "msgs_per_s": 152942,
+     "mb_per_s": 5011,
+     "ns_per_msg": 6538
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 132675395,
+     "msgs_per_s": 150743,
+     "mb_per_s": 4939,
+     "ns_per_msg": 6633
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 129196622,
+     "msgs_per_s": 154802,
+     "mb_per_s": 5072,
+     "ns_per_msg": 6459
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 124850680,
+     "msgs_per_s": 160191,
+     "mb_per_s": 5249,
+     "ns_per_msg": 6242
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 132544214,
+     "msgs_per_s": 150893,
+     "mb_per_s": 4944,
+     "ns_per_msg": 6627
+    }
+   ],
+   "median": {
+    "ns_per_msg": 6538,
+    "msgs_per_s": 152942,
+    "mb_per_s": 5011
+   },
+   "attempts": 1,
+   "background_cpus": 0.165
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 32768,
+    "producers": 8,
+    "consumers": 2,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 68243360,
+     "msgs_per_s": 293068,
+     "mb_per_s": 9603,
+     "ns_per_msg": 3412
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 71918878,
+     "msgs_per_s": 278091,
+     "mb_per_s": 9112,
+     "ns_per_msg": 3595
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 70462398,
+     "msgs_per_s": 283839,
+     "mb_per_s": 9300,
+     "ns_per_msg": 3523
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 69507953,
+     "msgs_per_s": 287736,
+     "mb_per_s": 9428,
+     "ns_per_msg": 3475
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 72845329,
+     "msgs_per_s": 274554,
+     "mb_per_s": 8996,
+     "ns_per_msg": 3642
+    }
+   ],
+   "median": {
+    "ns_per_msg": 3523,
+    "msgs_per_s": 283839,
+    "mb_per_s": 9300
+   },
+   "attempts": 2,
+   "background_cpus": 0.239
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 32768,
+    "producers": 8,
+    "consumers": 4,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 35735498,
+     "msgs_per_s": 559667,
+     "mb_per_s": 18339,
+     "ns_per_msg": 1786
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 35283637,
+     "msgs_per_s": 566834,
+     "mb_per_s": 18574,
+     "ns_per_msg": 1764
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 33723027,
+     "msgs_per_s": 593066,
+     "mb_per_s": 19433,
+     "ns_per_msg": 1686
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 38751127,
+     "msgs_per_s": 516114,
+     "mb_per_s": 16912,
+     "ns_per_msg": 1937
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 36828295,
+     "msgs_per_s": 543060,
+     "mb_per_s": 17795,
+     "ns_per_msg": 1841
+    }
+   ],
+   "median": {
+    "ns_per_msg": 1786,
+    "msgs_per_s": 559667,
+    "mb_per_s": 18339
+   },
+   "attempts": 1,
+   "background_cpus": 0.414
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 32768,
+    "producers": 8,
+    "consumers": 8,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 17128852,
+     "msgs_per_s": 1167620,
+     "mb_per_s": 38260,
+     "ns_per_msg": 856
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 16964597,
+     "msgs_per_s": 1178925,
+     "mb_per_s": 38631,
+     "ns_per_msg": 848
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 17468355,
+     "msgs_per_s": 1144927,
+     "mb_per_s": 37516,
+     "ns_per_msg": 873
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 16035397,
+     "msgs_per_s": 1247240,
+     "mb_per_s": 40869,
+     "ns_per_msg": 801
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 16597255,
+     "msgs_per_s": 1205018,
+     "mb_per_s": 39486,
+     "ns_per_msg": 829
+    }
+   ],
+   "median": {
+    "ns_per_msg": 848,
+    "msgs_per_s": 1178925,
+    "mb_per_s": 38631
+   },
+   "attempts": 4,
+   "background_cpus": 0.178
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 32768,
+    "producers": 8,
+    "consumers": 16,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 61252481,
+     "msgs_per_s": 326517,
+     "mb_per_s": 10699,
+     "ns_per_msg": 3062
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 61479922,
+     "msgs_per_s": 325309,
+     "mb_per_s": 10659,
+     "ns_per_msg": 3073
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 61724601,
+     "msgs_per_s": 324019,
+     "mb_per_s": 10617,
+     "ns_per_msg": 3086
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 64253202,
+     "msgs_per_s": 311268,
+     "mb_per_s": 10199,
+     "ns_per_msg": 3212
+    },
+    {
+     "mode": "tput",
+     "producers": 8,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 61078751,
+     "msgs_per_s": 327446,
+     "mb_per_s": 10729,
+     "ns_per_msg": 3053
+    }
+   ],
+   "median": {
+    "ns_per_msg": 3073,
+    "msgs_per_s": 325309,
+    "mb_per_s": 10659
+   },
+   "attempts": 1,
+   "background_cpus": 0.0
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 32768,
+    "producers": 16,
+    "consumers": 1,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 168133277,
+     "msgs_per_s": 118953,
+     "mb_per_s": 3897,
+     "ns_per_msg": 8406
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 168203938,
+     "msgs_per_s": 118903,
+     "mb_per_s": 3896,
+     "ns_per_msg": 8410
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 164683116,
+     "msgs_per_s": 121445,
+     "mb_per_s": 3979,
+     "ns_per_msg": 8234
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 167150237,
+     "msgs_per_s": 119652,
+     "mb_per_s": 3920,
+     "ns_per_msg": 8357
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 1,
+     "n": 20000,
+     "size": 32768,
+     "ns": 163402935,
+     "msgs_per_s": 122396,
+     "mb_per_s": 4010,
+     "ns_per_msg": 8170
+    }
+   ],
+   "median": {
+    "ns_per_msg": 8357,
+    "msgs_per_s": 119652,
+    "mb_per_s": 3920
+   },
+   "attempts": 3,
+   "background_cpus": 0.337
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 32768,
+    "producers": 16,
+    "consumers": 2,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 117739955,
+     "msgs_per_s": 169865,
+     "mb_per_s": 5566,
+     "ns_per_msg": 5886
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 108299411,
+     "msgs_per_s": 184673,
+     "mb_per_s": 6051,
+     "ns_per_msg": 5414
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 112900691,
+     "msgs_per_s": 177146,
+     "mb_per_s": 5804,
+     "ns_per_msg": 5645
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 113654616,
+     "msgs_per_s": 175971,
+     "mb_per_s": 5766,
+     "ns_per_msg": 5682
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 2,
+     "n": 20000,
+     "size": 32768,
+     "ns": 116582420,
+     "msgs_per_s": 171552,
+     "mb_per_s": 5621,
+     "ns_per_msg": 5829
+    }
+   ],
+   "median": {
+    "ns_per_msg": 5682,
+    "msgs_per_s": 175971,
+    "mb_per_s": 5766
+   },
+   "attempts": 3,
+   "background_cpus": 0.219
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 32768,
+    "producers": 16,
+    "consumers": 4,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 85828006,
+     "msgs_per_s": 233024,
+     "mb_per_s": 7635,
+     "ns_per_msg": 4291
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 87071446,
+     "msgs_per_s": 229696,
+     "mb_per_s": 7526,
+     "ns_per_msg": 4353
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 88057620,
+     "msgs_per_s": 227124,
+     "mb_per_s": 7442,
+     "ns_per_msg": 4402
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 84457234,
+     "msgs_per_s": 236806,
+     "mb_per_s": 7759,
+     "ns_per_msg": 4222
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 4,
+     "n": 20000,
+     "size": 32768,
+     "ns": 84525310,
+     "msgs_per_s": 236615,
+     "mb_per_s": 7753,
+     "ns_per_msg": 4226
+    }
+   ],
+   "median": {
+    "ns_per_msg": 4291,
+    "msgs_per_s": 233024,
+    "mb_per_s": 7635
+   },
+   "attempts": 1,
+   "background_cpus": 0.401
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 32768,
+    "producers": 16,
+    "consumers": 8,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 76306734,
+     "msgs_per_s": 262100,
+     "mb_per_s": 8588,
+     "ns_per_msg": 3815
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 57336182,
+     "msgs_per_s": 348819,
+     "mb_per_s": 11430,
+     "ns_per_msg": 2866
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 78720114,
+     "msgs_per_s": 254064,
+     "mb_per_s": 8325,
+     "ns_per_msg": 3936
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 71325633,
+     "msgs_per_s": 280404,
+     "mb_per_s": 9188,
+     "ns_per_msg": 3566
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 8,
+     "n": 20000,
+     "size": 32768,
+     "ns": 78756527,
+     "msgs_per_s": 253947,
+     "mb_per_s": 8321,
+     "ns_per_msg": 3937
+    }
+   ],
+   "median": {
+    "ns_per_msg": 3815,
+    "msgs_per_s": 262100,
+    "mb_per_s": 8588
+   },
+   "attempts": 2,
+   "background_cpus": 0.372
+  },
+  {
+   "config": {
+    "mode": "tput",
+    "size": 32768,
+    "producers": 16,
+    "consumers": 16,
+    "n": 20000
+   },
+   "samples": [
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 64343834,
+     "msgs_per_s": 310830,
+     "mb_per_s": 10185,
+     "ns_per_msg": 3217
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 55777821,
+     "msgs_per_s": 358565,
+     "mb_per_s": 11749,
+     "ns_per_msg": 2788
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 59229902,
+     "msgs_per_s": 337667,
+     "mb_per_s": 11064,
+     "ns_per_msg": 2961
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 57859434,
+     "msgs_per_s": 345665,
+     "mb_per_s": 11326,
+     "ns_per_msg": 2892
+    },
+    {
+     "mode": "tput",
+     "producers": 16,
+     "consumers": 16,
+     "n": 20000,
+     "size": 32768,
+     "ns": 55921710,
+     "msgs_per_s": 357642,
+     "mb_per_s": 11719,
+     "ns_per_msg": 2796
+    }
+   ],
+   "median": {
+    "ns_per_msg": 2892,
+    "msgs_per_s": 345665,
+    "mb_per_s": 11326
+   },
+   "attempts": 1,
+   "background_cpus": 0.219
+  }
+ ],
+ "floor": [
+  {
+   "what": {
+    "mode": "atomic",
+    "threads": 1,
+    "op": "faa"
+   },
+   "key": "ns_per_op",
+   "samples": [
+    5.6,
+    5.6,
+    5.6,
+    5.6,
+    5.6
+   ],
+   "median": 5.6
+  },
+  {
+   "what": {
+    "mode": "atomic",
+    "threads": 2,
+    "op": "faa"
+   },
+   "key": "ns_per_op",
+   "samples": [
+    10.5,
+    9.8,
+    8.6,
+    9.1,
+    8.2
+   ],
+   "median": 9.1
+  },
+  {
+   "what": {
+    "mode": "atomic",
+    "threads": 4,
+    "op": "faa"
+   },
+   "key": "ns_per_op",
+   "samples": [
+    10.3,
+    9.4,
+    9.1,
+    9.6,
+    8.9
+   ],
+   "median": 9.4
+  },
+  {
+   "what": {
+    "mode": "atomic",
+    "threads": 8,
+    "op": "faa"
+   },
+   "key": "ns_per_op",
+   "samples": [
+    10.6,
+    9.8,
+    9.0,
+    9.6,
+    8.9
+   ],
+   "median": 9.6
+  },
+  {
+   "what": {
+    "mode": "atomic",
+    "threads": 16,
+    "op": "faa"
+   },
+   "key": "ns_per_op",
+   "samples": [
+    10.4,
+    9.8,
+    9.0,
+    9.7,
+    8.7
+   ],
+   "median": 9.7
+  },
+  {
+   "what": {
+    "mode": "atomic",
+    "threads": 1,
+    "op": "cas"
+   },
+   "key": "ns_per_op",
+   "samples": [
+    8.3,
+    8.3,
+    8.3,
+    8.3,
+    8.3
+   ],
+   "median": 8.3
+  },
+  {
+   "what": {
+    "mode": "atomic",
+    "threads": 2,
+    "op": "cas"
+   },
+   "key": "ns_per_op",
+   "samples": [
+    20.1,
+    17.5,
+    20.2,
+    26.5,
+    20.4
+   ],
+   "median": 20.2
+  },
+  {
+   "what": {
+    "mode": "atomic",
+    "threads": 4,
+    "op": "cas"
+   },
+   "key": "ns_per_op",
+   "samples": [
+    28.8,
+    27.8,
+    24.0,
+    30.8,
+    25.2
+   ],
+   "median": 27.8
+  },
+  {
+   "what": {
+    "mode": "atomic",
+    "threads": 8,
+    "op": "cas"
+   },
+   "key": "ns_per_op",
+   "samples": [
+    37.7,
+    35.9,
+    28.5,
+    35.8,
+    27.2
+   ],
+   "median": 35.8
+  },
+  {
+   "what": {
+    "mode": "atomic",
+    "threads": 16,
+    "op": "cas"
+   },
+   "key": "ns_per_op",
+   "samples": [
+    43.9,
+    35.3,
+    28.6,
+    34.7,
+    28.5
+   ],
+   "median": 34.7
+  },
+  {
+   "what": {
+    "mode": "handoff"
+   },
+   "key": "ns_per_round_trip",
+   "samples": [
+    180.1,
+    231.8,
+    239.6,
+    246.0,
+    266.0
+   ],
+   "median": 239.6
+  },
+  {
+   "what": {
+    "mode": "futex"
+   },
+   "key": "ns_per_round_trip",
+   "samples": [
+    11922.6,
+    11835.3,
+    11682.0,
+    10370.4,
+    11938.0
+   ],
+   "median": 11835.3
+  },
+  {
+   "what": {
+    "mode": "malloc",
+    "size": 16,
+    "where": "local"
+   },
+   "key": "ns_per_block",
+   "samples": [
+    18.7,
+    18.7,
+    18.7,
+    18.7,
+    18.7
+   ],
+   "median": 18.7
+  },
+  {
+   "what": {
+    "mode": "malloc",
+    "size": 16,
+    "where": "remote"
+   },
+   "key": "ns_per_block",
+   "samples": [
+    194.5,
+    198.5,
+    191.5,
+    215.9,
+    196.3
+   ],
+   "median": 196.3
+  },
+  {
+   "what": {
+    "mode": "malloc",
+    "size": 32768,
+    "where": "local"
+   },
+   "key": "ns_per_block",
+   "samples": [
+    59.1,
+    59.1,
+    59.0,
+    59.0,
+    59.1
+   ],
+   "median": 59.1
+  },
+  {
+   "what": {
+    "mode": "malloc",
+    "size": 32768,
+    "where": "remote"
+   },
+   "key": "ns_per_block",
+   "samples": [
+    802.2,
+    959.2,
+    736.6,
+    1136.5,
+    944.8
+   ],
+   "median": 944.8
+  },
+  {
+   "what": {
+    "mode": "memcpy",
+    "size": 32768,
+    "from": "cache"
+   },
+   "key": "ns_per_copy",
+   "samples": [
+    827.6,
+    827.4,
+    827.3,
+    827.6,
+    827.2
+   ],
+   "median": 827.4
+  },
+  {
+   "what": {
+    "mode": "memcpy",
+    "size": 32768,
+    "from": "memory"
+   },
+   "key": "ns_per_copy",
+   "samples": [
+    1845.4,
+    1815.9,
+    1910.6,
+    1859.5,
+    1840.1
+   ],
+   "median": 1845.4
+  }
+ ]
+}
