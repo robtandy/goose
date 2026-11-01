@@ -13,7 +13,7 @@ each configuration in a fresh process, --reps times, in this order:
 * rt2:   a message to a worker waiting in qget and its answer back: two
          wake-ups per round trip;
 * drain: n messages queued before 1, 2, 4, 8 or 16 consumers start, which
-         then take them all (how a query's morsels are dispatched);
+         then take them all (a pool of workers draining a work queue);
 * tput:  1, 2, 4, 8 or 16 producers putting n messages in all while 1, 2,
          4, 8 or 16 consumers take them, every pair of counts.
 
@@ -350,7 +350,7 @@ def drain_table(res):
     out = []
     W = out.append
     W("**Draining a full queue** (`drain`): n messages queued before the consumers start, "
-      "then taken by all of them, as the engine's workers take the morsels main queued. "
+      "then taken by all of them, as a pool of workers takes the jobs main queued. "
       "Wall time per message, and the total rate.")
     W("")
     W("| consumers | " + " | ".join(f"{c}" for c in COUNTS) + " |")
