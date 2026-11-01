@@ -1,6 +1,6 @@
-/* A file truncated under its mapping (docs/design/shared_memory.md, 11.5):
-   which signal a read past the new end raises, with which si_code and
-   address, and whether a handler can tell the mapping and the offset.
+/* A file truncated under its mapping: which signal a read past the new end
+   raises, with which si_code and address, and whether a handler can tell the
+   mapping and the offset (docs/design/shared_memory.md; results in README.md).
 
        sigbus DIRECTORY
 

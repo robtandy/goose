@@ -1,4 +1,4 @@
-/* The column file mapbench reads (docs/design/shared_memory.md, 11.1).
+/* The column file mapbench reads (README.md, "Scanning a file").
 
        colfile write FILE N    writes N little-endian i64s, 0 to N - 1
        colfile drop FILE       drops the file's pages from the page cache

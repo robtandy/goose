@@ -1,8 +1,8 @@
 /* What making a written region read-only costs, which is what freezing
-   would pay if it protected every frozen region (docs/design/shared_memory.md,
-   11.3): mprotect(PROT_READ) of a region whose pages are all written, alone
-   and while other threads run, whose cached translations the system must
-   then drop.
+   would pay if it protected every frozen region: mprotect(PROT_READ) of a
+   region whose pages are all written, alone and while other threads run,
+   whose cached translations the system must then drop
+   (docs/design/shared_memory.md; results in README.md).
 
        mprot OTHER_THREADS MB
 

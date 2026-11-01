@@ -1,10 +1,10 @@
 /* Summing an i64 column from a file in the page cache: by pread into a
    buffer each thread reuses, by reading the whole file into memory first,
    and through one shared read-only mapping, with and without prefaulting
-   (docs/design/shared_memory.md, section 11.1).
+   (docs/design/shared_memory.md; results in README.md).
 
-   Morsels of 983040 bytes, one more-fast-db row group of an i64 column, are
-   handed out by an atomic counter, as a morsel queue would hand them out.
+   Morsels of 983040 bytes, 122880 i64s each, are handed out by an atomic
+   counter, as a morsel queue would hand them out.
 
        mapbench FILE MODE THREADS [PASSES]
 

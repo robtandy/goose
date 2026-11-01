@@ -2,7 +2,8 @@
    reserves regions the way the runtime reserves a data stack (2 GB,
    MAP_NORESERVE), touches part of each, and then every thread releases its
    regions at the same moment, by munmap, by madvise(MADV_DONTNEED), or not
-   at all, keeping them for reuse (docs/design/shared_memory.md, 11.2).
+   at all, keeping them for reuse (docs/design/shared_memory.md; results in
+   README.md).
 
        release THREADS REGIONS_PER_THREAD MB_TOUCHED_PER_REGION munmap|dontneed|keep
 

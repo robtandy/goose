@@ -1,6 +1,6 @@
 #!/bin/sh
-# Builds the measurement programs of docs/design/shared_memory.md, section 11,
-# and runs each of them three times.
+# Builds the measurement programs of docs/design/shared_memory.md, and runs
+# each of them three times; README.md has the results.
 #
 #     bench/shared_memory/run.sh DIR [CC]
 #
@@ -20,7 +20,7 @@ done
 col="$dir/col.i64"
 [ -f "$col" ] || "$bin/colfile" write "$col" 268435456   # 2^28 i64s, 2 GB
 
-echo "== 11.1 scanning a cached file"
+echo "== scanning a cached file"
 cat "$col" > /dev/null
 for rep in 1 2 3; do
     for t in 1 16; do
@@ -33,7 +33,7 @@ for rep in 1 2 3; do
     done
 done
 if [ "${COLD:-1}" != 0 ]; then
-    echo "== 11.1 the same file, not cached"
+    echo "== the same file, not cached"
     for m in pread mmap mmap_willneed mmap_popread; do
         for t in 1 16; do
             "$bin/colfile" drop "$col"
@@ -43,7 +43,7 @@ if [ "${COLD:-1}" != 0 ]; then
     cat "$col" > /dev/null
 fi
 
-echo "== 11.2 releasing memory when threads end together"
+echo "== releasing memory when threads end together"
 for rep in 1 2 3; do
     for how in munmap dontneed keep; do
         "$bin/release" 16 1 64 $how
@@ -52,7 +52,7 @@ for rep in 1 2 3; do
     done
 done
 
-echo "== 11.3 making a region read-only"
+echo "== making a region read-only"
 for rep in 1 2 3; do
     for mb in 4 64; do
         "$bin/mprot" 0 $mb
@@ -60,12 +60,12 @@ for rep in 1 2 3; do
     done
 done
 
-echo "== 11.4 the attachment count"
+echo "== the attachment count"
 for rep in 1 2 3; do
     "$bin/attach" 1 10000000
     "$bin/attach" 4 2000000
     "$bin/attach" 16 1000000
 done
 
-echo "== 11.5 truncation"
+echo "== truncation"
 "$bin/sigbus" "$dir" || true

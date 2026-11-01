@@ -1,5 +1,5 @@
 // The loops of the radix-partitioned hash join in
-// docs/design/shared_memory.md, section 8.3, over `const` slices standing in
+// docs/design/shared_memory.md, section 6, over `const` slices standing in
 // for views. A view of a mapped file or of a frozen region is exactly such a
 // slice, so these loops are `checkfree` over views if they are `checkfree`
 // here: today's compiler accepts all three at -O0, -O1 and -O2.
