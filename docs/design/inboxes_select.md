@@ -409,8 +409,9 @@ are never refused while the receiver runs, so a refusal means it ended.
 and nothing else, so no program changes meaning. Inboxes have a builtin of
 their own, `qlimit_inbox<T>(n)`, which limits every thread's inbox of `T`,
 each holding at most `n` messages of its own. Like `qlimit`, it applies to
-the whole program, an inbox has no limit until it is called, a limit of
-zero or less aborts, and lowering a limit keeps what is queued. A
+the whole program, an inbox has no limit until it is called, a limit of zero
+or less aborts, and lowering a limit keeps what is queued; a put that races
+a change of the limit is checked against the old one or the new one. A
 `qput_to` to a full inbox is refused at once, as a `qput` to a full global
 queue is, and a full inbox at one worker refuses nothing to another.
 
@@ -563,26 +564,40 @@ interface (§9, §10).
   inbox for a type under its mutex, then at the type's global queue under
   its own, in the order of §4.5 and §5.3; a take holds one queue's mutex
   at a time, and waits as §5.7 says.
-* **Limits.** `qlimit_inbox<T>(n)` stores `n` in `T`'s queue descriptor,
-  which a put to any inbox of `T` reads, under that inbox's mutex, when it
-  checks the count; lowering it keeps what is queued.
-* **Watches.** A worker's watches are a list in its thread record, which
-  `thread_watch`, the worker's end and a watcher's end change under the
-  record's mutex; a watch is made, cancelled or fired once, and puts and
-  takes take that mutex only to make an inbox, once per inbox.
-  `thread_watch` adds to the list if the record's owner, read under the
-  mutex, is still the worker its id names and the list has not fired, and
-  otherwise puts the message at once. The worker's end takes the whole list
-  and marks it fired, holding the mutex for that moment only, and fires what
-  it took, making its puts after letting go. A watcher's end unlinks, under
-  the mutex, each watch it made that is still listed, finding them through
-  its own list of (record, serial) pairs, in which a pair whose watch has
-  fired and whose record has since been reused names nothing and is passed
-  over. So a watch made as its worker ends fires exactly once, before or
-  after that moment; a cancelled watch is out of every list before its
-  record goes back; and the record goes back once, from the list by the
-  watcher's end, or after its put by the end that fired it. The same lists
-  serve phase 2.
+* **Limits.** `qlimit_inbox<T>(n)` stores `n` in `T`'s queue descriptor with
+  one atomic store, and a put to any inbox of `T` reads it with one atomic
+  load when it checks the inbox's count under that inbox's mutex: the many
+  inboxes' mutexes cannot guard one word they share, so the word guards
+  itself. A put that races a change of the limit is checked against the old
+  one or the new one, as if it came wholly before or after the change, and
+  lowering a limit keeps what is queued. A global queue's limit stays under
+  that queue's own mutex, as today.
+* **Watches.** A watch is a record that sits in two lists: its worker's, in
+  the worker's thread record, and its watcher's, in the watcher's record.
+  Each list changes only under its own record's mutex, which puts and takes
+  take only to make an inbox. `thread_watch`, which the watcher calls, links
+  the watch into its own list and then, if the worker is still the owner of
+  the record its id names and that record's list has not fired, into the
+  worker's; otherwise it unlinks the watch again, puts the message at once
+  and returns the record, which no other thread can reach. A worker's end
+  takes its whole list and marks it fired, holding the mutex for that moment
+  only; a watcher's end does the same with its own list, which also closes
+  it to new watches. Each end then settles every watch it took with one
+  compare-exchange of the watch's state, from armed to fired or to
+  cancelled. The end that wins unlinks the watch from the other list, under
+  that list's mutex, if it is still listed there (it is not if the other end
+  has taken its whole list); a fired watch's message is put after every
+  mutex has been let go, and is refused, and dropped, by a watcher that has
+  ended. A watch holds a count of two, one for each list, which the end that
+  takes it from a list, or unlinks it from one, holds in that list's place,
+  and drops when it is done with the watch; whoever drops the last returns
+  the record. So a watch made as its worker ends fires exactly once, before
+  or after that moment; a record goes back once, and only when neither end
+  can reach it; and neither list keeps a watch that is over, however long
+  its owner lives, since a fired watch leaves its watcher's list as it fires
+  and a cancelled one leaves its worker's list as its watcher ends. A main
+  that watches every worker of every run holds only the watches of workers
+  still running. The same lists serve phase 2.
 * **What phase 1 does not promise.** Like today's queues, a phase 1 put,
   take or signal waits for a queue's, a record's or a parker's mutex while
   another thread holds it, however long that thread is descheduled. Phase
@@ -2146,22 +2161,30 @@ markers. Threads run only natively, so the new fixtures, like
   global queue and leaving every inbox unlimited, as today's programs
   expect; a full inbox refusing at once and accepting again after a take;
   one full inbox not refusing another; a lowered limit; a limit of zero or
-  less aborting (`runtime/qlimit_inbox_zero.goose`).
+  less aborting (`runtime/qlimit_inbox_zero.goose`); and limits changed
+  while puts run, a thread setting `qlimit_inbox<T>` to 4 and to 64 in turn
+  while eight others put to the inboxes of several workers: no inbox ever
+  holds more than 64, none refuses while it holds fewer than 4, and the
+  sanitize profile, and ThreadSanitizer by hand, report nothing.
 * `threads/inbox_ended.goose`: puts to a worker that returned and to a
   contained worker that aborted are `false`; messages left in its inbox are
   gone after `thread_wait`; `qput_to` to a worker before it first takes;
   a child's inbox outliving its parent.
-* `threads/thread_watch.goose`: a watch on a running worker, on one that
-  has ended (at once), several watches on one worker, a watch made by a
-  worker that ends first (dropped); the report-before-end guarantee of
-  §4.6; `thread_wait` returning at once after the watch message; watches
-  whose messages have at most 8 bytes and larger ones, made and fired ten
-  thousand times, each message arriving once with its own value and every
-  watch record returned (the lifecycle test's live-record count); watches
-  made from several threads while their worker ends, a thousand times,
-  each firing exactly once; watchers that end before the worker they
-  watch, their watches unlinked and their records returned before it
-  ends.
+* `threads/thread_watch.goose`: a watch on a running worker, on one that has
+  ended (at once), several watches on one worker, a watch made by a worker
+  that ends first (dropped); the report-before-end guarantee of §4.6;
+  `thread_wait` returning at once after the watch message; watches whose
+  messages have at most 8 bytes and larger ones, made and fired ten thousand
+  times, each message arriving once with its own value and every watch
+  record returned (the lifecycle test's live-record count); watches made
+  from several threads while their worker ends, a thousand times, each
+  firing exactly once; watchers that end before the worker they watch, their
+  watches unlinked and their records returned before it ends; and churn on
+  both sides, main watching 100,000 short-lived workers in turn, and a
+  long-lived worker watched by 100,000 short-lived watchers, each ending
+  before it, with the live watch records and both lists' lengths (the
+  lifecycle test's counts) bounded throughout by the watches whose two ends
+  are both still running.
 * `threads/select_basic.goose`: one thread, messages of three types put
   in an order; the rotation order `select` takes them in; the timed form's
   zero value and `false`; `select<E>(0)` and a negative `ms` not waiting;
@@ -2415,13 +2438,15 @@ to 6 do not depend on it, and step 7 does.
    `bench/queues.py` within 10% of §3.2.
 4. **`thread_id`, `qput_to` and `qlimit_inbox`** (§4.7), with ended-worker
    refusal and never-issued aborts, inboxes closed and discarded at a
-   worker's end before it is marked ended, and `qlimit` left as it is.
-   Tests: `inbox_basic`, `inbox_limits`, `inbox_ended`, `qput_to_unknown`,
-   `qlimit_inbox_zero`, the `qput_to` and `qlimit_inbox` rejections.
-5. **`thread_watch`**, with each worker's watches listed in its thread
-   record under a mutex of their own, taken whole by its end and unlinked
-   by its watchers' ends (§4.7). Tests: `thread_watch`, `reports_watched`,
-   the watch aborts.
+   worker's end before it is marked ended, the inbox limit one atomic word
+   per type, and `qlimit` left as it is. Tests: `inbox_basic`,
+   `inbox_limits`, `inbox_ended`, `qput_to_unknown`, `qlimit_inbox_zero`,
+   the `qput_to` and `qlimit_inbox` rejections.
+5. **`thread_watch`**, with each watch in its worker's list and its
+   watcher's, each under its record's mutex, settled by one compare-exchange
+   by whichever end comes first, which unlinks it from the other list, and
+   returned by whoever drops its count of two last (§4.7). Tests:
+   `thread_watch`, `reports_watched`, the watch aborts.
 6. **`select<E>`**, fixed and variable mode: checker rules, the site
    rotation, `gs_qselect`. Tests: `select_basic`, `select_wait`,
    `exchange_credits`, the `select` rejections.
