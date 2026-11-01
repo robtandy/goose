@@ -100,9 +100,10 @@ and the reference describe what was built; these say why.
   an ordinary fixed-size value, driven by `resume` and scheduled by
   libraries; what Rust, C++, Kotlin, Go and Zig learned; a proposal.
 * [Immutable shared memory](design/shared_memory.md): mapped files and
-  frozen arrays that every thread reads through `const` views rooted at an
-  attachment, in arenas released when their last attachment ends; flat
-  `resource<U>` handles, measured against copies; a proposal.
+  frozen dynamic stacks that every thread reads through `const` views
+  rooted at an attachment, in arenas released when their last attachment
+  ends; option C's `resource<U>` handles as the first step, and §11.3's
+  dynamic stacks begun; measured against copies; a proposal.
 * [Claims the compiler checks and spends](design/llm_frontier.md): where
   the next frontier lies for code written by language models and reviewed
   by people: contracts in the prover's own fact language, `abortfree`,

@@ -15,12 +15,12 @@
   - [2.4 What Goose already has](#24-what-goose-already-has)
 - [3. The model](#3-the-model)
 - [4. Syntax and type rules](#4-syntax-and-type-rules)
-  - [4.1 Handles: `resource<U>`](#41-handles-resourceu)
+  - [4.1 `resource<U>`, the first step](#41-resourceu-the-first-step)
   - [4.2 Arenas and attachments: `shared`](#42-arenas-and-attachments-shared)
   - [4.3 What a view is](#43-what-a-view-is)
   - [4.4 How views are rooted](#44-how-views-are-rooted)
   - [4.5 Mapped files](#45-mapped-files)
-  - [4.6 Builders and freezing](#46-builders-and-freezing)
+  - [4.6 Dynamic stacks and freezing](#46-dynamic-stacks-and-freezing)
   - [4.7 What can be frozen](#47-what-can-be-frozen)
   - [4.8 Frozen views and relative references](#48-frozen-views-and-relative-references)
   - [4.9 How mutation is rejected](#49-how-mutation-is-rejected)
@@ -28,7 +28,7 @@
   - [4.11 The rules at a glance](#411-the-rules-at-a-glance)
 - [5. The runtime model](#5-the-runtime-model)
   - [5.1 Arenas, attachments and their count](#51-arenas-attachments-and-their-count)
-  - [5.2 Where frozen data lives: reservation and commit](#52-where-frozen-data-lives-reservation-and-commit)
+  - [5.2 Where frozen data lives: the dynamic stacks' budget](#52-where-frozen-data-lives-the-dynamic-stacks-budget)
   - [5.3 Release and reuse](#53-release-and-reuse)
   - [5.4 Stale and foreign handles](#54-stale-and-foreign-handles)
   - [5.5 Mapping a file: errors, prefaulting, truncation](#55-mapping-a-file-errors-prefaulting-truncation)
@@ -45,19 +45,26 @@
 - [11. Measurements](#11-measurements)
 - [12. Alternatives considered](#12-alternatives-considered)
 - [13. Consistency with the specification and the other notes](#13-consistency-with-the-specification-and-the-other-notes)
+  - [13.1 The deviations that remain](#131-the-deviations-that-remain)
+  - [13.2 What the design adopts as proposed](#132-what-the-design-adopts-as-proposed)
+  - [13.3 Additions that contradict nothing](#133-additions-that-contradict-nothing)
 - [14. Test plan](#14-test-plan)
 - [15. Documentation plan](#15-documentation-plan)
 - [16. Phased plan](#16-phased-plan)
+  - [Step 0: `resource<U>` (both tracks)](#step-0-resourceu-both-tracks)
+  - [Phase 1: mapped files, attachments and views (#3)](#phase-1-mapped-files-attachments-and-views-3)
+  - [Phase 2: dynamic stacks and frozen regions (#4)](#phase-2-dynamic-stacks-and-frozen-regions-4)
 - [17. Open questions](#17-open-questions)
 - [References](#references)
 
 </details>
 
-Design note, November 2026. Nothing here is implemented. Phase 1 (mapped
-files, handles and views) and phase 2 (frozen regions) are specified in
-section 16 closely enough to be built as written; the syntax is proposed
-for implementation as it stands, and section 17 lists what is still open,
-each with a recommended answer. The measurements of section 11 were taken
+Design note, November 2026. Nothing here is implemented. Step 0 (the
+`resource<U>` handle), phase 1 (mapped files, attachments and views) and
+phase 2 (dynamic stacks and frozen regions) are specified in section 16
+closely enough to be built as written; the syntax is proposed for
+implementation as it stands, and section 17 lists what is still open, each
+with a recommended answer. The measurements of section 11 were taken
 with the programs in `bench/shared_memory/`.
 
 The question was how Goose threads can read the same memory without
@@ -78,25 +85,32 @@ its last attachment ends.
    regions: mapped files (4.5) and frozen arrays (4.6). Everything else in
    the design is how a thread reaches a region, which is the same for both
    kinds (4.2 to 4.4), and when a region's memory is released (section 5).
-2. **Handles are `resource<U>` values**, option C of
-   [owning_dynamic_data.md](owning_dynamic_data.md#future-option-c-opaque-api-resources):
-   flat, fixed-size names that are copied, stored, passed to workers and
-   sent through queues like integers. A handle owns nothing and keeps
-   nothing alive. `resource<shared>` names an arena, `resource<mapping>` a
-   mapped file in one, `resource<frozen<T>>` a frozen array of `T` in one
-   (4.1).
-3. **The root is an attachment.** `let sh = attach(h);` declares a `shared`,
+2. **Handles are option C's `resource<U>`, as option C states it**
+   ([owning_dynamic_data.md](owning_dynamic_data.md#future-option-c-opaque-api-resources)):
+   one `u64` that code stores, copies, passes to workers, sends through
+   queues and hands to the APIs of its kind, and nothing else: no
+   dereference, arithmetic, comparison, or conversion to or from an
+   integer. Bindings still define kinds of their own; the runtime is the
+   binding for three: `resource<shared>` names an arena, `resource<mapping>`
+   a mapped file in one, `resource<frozen<T>>` a frozen array of `T` in one.
+   A handle owns nothing and keeps nothing alive (4.1).
+3. **`resource<U>` is a step of its own**, step 0 of section 16: the
+   foundation that this design and the messaging design (its events,
+   `resource<event>`) both build on. The runtime's kinds pack a 40-bit
+   arena serial, never reused, and a 24-bit region number into the `u64`,
+   and the runtime aborts rather than reuse or wrap either (4.1).
+4. **The root is an attachment.** `let sh = attach(h);` declares a `shared`,
    which is a root owner in the sense of §3.4: a local or global, never
    copied, returned, stored by value or sent. Every view is rooted at an
    attachment exactly, so §9's outlives rule keeps it inside the
    attachment's scope (4.4). `shared {}` makes a new arena and its first
    attachment.
-4. **A view is a `const` slice**, `const T[:]`, and the `const T&` that a
+5. **A view is a `const` slice**, `const T[:]`, and the `const T&` that a
    relative reference inside one loads. It needs no new kind of value:
    indexing, `for`, bounds-check elimination, `checkfree`, `bytes_of`,
    `print` and every library function over slices take it as they are
    (4.3).
-5. **An arena lives while it is attached.** The runtime counts
+6. **An arena lives while it is attached.** The runtime counts
    attachments, not values: the count changes at an attaching declaration
    and at its scope's exits, never when a handle or a view is copied. When
    the last attachment ends, the arena is released, and from then on its
@@ -104,54 +118,64 @@ its last attachment ends.
    In the shape every engine has (main attaches, spawns, waits for its
    workers), the release point is the end of main's attachment, after its
    `thread_wait`s.
-6. **One thread maps a file; every thread views it.**
+7. **One thread maps a file; every thread views it.**
    `sh.map_file(path)` maps a file once, read-only, for the whole process;
    `view<T>(sh, m, offset, count)` checks bounds and alignment once per view
    and is an ordinary slice afterwards (4.5). Views of mapped bytes are of
    *plain data* only, types every byte pattern of which is a value, because
    no program can keep other processes from writing a file (4.5, 5.5).
-7. **No prefaulting or advice by default.** On the target machine, the
+8. **No prefaulting or advice by default.** On the target machine, the
    first pass over a cached file through a mapping is already faster than
    `pread` into a buffer, and `MAP_POPULATE`, `MADV_POPULATE_READ` and
    `MADV_WILLNEED` made it slower or no faster (11.1). The runtime may
    advise later without any change to programs.
-8. **Truncation ends the program, with a diagnostic.** Reading a mapped
+9. **Truncation ends the program, with a diagnostic.** Reading a mapped
    file that another process truncated raises SIGBUS. The fault handler
    names the file and the offset and ends the process, as it does for a
    data-stack overrun, in a contained worker too (5.5). Changing a mapped
    file's bytes in place is outside the guarantee; replacing the file by
    rename, as more-fast-db publishes tables, is safe, since the mapping
    keeps the old file.
-9. **Frozen data is built in place.** A `builder<T>` is a root owner whose
-   one component, `items: T[>..]`, grows in a region of its own instead of
-   on a data stack. `sh.freeze(b)` hands that region to the arena without
-   moving a byte and returns its handle. The checker treats it as a shrink
-   of `b.items` to empty (§5.1): no reference or slice into it
-   may be live. Afterwards `b` is empty and can be filled again (4.6).
-10. **What can be frozen**: arrays of fixed-size values that could cross
+10. **Frozen data is built in place, on a dynamic stack.** `dynamic_stack<T>`
+    is the single-stack first step of §11.3's dynamic stacks and of
+    owning_dynamic_data.md's option A ("bounded independent dynamic
+    stacks"): a root owner whose one component, `items: T[>..]`, grows on a
+    stack of its own, a slot of one budgeted reservation, instead of on one
+    of the thread's data stacks. Its data never moves, it is released on its
+    own, and its slots are a documented budget (4.6, 5.2). `sh.freeze(ds)`
+    hands the slot to the arena without moving a byte and returns its
+    handle; the checker treats it as a shrink of `ds.items` to empty (§5.1),
+    so no reference or slice into it may be live. Afterwards `ds` is empty
+    and can be filled again.
+11. **What can be frozen**: arrays of fixed-size values that could cross
     threads, plus self-relative references and handles. Nothing that means
     something in one thread only: no plain references, slices, `in pool`
     references or index types (4.7). Self-relative references stay inside
     the region and load without a check, so a hash table linked by them is
     probed by `checkfree` code (4.8, validated in 11.6).
-11. **Released regions are recycled, not unmapped.** When an arena is
-    released, its frozen regions go to a process-wide free list with their
-    pages, and new builders take them from there; `trim_memory()` gives the
-    pages back (5.3). Sixteen threads unmapping at the same moment took
-    80 ms where one alone took 4.8 ms; keeping the regions took nothing
+12. **Released regions are recycled, not unmapped.** When an arena is
+    released, its frozen slots go back to the budget's free list with their
+    pages, and new dynamic stacks take them from there; `trim_memory()`
+    gives the pages back (5.3). Sixteen threads unmapping at the same moment
+    took 80 ms where one alone took 4.8 ms; keeping the slots took nothing
     (11.2).
-12. **Aborts release what a thread holds.** The runtime keeps each
-    thread's attachments and builders on a stack of its own, so a contained
-    worker's abort releases them, as it releases the worker's data stacks,
-    before `thread_wait` returns. The regions a worker froze stay in their
-    arena (5.6).
-13. **No atomics, locks, memory orderings or `unsafe` in the language.**
+13. **Aborts release what a thread holds.** The runtime keeps each
+    thread's attachments and dynamic stacks on a stack of its own, so a
+    contained worker's abort releases them, as it releases the worker's data
+    stacks, before `thread_wait` returns. The regions a worker froze stay in
+    their arena (5.6).
+14. **No atomics, locks, memory orderings or `unsafe` in the language.**
     The counts and the region tables are the runtime's. Every way a handle
     can reach another thread already orders the writes that built the
     region before the reads of it (5.7).
-14. **Two phases.** Phase 1 (#3): `resource<U>`, `shared`, `attach`, mapped
-    files and their views, on POSIX and Windows. Phase 2 (#4): `builder<T>`,
-    `freeze`, frozen views and the region free list (section 16).
+15. **Two deviations from the specification remain**, each for a reason
+    section 13 gives: a third kind of memory, shared regions, beside the
+    data stacks and static data; and the runtime's count of attachments.
+    Everything else adopts what option C, §11.3 and option A propose.
+16. **Step 0 and two phases.** Step 0: `resource<U>`, for both tracks.
+    Phase 1 (#3): `shared`, `attach`, mapped files and their views, on POSIX
+    and Windows. Phase 2 (#4): `dynamic_stack<T>`, its budget, `freeze` and
+    frozen views (section 16).
 
 ## 1. What the feature is for
 
@@ -298,7 +322,7 @@ The pieces this design is made from:
   value owned only by a local or global declaration, never copied, passed
   or returned by value, never a temporary, never sent to a worker, with a
   scope-exit action (restoring its components' stacks) that every exit
-  runs. An attachment and a builder are root owners.
+  runs. An attachment and a dynamic stack are root owners.
 * **Byte views** (`bytes_of`, [serialization.md](serialization.md)): a view
   of typed storage at another type, which is never writable.
 * **Self-relative references** (§3.9): links that stay inside one root
@@ -307,6 +331,10 @@ The pieces this design is made from:
   what a return would, with the runtime doing the releasing.
 * **Option C's `resource<U>`**: an opaque fixed-size handle that a program
   can only copy, store and pass back to the API that made it.
+* **§11.3's dynamic stacks and option A's "bounded independent dynamic
+  stacks"**: stacks made at run time, each released on its own, out of a
+  budgeted reservation. A dynamic stack is the memory a frozen array is
+  built in.
 
 ## 3. The model
 
@@ -317,82 +345,139 @@ The pieces this design is made from:
   let col, ok = sh.map_file(p);  │   region 1: mapping of p
   thread_spawn(w, sh.handle, col)│                      let sh = attach(h);   attached 2
                                  │                      let xs = view<i64>(sh, col, off, n);
-                                 │   region 2: frozen   var b = builder<Row> {};  (private)
-                                 │      Row[] ◄──────── qput(sh.freeze(b));      (now shared)
+                                 │   region 2: frozen   var ds = dynamic_stack<Row> {};  (private)
+                                 │      Row[] ◄──────── qput(sh.freeze(ds));            (now shared)
   let rows = sh.view(qget<…>()); │                      }   // end of B's sh: attached 1
   thread_wait(id);               │
   }   // end of A's sh ──────────┘ attached 0: released; the mapping unmapped,
-                                   region 2's memory to the free list
+                                   region 2's slot to the free list
 ```
 
 * A **shared arena** is a set of immutable regions and a count of
   attachments. It is runtime state, outside every thread's data stacks.
-* A **region** is a mapped file, or the storage of a builder that was
+* A **region** is a mapped file, or the stack of a dynamic stack that was
   frozen. It never moves, never changes, and is released only with its
   arena.
 * A **handle** (`resource<U>`) names an arena or a region in one. It is a
-  flat value: two 64-bit words.
+  flat value: one `u64`.
 * An **attachment** (`shared`) is a declaration in one thread. While it is
   in scope, its arena cannot be released, and views of its arena's regions
   can be made through it, rooted at it.
 * A **view** is a `const` slice into a region.
-* A **builder** (`builder<T>`) is a private, growable array in a region
-  that no other thread can see until it is frozen.
+* A **dynamic stack** (`dynamic_stack<T>`) is a private, growable array on
+  a stack of its own, a slot of a budgeted reservation, that no other
+  thread can see until it is frozen.
 
 ## 4. Syntax and type rules
 
 The proposal adds five names that resolve as types (`resource`, `shared`,
-`mapping`, `frozen`, `builder`) and six builtins: `attach`, and `handle`,
-`map_file`, `size`, `view` and `freeze`, which take an attachment first and
-so read as its members (`sh.map_file(path)`, by UFCS, §7.1). None of them is
-a keyword. Like the builtin functions they are found only where nothing the
-program declares has the name, so an existing variable, field or type named
-`shared`, `builder` or `view` keeps its meaning, and `::name` reaches the
+`mapping`, `frozen`, `dynamic_stack`) and six builtins: `attach`, and
+`handle`, `map_file`, `size`, `view` and `freeze`, which take an attachment
+first and so read as its members (`sh.map_file(path)`, by UFCS, §7.1). None
+of them is a keyword. Like the builtin functions they are found only where
+nothing the program declares has the name, so an existing variable, field
+or type named `shared` or `view` keeps its meaning, and `::name` reaches the
 builtin past a namespaced declaration (§11.1). There is no new syntax:
 every form below parses today. A call with a type argument is written as a
 function call, `view<i64>(sh, m, offset, count)`, as `qget<T>()` and
 `from_bytes<T>(b)` are, because a member call takes no type arguments
 (Appendix D).
 
-### 4.1 Handles: `resource<U>`
+### 4.1 `resource<U>`, the first step
 
-`resource<U>` is option C's opaque handle, with three kinds `U` that the
-language defines:
+`resource<U>` is option C of owning_dynamic_data.md, adopted as option C
+states it. This section stands on its own: it is step 0 of the phased plan
+(section 16), which lands before either track needs it, and the messaging
+design (`docs/design/inboxes_select.md`, in review beside this note) builds
+its events, `resource<event>`, on it as this design builds arenas and
+regions.
 
-| Type | Names | Made by |
-|---|---|---|
-| `resource<shared>` | a shared arena | `sh.handle` |
-| `resource<mapping>` | a mapped file in an arena | `sh.map_file(path)` |
-| `resource<frozen<T>>` | a frozen array of `T` in an arena | `sh.freeze(b)` for a `builder<T>` |
+**What it is.** A fixed-size value, internally one `u64`, that names
+something code does not reach into: a GPU buffer, a native byte buffer, a
+file mapping, an arena. `U` is a tag identifying the kind of thing named.
+What the sixty-four bits mean is the kind's binding's business; Goose code
+never sees them.
 
-`mapping` and `frozen<T>` name kinds, not values: they are only written as
-the argument of `resource`. Kinds that a binding defines (option C's GPU
-buffers and native byte buffers) can use the same type later; nothing here
-depends on them.
+**What code can do with one**, which is option C's list and nothing more:
+store it wherever a fixed-size value can be (locals, globals, aggregate
+fields, array elements, payloads, arguments, results), copy it, and pass it
+to an API that accepts its kind. Copying it copies the name; it does not
+duplicate, or keep alive, what the name refers to. Code cannot dereference
+a handle, compute with it, compare it (`==`, `!=` and the orderings are all
+errors), hash it, or convert it to or from an integer (`as` and `as!` reject
+both directions), so no code can make a handle that its kind's binding did
+not hand out. Nothing in this design needs to compare handles: a program
+that must know whether a slot holds one keeps a `bool` beside it. If a use
+for comparison appears, it is a named builtin, not an operator (section 17).
 
-A handle is a fixed-size **flat** value (§1.1): it holds no reference, so
-it can be a local, a global, a field, an element, a payload, an argument, a
-result, a `thread_fn` parameter and a queue message, and it is copied
-wherever a fixed-size value is. Copying it copies a name; it never touches
-what the name refers to. What a program can do with one:
+**What follows from its being a fixed-size value**, which option C implies
+without spelling out:
 
-* copy, store and pass it, and give it back to the builtins that take it;
-* compare two of the same type with `==` and `!=`, which is whether they
-  name the same thing (option C allowed no comparison; equality is allowed
-  here because a value holding a handle, such as a message, is otherwise
-  not comparable, and comparing names leaks nothing);
-* print it, which renders its type and two opaque numbers, a form for logs
-  that no program can parse back;
-* take its default, `default<resource<U>>()`, the **zero handle**, which
-  names nothing. A literal's `..`, a global declared with its type alone
-  (`var g: resource<mapping>;`) and a missed `qpoll` give it.
+* It is flat (§1.1), so it can be a `thread_fn` parameter or a queue
+  message, and a struct holding one is flat if the rest of it is.
+* Its default is the value of all bits zero, which names nothing, for every
+  kind: a binding never hands out zero. A literal's `..`, a global declared
+  with its type alone (`var g: resource<mapping>;`) and a missed `qpoll`
+  give it.
+* It has a text form, as every value does (§3.7), which is its type alone:
+  `print` of a handle writes `resource<mapping>`. A message holding a handle
+  can be printed, and the text shows that a handle is there without showing
+  its bits.
+* It has no image: its bits mean something only to the binding's state in
+  one process, so `to_bytes`, `bytes_of` and `from_bytes` reject a type
+  holding one, as they reject plain references.
+* A struct holding one has no `==`, since that would compare the handle.
 
-What it cannot do, as option C says: arithmetic, ordering, hashing, or a
-conversion to or from any integer (`as` and `as!` both reject it), so no
-program can make a handle that the runtime did not hand out. Nor does a
-handle survive leaving the process: a type holding one is not image-safe,
-so `to_bytes`, `bytes_of` and `from_bytes` reject it, as they reject plain
-references, and a view of mapped bytes cannot be of one (4.5).
+**Kinds.**
+
+| Kind | Its binding | Made by | Taken by |
+|---|---|---|---|
+| `resource<U>`, `U` a tag type of a binding (option C's `GpuBuffer`) | the binding's C | the binding's `extern fn`s that return one | the binding's `extern fn`s |
+| `resource<shared>`, an arena | the runtime | `sh.handle` (4.2) | `attach` |
+| `resource<mapping>`, a mapped file in an arena | the runtime | `sh.map_file(path)` (4.5) | `view<T>`, `size` |
+| `resource<frozen<T>>`, a frozen array of `T` in an arena | the runtime | `sh.freeze(ds)` (4.6) | `view` |
+| `resource<event>`, the messaging design's events | the runtime | as that design specifies | as that design specifies |
+
+`mapping` and `frozen<T>` name kinds, not values: they are written only as
+the argument of `resource`. A binding's tag is any type it declares for the
+purpose (`struct GpuBuffer {}`); its values are never made.
+
+**At the C boundary** a handle crosses an `extern fn` as `uint64_t`, by
+value, as a parameter or as the result (§7.10 gains the shape). A binding's
+kind is made and read by its C, as option C says. The runtime's kinds are
+made only by the runtime, their one binding: an `extern fn` may take one,
+and C then sees its sixty-four bits (which is how C names an event of the
+messaging design to `gs_event_signal`), but it may not return one, nor a
+value holding one, so no C function hands Goose a handle of the runtime's
+that the runtime did not make.
+
+**Cleanup**, which option C leaves unresolved, stays unresolved for the
+kinds bindings define. For the runtime's kinds of this design it needs no
+rule about handles at all: a handle owns nothing, so copying, storing or
+dropping one does nothing, and what holds memory is an attachment (4.2),
+which ends with its scope.
+
+**The runtime's encoding** of `shared`, `mapping` and `frozen<T>`:
+
+```text
+bits 63..24   the arena's serial, 1 to 2^40 - 1, never reused
+bits 23..0    0 for the arena itself, else the region's number in it, 1 to 2^24 - 1
+```
+
+`GS_RES_SERIAL_BITS` (40) and `GS_RES_REGION_BITS` (24) name the split in
+`runtime.h`, with a static assertion that they add up to 64, and the
+runtime checks it both ways. Making the 2^40-th arena, or the 2^24-th
+region of one arena, aborts ("shared arena serials are used up", "a shared
+arena holds at most 16,777,215 regions") instead of wrapping. And every
+handle the runtime is given is decoded against its tables, so a serial that
+names no live arena is stale (5.4), and a region number past its arena's
+count is a defect the runtime reports. Since serials are never reused, a
+stale handle cannot come to name a newer arena. 2^40 arenas is one every
+microsecond for 12 days, or a thousand a second for 35 years; 2^24 regions
+in one arena is room for the join of section 8.3 at any worker count many
+times over. Every kind of the runtime's, the messaging design's events
+included, documents its encoding under the same rule: a stale value never
+names a newer resource.
 
 Handles are weak. Holding one keeps nothing alive; it is a way to *attach*
 an arena (4.2) and to name one of its regions in a view (4.3).
@@ -539,79 +624,118 @@ what `from_bytes` takes: a serialized image in a mapped file is verified and
 copied in by `from_bytes<T[>..]>(view<u8>(sh, m, 0, sh.size(m)))` with one
 copy and no read.
 
-### 4.6 Builders and freezing
+### 4.6 Dynamic stacks and freezing
 
 ```goose
-var b = builder<Row> {};          // a private grow-only array in a region of its own
-b.items.push(Row { key: k, payload: v });
-fill(b.items);                    // fn fill(out: Row[>..]&): any code that grows an array
-let r = sh.freeze(b);             // resource<frozen<Row>>; b.items is empty again
-let rows = sh.view(r);            // const Row[:], rooted at sh
+var ds = dynamic_stack<Row> {};    // a grow-only array on a stack of its own
+ds.items.push(Row { key: k, payload: v });
+fill(ds.items);                    // fn fill(out: Row[>..]&): any code that grows an array
+let r = sh.freeze(ds);             // resource<frozen<Row>>; ds.items is empty again
+let rows = sh.view(r);             // const Row[:], rooted at sh
 ```
 
-`builder<T>` is a builtin root-class type with one component, `items:
-T[>..]`, a grow-only array like any other, except that its elements live in
-a region the runtime reserved for it instead of on one of the thread's data
-stacks (5.2). `builder<T> {}` constructs one at an owning declaration; the
-literal takes no fields. Until it is frozen it is private to its thread, as
-every other array is: `b.items` grows, shrinks where §5.1 allows, is
-indexed, written, sliced and passed to functions taking `T[>..]&` or
-`T[:]`, and `b` itself follows the rules of root owners (not copied, sent or
-returned; taken by reference as `builder<T>&`). A builder holds a
-resizable component, so it cannot be live across a call into a recursive
-cycle (§7.8), as no root owner with one can.
+`dynamic_stack<T>` is the first step of the dynamic stacks that §11.3 plans
+and that owning_dynamic_data.md's option A ("bounded independent dynamic
+stacks") works out: one stack of its own, made at run time. It is a
+builtin root-class type with one component, `items: T[>..]`, a grow-only
+array like any other and the only value on its stack, as the resizable on
+top of a data stack is the only one growing there (§1.3). What is new is
+the memory under it: a slot of the dynamic stacks' budget (5.2), instead of
+one of the thread's data stacks. `dynamic_stack<T> {}` constructs one at an
+owning declaration; the literal takes no fields. `T` is any fixed-size type
+a grow-only array may hold.
 
-`sh.freeze(b)` ends the private phase:
+Until it is frozen a dynamic stack is private to its thread, as every array
+is: `ds.items` grows, shrinks where §5.1 allows, is indexed, written,
+sliced and passed to functions taking `T[>..]&` or `T[:]`, and `ds` follows
+the rules of root owners (not copied, sent or returned; taken by reference
+as `dynamic_stack<T>&`). A dynamic stack holds a resizable component, so it
+cannot be live across a call into a recursive cycle (§7.8), as no root
+owner with one can. On its own, a dynamic stack is little more than a local
+`T[>..]` with a stack to itself; what it adds now is that its stack can be
+handed over.
 
-* **The check is a shrink.** Freezing takes `b.items`'s elements away from
-  `b`, so it is checked as `b.items.clear()` is (§5.1): it is an error if any
-  reference or slice into `b.items` is live after the call, or held by a
-  live holder, including through calls, which record what they shrink. So
-  no writable view of the elements survives into the time they are shared,
-  and no view of `b.items` sees the new, empty array as the old one.
-* **What it does.** The region holding `b.items`'s elements, exactly
-  `b.items.len` of them, becomes a frozen region of `sh`'s arena; its
-  handle is the result. Nothing is copied. `b` is left with an empty
-  `items` in a fresh region and can be filled and frozen again; at its scope
-  exit, an unfrozen region goes back to the free list (5.3).
+`sh.freeze(ds)` ends the private phase:
+
+* **The check is a shrink.** Freezing takes `ds.items`'s elements away
+  from `ds`, so it is checked as `ds.items.clear()` is (§5.1): it is an
+  error if any reference or slice into `ds.items` is live after the call,
+  or held by a live holder, including through calls, which record what they
+  shrink. So no writable view of the elements survives into the time they
+  are shared, and no view of `ds.items` sees the new, empty array as the old
+  one. `T` must also be freezable (4.7), which is checked at the call.
+* **What it does.** The slot holding `ds.items`'s elements, exactly
+  `ds.items.len` of them, becomes a frozen region of `sh`'s arena; its
+  handle is the result. Nothing is copied. `ds` is left with an empty
+  `items` on a slot of its own again and can be filled and frozen again; at
+  its scope's exit, an unfrozen slot goes back to the free list (5.3).
 * **The arena.** `sh` can be any attachment, in any thread; the region
   joins that attachment's arena and lives as long as the arena does.
 
-Only a builder can be frozen. An ordinary array lives on a data stack
+Only a dynamic stack can be frozen. An ordinary array lives on a data stack
 beside other values and cannot be handed over; a program that wants to
-publish one copies it into a builder (`b.items.append(xs)`) and freezes
-that.
+publish one copies it onto a dynamic stack (`ds.items.append(xs)`) and
+freezes that.
+
+**How this fits option A.** Option A proposes "a runtime-sized collection
+in which each element owns an independently growing stack" and asks three
+things of it: stable data, independent release and a budgeted reservation.
+A single dynamic stack has each of them, and the parts of the API that
+touch them (`items`, `freeze`, the scope exit, the budget) are chosen for
+that. The table goes through those three and what option A says of limits,
+reference safety and identity:
+
+| Option A's direction | `dynamic_stack<T>` |
+|---|---|
+| **Stable data**: "growth within an inner stack's reservation preserves its element addresses" | `items` grows by bumping its stack's top, and nothing moves it: not growth, not freezing, not a frozen region's whole life |
+| **Independent release**: "closing a document decommits its pages and recycles its region slot independently of other documents" | the slot is released at the declaration's scope exit, or handed by `freeze` to an arena and released with it, in either case apart from every other dynamic stack. Its pages are decommitted by `trim_memory()` rather than at once, because releases come in bursts and the system serializes them (5.3, 11.2) |
+| **A budgeted reservation**: "the configured total stack count must satisfy N * (R + G) + H <= B" | every slot comes from one reservation of B bytes in slots of R + G, with N documented, and a dynamic stack that finds all N in use aborts with the budget's numbers (5.2) |
+| **Explicit limits**: "the configured bounds permit explicit checks rather than relying on an overflow guard to abort the process" | `ds.items.check_length(n)` checks a count against R before growing, as it checks against a data stack's reservation; growth that goes past R ends the program at the guard, as a data stack's does |
+| **Reference safety**: "closing a document releases its storage, so it must be forbidden while references or slices into it can still be used" | views of `ds.items` are rooted at `ds` (§9.2), so none outlives its scope, and `freeze` is checked as a shrink |
+| **Identity**: "an outer table index is not a permanent document identity if slots can be removed and reused; use a stable handle or another explicit identity policy" | no slot number is ever exposed; a frozen slot is named by a `resource<frozen<T>>` whose serial is never reused (4.1), and a view of it is made only through a live attachment, so a stale handle reaches no memory |
+| **Recoverable limit errors**: "opening document 257 returns a recoverable limit error" | not in v1: a declaration cannot fail recoverably. It belongs with option A's collection, where the limit is a count the program chose (section 17) |
+
+Option A proper, a collection whose every element is a dynamic stack,
+generalizes this one instead of sitting beside it: `dynamic_stack<T>` is
+the collection of one, and the collection's elements would draw slots from
+the same budget, freeze as this one does and be released one by one. The
+join of section 8.3 partitions onto one dynamic stack per worker, because a
+dynamic stack is a declaration and the number of partitions is known only
+at run time; with the collection it would use one per partition. A task with stacks of its own
+([coroutines.md](coroutines.md) 6.1) would draw its block of stacks from the
+same budget.
 
 ### 4.7 What can be frozen
 
-`T` in `builder<T>` must be **freezable**: fixed-size, and holding at no
-depth anything whose meaning depends on the thread that made it:
+A dynamic stack holds any fixed-size type a grow-only array may. To be
+frozen, its `T` must also be **freezable**: holding, at no depth, anything
+whose meaning depends on the thread that made it:
 
 | May appear in `T` | Why |
 |---|---|
 | scalars, `bool`, enums in fixed mode, fixed and limited arrays, structs of these | flat values mean the same in every thread (§1.1) |
 | self-relative references, `T&<w>` and `T&<w>?` | they point within their own root array (§3.9), which is the region, and a region never moves |
-| handles, `resource<U>` | they name runtime state that is the same for every thread |
+| handles, `resource<U>` | a handle's bits name the same thing in every thread of the process (4.1) |
 
 | May not | Why |
 |---|---|
-| plain references, slices, optionals `T?` of a plain reference | addresses into the building thread's stacks, or into regions it could not keep alive |
+| plain references, slices, optionals `T?` of a plain reference | addresses into the freezing thread's stacks, or into regions it could not keep alive |
 | `in pool` references | measured from a global pool's base, and each thread has its own copy of the global (§11.2) |
 | index and bound types, `u32 in a` | proven against one thread's copy of `a` (§3.11), which other threads' copies need not match |
-| root owners, `shared`, `builder<T>` | not values that can be stored (§3.4) |
-| variable-size values | a builder's elements are fixed-size in v1 (section 17) |
+| root owners, `shared`, `dynamic_stack<T>` | not values that can be stored (§3.4) |
+| variable-size values | a dynamic stack's elements are fixed-size in v1 (section 17) |
 
 Apart from the self-relative references, this is the set of types that may
 cross threads today: frozen data is data another thread will read, and the
 rule for what it may hold is the rule for messages, with the one exception
 that relative references survive because nothing is copied. A wrong `T` is
-an error at the `builder<T>` type, naming the field path and the reason.
+an error at the `freeze`, naming the field path and the reason.
 
 ### 4.8 Frozen views and relative references
 
 `sh.view(r)` for `r: resource<frozen<T>>` is the whole frozen array as a
-`const T[:]`, rooted at `sh`. Its length is the length `b.items` had when it
-was frozen. `view<T>(sh, r)` with `T` written is accepted where it is the
+`const T[:]`, rooted at `sh`. Its length is the length `ds.items` had when
+it was frozen. `view<T>(sh, r)` with `T` written is accepted where it is the
 handle's `T`, and an error otherwise.
 
 Self-relative references inside frozen data behave as they do in any array
@@ -619,20 +743,20 @@ read through a read-only path (§3.9, §9.5):
 
 * **Loading** one, `rows[i].next`, gives a `const T&` (or `const T?`),
   rooted at `sh` exactly, and costs an addition, with no check: the store
-  that made the link was checked to stay within the builder's array, and
-  the region does not change afterwards. A chain is followed by rebinding
+  that made the link was checked to stay within the dynamic stack's array,
+  and the region does not change afterwards. A chain is followed by rebinding
   within that root, `e .= e.next`, as in any array.
 * **Storing** one is impossible, since the view is read-only. Links are
-  made while building, under the same-root rule (both ends in `b.items`),
+  made before freezing, under the same-root rule (both ends in `ds.items`),
   and `self` works as in any literal.
 * **A link left past the end.** §5.1 does not count a value linked by
   relative references alone as a holder, so a `pop` may leave an element's
   link pointing past the array's end, at the element popped, which reads as
   that element afterwards (type-safe reuse, §9.4). A frozen region keeps
-  every byte the builder wrote, up to its high-water mark, until the
+  every byte its dynamic stack wrote, up to its high-water mark, until the
   arena's release, so such a link reads the same element after freezing as
-  before. Links can only point at bytes the builder itself wrote, so a
-  region recycled from another type's (5.3) shows none of the old bytes.
+  before. Links can only point at bytes the dynamic stack itself wrote, so a
+  slot recycled from another type's (5.3) shows none of the old bytes.
 * **Copying** elements that hold self-relative references out of a view is
   rejected (`append`, by-value copies), as it is from any array (§3.9);
   binding them by reference is how they are read.
@@ -648,11 +772,11 @@ as `checkfree` today over `const` slices, 11.6).
   the `const T&` its links load, is a compile error (§9.5), as is storing
   it in a slot not declared `const`. `const` is never dropped implicitly, so
   no path makes a view writable.
-* **By ownership.** A builder is the only writable access to a region, and
-  it is a root owner in one thread, which no other thread can name. Freezing
-  is checked as a shrink, so no writable view of a builder's elements is
-  live once they are shared (4.6). After freezing, the builder no longer
-  owns the region.
+* **By ownership.** A dynamic stack is the only writable access to a
+  region, and it is a root owner in one thread, which no other thread can
+  name. Freezing is checked as a shrink, so no writable view of a dynamic
+  stack's elements is live once they are shared (4.6). After freezing, the
+  dynamic stack no longer owns the region.
 * **By the hardware**, as a backstop. A mapping is read-only (`PROT_READ`,
   `PAGE_READONLY`), so a write that a defect in the compiler let through
   faults, and the fault handler reports it. In a debug build (`GS_DEBUG`),
@@ -687,15 +811,17 @@ Compile-time:
 
 | Rule | Where it comes from |
 |---|---|
+| a handle is stored, copied and passed to its kind's APIs, and is not dereferenced, computed with, compared, hashed, converted or serialized | option C (4.1) |
+| an `extern fn` takes a handle of the runtime's kinds but does not return one | 4.1 |
 | a view does not outlive its attachment | §9.2, unchanged; the attachment is the root (4.4) |
 | a view is never written | §9.5, unchanged; views are `const` (4.9) |
 | a view does not cross threads or queues | §11.2, unchanged; a slice is not flat |
-| an attachment or builder is not copied, returned, stored by value, sent, or a temporary | §3.4's root owners, unchanged |
-| a handle is not converted, computed with, ordered, hashed or serialized | 4.1 |
+| an attachment or a dynamic stack is not copied, returned, stored by value, sent, or a temporary | §3.4's root owners, unchanged |
 | `view<T>` of a mapping takes plain data only, at an aligned constant offset | 4.5 |
-| `freeze(b)` leaves no reference or slice into `b.items` live | §5.1's shrink rule (4.6) |
-| `builder<T>` takes a freezable `T` | 4.7 |
-| no attachment or builder is in scope at a coroutine's suspension point | [coroutines.md](coroutines.md) R1, extended (section 6) |
+| `dynamic_stack<T>` takes a fixed-size `T` | 4.6 |
+| `freeze(ds)` leaves no reference or slice into `ds.items` live | §5.1's shrink rule (4.6) |
+| `freeze(ds)` takes a freezable `T` | 4.7 |
+| no attachment or dynamic stack is in scope at a coroutine's suspension point | [coroutines.md](coroutines.md) R1, extended (section 6) |
 
 Run-time (each a diagnostic; §9.3's list gains them):
 
@@ -704,9 +830,10 @@ Run-time (each a diagnostic; §9.3's list gains them):
 | `attach` of the zero handle, or of a released arena | abort |
 | a view through an attachment of another arena, or of the zero handle | abort |
 | a mapping view out of bounds or misaligned | abort |
+| the 2^40-th arena, or the 2^24-th region of one arena | abort (4.1) |
+| a dynamic stack when every slot of the budget is in use | abort, naming the budget and the flag that raises it (5.2) |
+| a dynamic stack growing past its slot's reservation | ends the program, as a data-stack overrun does |
 | a mapped file truncated under its mapping, or unreadable (SIGBUS, `EXCEPTION_IN_PAGE_ERROR`) | ends the program (5.5) |
-| a builder growing past its reservation | ends the program, as a data-stack overrun does |
-| more regions in one arena than its table holds (millions; an implementation limit) | abort |
 
 ## 5. The runtime model
 
@@ -743,41 +870,61 @@ arena from one worker to another must keep an attachment until the
 receiver has attached. Getting that wrong is a liveness error that the
 runtime reports (the receiver's `attach` aborts), never a dangling view.
 
-### 5.2 Where frozen data lives: reservation and commit
+### 5.2 Where frozen data lives: the dynamic stacks' budget
 
-A builder's elements live in a **space**: a reservation of address space
-of the size of a data stack's (`GS_STACK_RESERVE`, 2 GB by default), with an
-unmapped guard gap behind it, reserved and committed exactly as a data stack
-is (implementation.md §7): `mmap(PROT_READ | PROT_WRITE, MAP_NORESERVE)` on
-POSIX with pages supplied by the kernel on first touch, and `MEM_RESERVE`
-with commit on fault by the vectored handler on Windows. A space carries
-its own `gs_stack` control block, so `b.items` is a resizable whose stack
-is the space's: a push is the same bump, and a `T[>..]&` to it is the same
-`gs_rref`, as for any other array, and every function that grows an array
-through a reference grows a builder unchanged.
+A dynamic stack's elements live in a **slot** of the dynamic stacks'
+**budget**, which is option A's budgeted reservation made concrete:
 
-* **Sizes.** The builder's reservation is the data stacks' so that every
-  check the compiler leaves out for data stacks it can leave out for
-  builders: a self-relative `u32` link needs no range check in a 2 GB
-  reservation (§3.9). A refusal halves the size, down to 1 MB, as for data
-  stacks (`gs_reserve_region`); growth past the reservation reaches the
-  guard gap and ends the program with a message naming the builder.
-* **Counting.** A builder is a declaration that cannot be live across a
-  call into a recursive cycle, so the number live at once in a thread
-  program is a compile-time count, like its stacks. Codegen adds it to the
-  thread program's regions (`BoundStacks`, implementation.md §7), which
-  sizes the thread's region registry, which the fault handlers need to
-  commit (Windows) and to report overruns. A worker's builders therefore
-  count against `hardware_threads()`'s budget as its stacks do.
-* **Freezing** unregisters the space from the thread, records it in the
-  arena with the array's byte length, and gives the builder a fresh space
-  in the same registry slot. In a debug build it makes the space read-only
+* **One reservation.** The first time a program needs a slot, the runtime
+  reserves `GS_DYNAMIC_BUDGET` bytes of address space (B: 16 TB by default,
+  set with `--dynamic-budget`, as `--stack-reserve` sets a data stack's
+  reservation) as one range, inaccessible (`PROT_NONE` on POSIX,
+  `MEM_RESERVE` on Windows), and divides it into slots of R + G bytes: R
+  usable, the data stacks' `GS_STACK_RESERVE` (2 GB by default), and a
+  guard gap G, `GS_STACK_GAP` (1 MB), that stays inaccessible. So there are
+  N = B / (R + G) slots, 8,188 by default: option A's N * (R + G) + H <= B,
+  with H, the slots' records, held apart from the reservation in memory the
+  runtime allocates for itself. A program that makes no dynamic
+  stack reserves nothing. Where the platform refuses the range, it is
+  halved until it is granted, down to one slot, as a data stack's region is
+  (`gs_reserve_region`), and N with it; `GS_SHARED_STATS` reports the budget
+  obtained.
+* **Slots.** A slot is fresh, live (a dynamic stack's, written by one
+  thread), frozen (a region of an arena), or free (released, its pages still
+  committed). A dynamic stack takes a free slot first, whose pages are warm,
+  and a fresh one otherwise, whose usable part is then made read-write
+  (`mprotect`; on Windows the vectored handler commits it on first touch, as
+  it does a data stack). A slot carries its own `gs_stack` control block,
+  so `ds.items` is a resizable whose stack is the slot's: a push is the same
+  bump, a `T[>..]&` to it is the same `gs_rref` as for any other array, and
+  every function that grows an array through a reference grows a dynamic
+  stack unchanged.
+* **The limit.** A dynamic stack that finds all N slots live or frozen
+  aborts, with a message giving B, R and N and the flag that raises B: the
+  explicit limit option A asks for, reported, and not an `mmap` failure at
+  an arbitrary point. With 16 TB beside the data stacks' 32 TB budget, the
+  128 TB of user address space on x86-64 holds both.
+* **Sizes.** R is the data stacks' reservation so that every check the
+  compiler leaves out for data stacks it can leave out for dynamic stacks:
+  a self-relative `u32` link needs no range check in a 2 GB reservation
+  (§3.9). Growth past R reaches the slot's gap and ends the program with a
+  message naming the dynamic stack, as a data stack's overrun does;
+  `ds.items.check_length(n)` checks a count against R first, for a program
+  that must not end there.
+* **Faults.** The fault handlers find a slot from a faulting address with a
+  subtraction and a division, and act on the slot's state: commit (Windows)
+  in a live slot, report an overrun in a gap, report a write in a frozen
+  slot that a debug build made read-only. Slots need no entry in a thread's
+  region registry, and they take nothing from the regions a thread program
+  counts, so `hardware_threads()` is unchanged.
+* **Freezing** marks the slot frozen and records it in the arena with the
+  array's byte length, and gives the dynamic stack a slot again, a free one
+  where there is one. In a debug build it makes the frozen slot read-only
   first (4.9).
-* **Frozen** spaces belong to their arena, not to any thread, and are not
-  counted in any thread's budget. Each keeps its whole reservation; a
-  program that freezes many small arrays packs them into a few builders
-  (section 8.2), since address space, not memory, is what a small frozen
-  array costs.
+* **Frozen** slots belong to their arena, not to any thread. Each keeps its
+  whole R; a program that freezes many small arrays packs them onto a few
+  dynamic stacks (section 8.2), since a slot of the budget, not memory, is
+  what a small frozen array costs.
 
 A mapping's region is the system's mapping of the file, read-only and
 shared: pages come from the page cache on first touch, with no commit
@@ -787,36 +934,39 @@ charge, and every thread sees one set of page tables.
 
 Releasing an arena releases its regions:
 
-* **A frozen region's space** goes to a process-wide free list with its
-  pages still committed. A new builder, on any thread, takes a space from
-  the list before it reserves one, so a program that builds and drops
-  arenas repeatedly (a query per run, a join per batch) faults no new pages
-  and makes no system call after the first round. Nobody can see a space on
-  the list: its arena had no attachment left.
+* **A frozen slot** goes to the budget's free list with its pages still
+  committed. A new dynamic stack, on any thread, takes a free slot before a
+  fresh one, so a program that builds and drops arenas repeatedly (a query
+  per run, a join per batch) faults no new pages and makes no system call
+  after the first round. Nobody can see a slot on the list: its arena had no
+  attachment left.
 * **A mapping** is unmapped (`munmap`, `UnmapViewOfFile`) by the thread
   whose detach released the arena. It is one call per file, about 15 ms per
   2 GB of mapped pages (11.1), made once.
 * **The arena record** is freed.
 
-No space is unmapped while the program runs. `trim_memory()` (`os`, §1.2)
-already gives a thread program's unused stack pages back to the system; it
-also gives back the pages of every space on the free list (`MADV_DONTNEED`
-on Linux, the `MAP_FIXED` replacement on macOS, `MEM_DECOMMIT` on Windows),
-keeping the reservations. The reason for recycling over unmapping is
-measured (11.2): when 16 threads each unmapped 64 MB of touched memory at
-the same moment, the release took 80 ms, against 4.8 ms for one thread
-alone, because the system serializes it; `MADV_DONTNEED` took 30 ms; keeping
-the memory took nothing. A query that ends with every worker releasing its
-partitions at once is exactly that case.
+No slot is unmapped while the program runs, which is option A's "keeping
+the address reservation allows the runtime to guarantee reuse of its
+budget". `trim_memory()` (`os`, §1.2) already gives a thread program's
+unused stack pages back to the system; it also gives back the pages of
+every free slot (`MADV_DONTNEED` on Linux, the `MAP_FIXED` replacement on
+macOS, `MEM_DECOMMIT` on Windows), keeping the reservation. Option A
+decommits a closed document's pages at once; this design leaves that to
+`trim_memory()`, for a reason measured in 11.2: when 16 threads each
+unmapped 64 MB of touched memory at the same moment, the release took
+80 ms, against 4.8 ms for one thread alone, because the system serializes
+it; `MADV_DONTNEED` took 30 ms; keeping the memory took nothing. Workers
+that end together already unmap their data stacks that way today, and
+frozen regions unmapped as stacks are would add to it.
 
-An unfrozen builder's space is released the same way, to the free list, at
-the builder's scope exit or after a contained abort. Its contents were
-never visible to any other thread.
+An unfrozen dynamic stack's slot is released the same way, to the free
+list, at the declaration's scope exit or after a contained abort. Its
+contents were never visible to any other thread.
 
 ### 5.4 Stale and foreign handles
 
 A **stale** handle names an arena that has been released, or a region of
-one. It can still be copied, stored, sent and compared, since it is a name.
+one. It can still be copied, stored and sent, since it is a name.
 Using it is a diagnostic: `attach` of it aborts, with a message saying that
 the arena was released because no attachment was left, and the location.
 Its regions can only be viewed through an attachment to its arena, which can
@@ -824,9 +974,10 @@ no longer be made, so no view of released memory exists.
 
 A **foreign** handle names a region of another arena than the attachment's:
 the view aborts, saying so. The zero handle names nothing: attaching or
-viewing it aborts. Since a handle cannot be made from an integer, the
-runtime only ever sees handles it gave out, and since arena serials are
-64 bits and never reused, a stale handle can never come to name a new arena.
+viewing it aborts. Since a handle cannot be made from an integer, nor
+returned by C (4.1), the runtime only ever sees handles it gave out, and
+since arena serials are never reused (the 2^40-th arena aborts rather than
+wrap), a stale handle can never come to name a new arena.
 
 ### 5.5 Mapping a file: errors, prefaulting, truncation
 
@@ -892,29 +1043,27 @@ processes write access while the file is mapped (section 7).
 
 ### 5.6 Threads, contained workers, aborts and `thread_wait`
 
-* **Per-thread holds.** Each thread keeps its attachments and builders on a
-  stack of its own, in runtime memory: an attachment's declaration pushes
-  its arena, a builder's pushes its space, and their scope exits pop them,
-  in the reverse order scopes end in.
+* **Per-thread holds.** Each thread keeps its attachments and dynamic
+  stacks on a stack of its own, in runtime memory: an attachment's
+  declaration pushes its arena, a dynamic stack's pushes its slot, and their
+  scope exits pop them, in the reverse order scopes end in.
 * **A contained worker's abort** (§11.2) jumps out of the worker's frames
   without running their exits. After the jump, `gs_run_contained`'s caller
   pops the whole stack, ending each attachment and returning each unfrozen
-  space to the free list, out of the thread's region registry, before it
-  releases the worker's data stacks (`gs_release_regions` unmaps what is
-  left in that registry, which must no longer include a builder's space). The
+  slot to the free list, before it releases the worker's data stacks. The
   regions the worker froze are in their arenas and stay there: a
   partitioning worker that aborted after freezing two partitions leaves
   them for its peers. If one of its attachments was its arena's last, the
   arena is released at that point.
 * **`thread_wait(id)`** returns once a worker has ended and "all of its
   Goose storage has been released" (§11.2); that now includes its
-  attachments and builders. So a thread that has waited for every worker
+  attachments and dynamic stacks. So a thread that has waited for every worker
   knows that its own attachments are the only ones left.
 * **A worker that returns** has ended every attachment by its scopes'
   exits; the stack is empty.
 * **Ending the program** (`exit`, an abort outside a contained worker, a
   fault, `main` returning while workers run) releases nothing; the system
-  reclaims the mappings and the spaces with the process.
+  reclaims the mappings and the budget with the process.
 * **A worker may outlive its spawner**, as today; its attachments keep their
   arenas whether or not the spawner still has its own.
 
@@ -924,8 +1073,8 @@ The regions are written by one thread and read by others, so the reads must
 see the writes. They do, without any construct in the language:
 
 * A region is complete before its handle exists: `freeze` returns the
-  handle after the builder's last write, and `map_file` after the mapping is
-  made.
+  handle after the dynamic stack's last write, and `map_file` after the
+  mapping is made.
 * A handle reaches another thread only through a spawn argument, a queue
   message, a global copied at spawn, or a frozen region that itself arrived
   by one of these. Each orders what the sender did before the send ahead of
@@ -945,8 +1094,8 @@ section 22); the runtime has them, as it has for queues and `thread_wait`.
 ## 6. Interaction with existing features
 
 * **`thread_spawn` and `thread_spawn_contained`.** Handles are flat
-  arguments; attachments, builders and views are rejected as non-flat, with
-  today's diagnostics. A worker's copies of main's globals may hold handles
+  arguments; attachments, dynamic stacks and views are rejected as
+  non-flat, with today's diagnostics. A worker's copies of main's globals may hold handles
   (flat globals are copied, §11.2); a root global attachment is not usable
   by a worker, which attaches its handle instead.
 * **Contained workers and aborts**: section 5.6.
@@ -955,22 +1104,23 @@ section 22); the runtime has them, as it has for queues and `thread_wait`.
   zero handle.
 * **Globals.** An attachment may be a global of the main program, where it
   is attached for the whole run and its views may be stored in globals.
-* **Generics.** `resource<frozen<T>>`, `builder<T>` and `view<T>` are
+* **Generics.** `resource<frozen<T>>`, `dynamic_stack<T>` and `view<T>` are
   instantiated per `T` like any generic type or builtin, and the freezable
   and plain-data checks run per instantiation, naming the instantiation
   chain, as other type rules do. A generic function over `T` that views
-  `resource<frozen<T>>` handles is ordinary.
+  `resource<frozen<T>>` handles is ordinary, and so is a binding's generic
+  tag (`resource<Texture<f32>>`).
 * **`checkfree` and bounds-check elimination.** A view is a slice whose
   length the analysis knows to be its `count` (a mapping view) or a fixed
   value (a frozen view); loops over it are check-free as loops over any
   slice are, which section 11.6 checks with today's compiler, including
   probing chains of self-relative links. A view's own checks do not count
-  for `checkfree` (4.5). `freeze(b)` kills what the analysis knew of
-  `b.items`' length, as a `clear()` would.
+  for `checkfree` (4.5). `freeze(ds)` kills what the analysis knew of
+  `ds.items`' length, as a `clear()` would.
 * **Root structs.** A root struct may hold a reference to an attachment
   (`struct Ctx { sh: shared& }`, or a field of a worker's state), as it may
   hold a reference to any owner. Neither owner nests by value.
-* **`defer`.** An attachment's or a builder's end is an exit action beside
+* **`defer`.** An attachment's or a dynamic stack's end is an exit action beside
   the restores and the `defer`s of its scope, in reverse declaration order
   (implementation.md §6.2), so a `defer` declared after the attachment can
   still use it. Unlike a `defer`, it also runs after a contained abort,
@@ -981,16 +1131,17 @@ section 22); the runtime has them, as it has for queues and `thread_wait`.
   `from_bytes` of a mapped view verifies and copies an image straight from
   the page cache (4.5). Handles are not image-safe.
 * **`extern fn` and `export fn`.** A view passes to C as a `const T[:]`
-  parameter, read-only, borrowed for the call. Nothing about returns
-  changes: C still cannot return a slice; a mapping comes from `map_file`.
+  parameter, read-only, borrowed for the call, and a handle as a `uint64_t`
+  (4.1). C still cannot return a slice, nor a handle of the runtime's kinds;
+  a mapping comes from `map_file`.
 * **Coroutines** ([coroutines.md](coroutines.md), designed, not built). A
   frame is flat when its fields are, and a handle is flat, so a frame
   holding handles can be queued to another worker (4.9 there). An
-  attachment or a builder may not be in scope at a suspension point: that
-  is rule R1, which names variable- and resizable-class locals, extended to
-  these two owners, for the reason R1 gives and one more. A frame cannot
-  hold an owner, and a frame that is dropped would never end the
-  attachment, which would keep its arena forever. Views rooted at an
+  attachment or a dynamic stack may not be in scope at a suspension point:
+  that is rule R1, which names variable- and resizable-class locals,
+  extended to these two owners for two reasons of their own. A frame is a
+  plain value and cannot hold an owner, and a frame that is dropped would
+  never end the attachment, which would keep its arena forever. Views rooted at an
   attachment *outside* the coroutine (an `sh: shared&` parameter, a global
   attachment) cross yields freely under R4, so the intended shape is the
   thread's event loop attaching once and its coroutines taking `sh: shared&`
@@ -1004,20 +1155,20 @@ section 22); the runtime has them, as it has for queues and `thread_wait`.
   table waits for its handle's message.
 * **Recursion.** An attachment has no components, so it may be live across
   a call into a recursive cycle; its hold is on a runtime stack that grows
-  as needed. A builder may not (§7.8).
-* **`trim_memory`** also returns the free list's pages (5.3).
+  as needed. A dynamic stack may not (§7.8).
+* **`trim_memory`** also returns the free slots' pages (5.3).
 
 ## 7. Platforms
 
-| | Mapping a file | Builder spaces | Truncation, I/O errors |
+| | Mapping a file | The dynamic stacks' budget | Truncation, I/O errors |
 |---|---|---|---|
-| Linux | `open(O_RDONLY \| O_CLOEXEC)`, `fstat`, `mmap(PROT_READ, MAP_SHARED)`, the descriptor closed at once | `mmap(MAP_NORESERVE)`, guard gap `PROT_NONE`, as data stacks | SIGBUS in the existing handler |
-| macOS | as Linux | as Linux; trimming replaces pages with `MAP_FIXED`, as for stacks | as Linux |
-| Windows | `CreateFileW(GENERIC_READ, FILE_SHARE_READ \| FILE_SHARE_DELETE)`, `CreateFileMappingW(PAGE_READONLY)`, `MapViewOfFile(FILE_MAP_READ)`; the file handle kept open while mapped | `VirtualAlloc(MEM_RESERVE)`, committed on fault by the vectored handler, as data stacks | `EXCEPTION_IN_PAGE_ERROR` in the vectored handler |
+| Linux | `open(O_RDONLY \| O_CLOEXEC)`, `fstat`, `mmap(PROT_READ, MAP_SHARED)`, the descriptor closed at once | one `mmap(PROT_NONE, MAP_NORESERVE)` of the budget; a fresh slot's usable part made read-write with `mprotect` | SIGBUS in the existing handler |
+| macOS | as Linux | as Linux; trimming replaces a free slot's pages with `MAP_FIXED`, as for stacks | as Linux |
+| Windows | `CreateFileW(GENERIC_READ, FILE_SHARE_READ \| FILE_SHARE_DELETE)`, `CreateFileMappingW(PAGE_READONLY)`, `MapViewOfFile(FILE_MAP_READ)`; the file handle kept open while mapped | one `VirtualAlloc(MEM_RESERVE)` of the budget, committed on fault by the vectored handler, as data stacks are | `EXCEPTION_IN_PAGE_ERROR` in the vectored handler |
 | wasm (design only, [wasm.md](wasm.md)) | the fallback: the file read into memory of its own | per wasm.md's partitions | none |
 
 * **Windows** needs no deferral: the mapping calls are as direct as the
-  POSIX ones, and the builder spaces reuse the data stacks' code paths. It
+  POSIX ones, and the budget's slots reuse the data stacks' code paths. It
   is also stricter. A file with a mapped view cannot be truncated
   (`SetEndOfFile` fails with `ERROR_USER_MAPPED_FILE`), and the share mode
   without `FILE_SHARE_WRITE` keeps every other process from opening it for
@@ -1067,9 +1218,9 @@ fn main() {
     let sh = shared {};                    // main's attachment, for the whole run
     var table = source::Source { .. };     // main reads and checks the manifest, once
     guard source::open(table, plan, opts) else { fail(table.error); }
-    var segs = builder<Segment> {};
+    var segs = dynamic_stack<Segment> {};
     segs.items.append(table.segments);
-    var rows = builder<i64> {};
+    var rows = dynamic_stack<i64> {};
     rows.items.append(table.group_rows);
     var args = Q1Args {
         plan: plan,
@@ -1167,16 +1318,16 @@ table once, where today every worker reads and parses the manifest itself.
 for a column) are frozen per run rather than per morsel: all offsets in one
 `u32` array, all bytes in one `u8` array, and a directory saying where
 morsel `g`'s are. Three regions in all, whatever the number of morsels,
-since each region holds a reservation (5.2).
+since each region holds a slot of the budget (5.2).
 
 ```goose
 struct DictAt { offsets: i64, count: i64, bytes: i64 }   // morsel g's dictionary in the arrays
 struct Dicts { at: resource<frozen<DictAt>>, offsets: resource<frozen<u32>>, bytes: resource<frozen<u8>> }
 
 fn freeze_dicts(sh: shared&, row_groups: i64) -> Dicts {
-    var at = builder<DictAt> {};
-    var offs = builder<u32> {};
-    var bytes = builder<u8> {};
+    var at = dynamic_stack<DictAt> {};
+    var offs = dynamic_stack<u32> {};
+    var bytes = dynamic_stack<u8> {};
     for g in row_groups {
         at.items.push(DictAt { offsets: offs.items.len, count: 0, bytes: bytes.items.len });
         let n = decode_dictionary(g, offs.items, bytes.items);   // pushes n + 1 offsets from 0, and the bytes
@@ -1204,8 +1355,9 @@ Build and probe sides are column files of `i64` keys and payloads, mapped by
 main. Phase 1 partitions with write-combining buffers (64 rows per
 partition per worker, flushed whole), so each worker's output is one
 array of rows and one array of runs, `(partition, start, count)`, instead of
-P arrays: a builder is a declaration, and P is known only at run time
-(section 17). Phase 2 builds each partition's table as chain heads followed
+P arrays: a dynamic stack is a declaration, and P is known only at run
+time; option A's collection of dynamic stacks would give one per partition
+(4.6, section 17). Phase 2 builds each partition's table as chain heads followed
 by the rows, linked by self-relative references. Phase 3 views every table
 cut to its heads. The barriers are main collecting each phase's results
 before it puts the next phase's tasks. The three loops are the ones section
@@ -1299,8 +1451,8 @@ thread_fn join_worker(job: Job) {
     let sh = attach(job.arena);                          // one attachment for all three phases
 
     // Phase 1: partition the build morsels this worker takes.
-    var rows = builder<Row> {};
-    var runs = builder<Run> {};
+    var rows = dynamic_stack<Row> {};
+    var runs = dynamic_stack<Run> {};
     var bufs: Row[..64][>..] = [];
     for p in job.parts { bufs.push([]); }
     loop {
@@ -1313,7 +1465,7 @@ thread_fn join_worker(job: Job) {
     qput(Partitioned { rows: sh.freeze(rows), runs: sh.freeze(runs) });
 
     // Phase 2: whole partitions' tables, as many as this worker takes.
-    var t = builder<Entry> {};
+    var t = dynamic_stack<Entry> {};
     loop {
         let task = qget<Task>();
         guard task.part >= 0 else { break; }
@@ -1364,14 +1516,14 @@ fn main() {
     for w in workers { ids.push(thread_spawn_contained(join_worker, job)); }
 
     // Barrier 1: every worker's partitions are frozen.
-    var inputs = builder<Partitioned> {};
+    var inputs = dynamic_stack<Partitioned> {};
     for w in workers { inputs.items.push(qget<Partitioned>()); }
     let dir = sh.freeze(inputs);
     for p in parts { qput(Task { part: p, inputs: dir }); }
     for w in workers { qput(Task { part: -1, inputs: dir }); }
 
     // Barrier 2: every partition's table is frozen. In partition order.
-    var built = builder<Built> {};
+    var built = dynamic_stack<Built> {};
     for p in parts { built.items.push(Built { part: p, table: default<resource<frozen<Entry>>>(), heads: 0 }); }
     for p in parts { let b = qget<Built>(); built.items[b.part] = b; }
     let tables = sh.freeze(built);
@@ -1412,11 +1564,11 @@ What the example shows about the fit:
   remaining checks (the view checks, `rows[r.start .. r.start + r.count]`,
   `tables.push` against `MAX_PARTS`) are per morsel or per run, not per row.
 * **Aborts.** A contained worker that aborts in any phase releases its
-  attachment and its unfrozen builders (5.6). This main would then wait for
-  that worker's message forever; a real one takes each phase's results with
-  a timed `qget<T>(ms)`, or with the messaging design's `select` on the
-  queue and the worker's end, and fails the query with the worker's
-  message. The arena is released when main ends its attachment.
+  attachment and its unfrozen dynamic stacks (5.6). This main would then
+  wait for that worker's message forever; a real one takes each phase's
+  results with a timed `qget<T>(ms)`, or with the messaging design's
+  `select` on the queue and the worker's end, and fails the query with the
+  worker's message. The arena is released when main ends its attachment.
 
 ## 9. The generated C
 
@@ -1427,11 +1579,14 @@ names, `gs_` runtime names, and a check's file and line passed as
 
 ```c
 /* Representation (runtime.h, after gs_rref). */
-typedef struct { uint64_t arena, region; } gs_res;  /* resource<U>: 16 bytes; all zero is the zero handle */
-typedef struct gs_arena gs_arena;                    /* runtime-private */
-typedef struct gs_space gs_space;                    /* a builder's, then a frozen region's, reservation */
-typedef struct { gs_arena *a; } gs_att;              /* a shared attachment, in its frame */
-typedef struct { gs_space *sp; gs_stack *stk; gs_rhdr items; } gs_bld;   /* a builder<T>, in its frame */
+typedef uint64_t gs_res;                    /* resource<U>, every kind: one u64; 0 is no resource */
+#define GS_RES_SERIAL_BITS 40               /* the runtime's kinds: the arena's serial, high bits */
+#define GS_RES_REGION_BITS 24               /* and the region's number in it, low bits */
+_Static_assert(GS_RES_SERIAL_BITS + GS_RES_REGION_BITS == 64, "a handle is one u64");
+typedef struct gs_arena gs_arena;           /* runtime-private */
+typedef struct gs_slot gs_slot;             /* a slot of the dynamic stacks' budget: its gs_stack first */
+typedef struct { gs_arena *a; } gs_att;     /* a shared attachment, in its frame */
+typedef struct { gs_slot *slot; gs_stack *stk; gs_rhdr items; } gs_dstack;  /* a dynamic_stack<T> */
 
 /* let sh = shared {};   ...   and on every exit of its scope: */
 gs_att sh_g;
@@ -1447,7 +1602,7 @@ gs_shm_attach(&sh_g, job_g.arena_g, gs_file0, 12);  /* aborts on a zero or relea
 gs_res m_g;
 uint8_t ok_g = gs_shm_map_file(&sh_g, path_g, &m_g, why_g, gs_file0, 13);
 
-/* let xs = view<i64>(sh, m, off, n);  gs_shm_view is inline: the serials
+/* let xs = view<i64>(sh, m, off, n);  gs_shm_view is inline: the serial
    compared, the region's record loaded, three compares and an and. */
 sl_i64 xs_g;
 xs_g.data = (gs_i64 *)gs_shm_view(&sh_g, m_g, off_g, n_g, 8, 8, gs_file0, 14);
@@ -1457,18 +1612,18 @@ for (int64_t t9 = 0; t9 < (xs_g.len); t9++) {      /* today's loop over a slice 
     s_g = gs_add_i64(s_g, x_g, gs_file0, 15);
 }
 
-/* var b = builder<Row> {};  on every exit of its scope, gs_shm_builder_close(&b_g).
-   b.items is a resizable whose stack is the space's: a push is today's push,
-   and a Row[>..]& to it is today's gs_rref { &b_g.items, b_g.stk }. */
-gs_bld b_g;
-gs_shm_builder_open(&b_g);
-uint8_t *t3 = b_g.stk->top;                          /* the top, cached as for any stack */
-*(Row_g *)t3 = row_g; t3 += 16; b_g.items.len++;
-b_g.stk->top = t3;
-fill_g(&b_g.items, b_g.stk);                         /* fn fill(out: Row[>..]&) */
+/* var ds = dynamic_stack<Row> {};  on every exit of its scope, gs_dstack_close(&ds_g).
+   ds.items is a resizable whose stack is the slot's: a push is today's push,
+   and a Row[>..]& to it is today's gs_rref { &ds_g.items, ds_g.stk }. */
+gs_dstack ds_g;
+gs_dstack_open(&ds_g, gs_file0, 16);                 /* aborts when every slot is in use */
+uint8_t *t3 = ds_g.stk->top;                         /* the top, cached as for any stack */
+*(Row_g *)t3 = row_g; t3 += 16; ds_g.items.len++;
+ds_g.stk->top = t3;
+fill_g(&ds_g.items, ds_g.stk);                       /* fn fill(out: Row[>..]&) */
 
-/* let r = sh.freeze(b);  cached tops are written back first, as before a shrink */
-gs_res r_g = gs_shm_freeze(&sh_g, &b_g, 16, gs_file0, 18);
+/* let r = sh.freeze(ds);  cached tops are written back first, as before a shrink */
+gs_res r_g = gs_shm_freeze(&sh_g, &ds_g, 16, gs_file0, 18);
 
 /* let rows = sh.view(r);  and following a link, e .= e.next, as today */
 sl_Entry rows_g;
@@ -1478,15 +1633,17 @@ int64_t t29 = (int64_t)(gs_i32)(*e_g).next_g;
 e_g = (Entry_g *)(t29 ? ((uint8_t *)&(*e_g).next_g) + t29 : NULL);
 ```
 
-* `gs_res` is two `uint64_t`s: an arena's serial, never reused, and a region
-  number within it, starting at 1, with 0 for the arena itself. A handle is
-  copied, packed and compared as the 16 bytes it is.
+* `gs_res` is one `uint64_t`, for every kind, as option C has it. For the
+  runtime's kinds of this design its high 40 bits are the arena's serial and
+  its low 24 the region's number, 0 for the arena itself (4.1). A handle is
+  copied and packed as the eight bytes it is; nothing compares it. An
+  `extern fn` passes it as `uint64_t`.
 * An attachment is one pointer in its frame. `shared&` parameters pass a
-  `gs_att *`. A builder in a frame is its space pointer and its component's
-  header; a `builder<T>&` parameter is passed field by field, as a root
-  parameter is (`FindSplitRootParams`, implementation.md and
-  root_structs.md), and `b.items` as `T[>..]&` is the `gs_rref` it is for
-  every resizable.
+  `gs_att *`. A dynamic stack in a frame is its slot, its stack and its
+  component's header; a `dynamic_stack<T>&` parameter is passed field by
+  field, as a root parameter is (`FindSplitRootParams`, implementation.md
+  and root_structs.md), and `ds.items` as `T[>..]&` is the `gs_rref` it is
+  for every resizable.
 * The scope exits are emitted by `EmitExitRestores`, as entries of the
   scope beside the stack restores and `defer`s, in reverse declaration
   order, so every exit path (`break`, `continue`, `return`, `return …
@@ -1500,34 +1657,51 @@ The runtime's entry points, declared in `runtime.h` and defined in a new
 
 | Function | Does |
 |---|---|
-| `gs_shm_new(gs_att *)` | a new arena, attached once, registered by its serial |
+| `gs_shm_new(gs_att *)` | a new arena, attached once, registered by its serial; aborts when serials are used up |
 | `gs_shm_attach(gs_att *, gs_res, loc)` | look the serial up under the registry's lock; increment, or abort (`GS_E_STALE`, `GS_E_NOHANDLE`) |
 | `gs_shm_detach(gs_att *)` | decrement; at zero, unregister and release (5.3); pops the thread's hold |
 | `gs_shm_map_file(gs_att *, sl_u8, gs_res *, gs_rref why, loc)` | 4.5 and 5.5; registers the mapping for the fault handlers |
 | `gs_shm_size(gs_att *, gs_res, loc)` | a mapping's size |
 | `gs_shm_view(...)` (inline) | the checks of 4.5 (`GS_E_FOREIGN`, `GS_E_VIEW`); the address |
-| `gs_shm_builder_open(gs_bld *)`, `gs_shm_builder_close(gs_bld *)` | take a space from the free list or reserve one; register it with the thread; push or pop the hold |
-| `gs_shm_freeze(gs_att *, gs_bld *, elemsize, loc)` | 4.6 and 5.2; the new region's handle |
+| `gs_dstack_open(gs_dstack *, loc)`, `gs_dstack_close(gs_dstack *)` | take a slot of the budget, reserving the budget on first use, or abort (`GS_E_BUDGET`); give it back; push or pop the hold |
+| `gs_shm_freeze(gs_att *, gs_dstack *, elemsize, loc)` | 4.6 and 5.2; the new region's handle |
 | `gs_shm_frozen(gs_att *, gs_res, elemsize, int64_t *len, loc)` (inline) | a frozen view's address and length |
-| `gs_shm_release_held(void)` | after a contained abort: end every attachment and builder of the thread (5.6) |
+| `gs_shm_release_held(void)` | after a contained abort: end every attachment and dynamic stack of the thread (5.6) |
 
 ## 10. What changes in the compiler and the runtime
 
-By pass, with the existing code each change extends:
+By pass, with the existing code each change extends. Step 0, `resource<U>`
+on its own:
 
-* **Resolution** (`resolve.h`). The five type names resolve, where no
-  declaration of the program has the name, to builtin types: `resource<U>`
-  to a new `TypeKind` `TY_RESOURCE` whose `sub` is the kind, checked to be
-  `shared`, `mapping` or `frozen<T>`; `shared` and `builder<T>` to builtin
+* **Resolution** (`resolve.h`). `resource<U>` resolves, where no
+  declaration of the program has the name, to a new `TypeKind`,
+  `TY_RESOURCE`, whose `sub` is the kind: any type, with `shared`, `mapping`
+  and `frozen<T>` (and the messaging design's `event`) marked as the
+  runtime's.
+* **Types** (`typecheck_types.h`). `IsFlat`: a handle is flat. `ImageSafe`:
+  a handle is not ("a handle names something only its binding can read").
+  Defaults: all bits zero. Conversions (`as`, `as!`) to and from a handle
+  are rejected, and so are the comparisons, where `==` already refuses a
+  function value (`typecheck_exprs.h`), including the structural `==` of a
+  type holding a handle. Printing renders the type's name alone
+  (`codegen_render.h`).
+* **The C boundary** (`ExternValueOk`, `ExternParamOk`,
+  `typecheck_calls.h`). A handle crosses by value as `uint64_t`; a result,
+  or a value returned that holds one, may not be of the runtime's kinds.
+* **Codegen.** `CT` of a handle is `gs_res`, a `uint64_t`, for every kind.
+
+Phases 1 and 2:
+
+* **Owner types.** `shared` and `dynamic_stack<T>` resolve to builtin
   struct declarations with the existing `isroot` mark and a builtin-owner
   kind, so that every placement, copy and transfer rule of root structs
-  applies to them unchanged.
-* **Types** (`typecheck_types.h`). `IsFlat`: a handle is flat. `ImageSafe`:
-  a handle is not ("a handle names runtime state, not bytes"). New
-  `PlainData(t, why)` (4.5) and `Freezable(t, why)` (4.7, built from
-  `HoldsPlainRef`, `HoldsIndexT` and the `in pool` test of `ImageSafe`).
-  Defaults: a handle's is the zero handle. Equality and printing: 4.1.
-  Conversions (`as`, `as!`): rejected for handles.
+  applies to them unchanged. `shared {}`, `attach(h)` and
+  `dynamic_stack<T> {}` are accepted only as the initializer of an owning
+  declaration, as root struct literals are; anywhere else, the root-owner
+  diagnostic. `dynamic_stack<T>` takes a fixed-size `T`.
+* **Type predicates** (`typecheck_types.h`). New `PlainData(t, why)` (4.5)
+  and `Freezable(t, why)` (4.7, built from `HoldsPlainRef`, `HoldsIndexT`
+  and the `in pool` test of `ImageSafe`).
 * **Builtins** (`builtins.h`, `typecheck_builtins.h`). New entries in the
   `BUILTINS` table: `attach`, and `handle` (`BF_PROPERTY`), `map_file`,
   `size`, `view` (`BF_TYARGS`, optional) and `freeze`, whose receiver is an
@@ -1535,11 +1709,9 @@ By pass, with the existing code each change extends:
   their checks in `CheckBuiltin`. A view's `Val` is the receiver's roots and
   exactness (as `push`'s reference result is, `RootedAtReceiver`), not
   writable, its type `const T[:]`. `freeze` runs the checks of a shrink of
-  `b.items` (`CheckGrowShrink`, `BF_SHRINKS` on the component) and logs it
-  in the specialization's shrink summary, so callers are checked too.
-* **Owners at declarations.** `shared {}`, `attach(h)` and `builder<T> {}`
-  are accepted only as the initializer of an owning declaration, as root
-  struct literals are; anywhere else, the root-owner diagnostic.
+  `ds.items` (`CheckGrowShrink`, `BF_SHRINKS` on the component) and logs it
+  in the specialization's shrink summary, so callers are checked too, and
+  checks `Freezable` for `T`.
 * **Read-back** (`RootCandidates`, `HoldsByValue`): an attachment holds by
   value every plain-data and freezable type (4.4), as `StaticCanContain`
   makes static data hold literal-suppliable types.
@@ -1547,32 +1719,33 @@ By pass, with the existing code each change extends:
   at a yield) includes the two owners.
 * **Bounds-check elimination** (`bce.h`). A mapping view's length is its
   `count` argument; a frozen view's is unknown and fixed; `freeze` kills
-  `b.items`' length facts, as `clear` does. A view's checks are not kept
+  `ds.items`' length facts, as `clear` does. A view's checks are not kept
   checks for `checkfree` (`Call::nobc` is not involved; they are aborts of
   their own).
-* **Codegen.** `codegen_types.h`: `CT` of a handle is `gs_res`, of the
-  owners `gs_att` and `gs_bld`. `codegen_builtins.h`: emitting each
-  builtin as section 9 shows. Scope exits: the two owners' end actions as
-  scope entries (`EmitExitRestores`, `RegisterDefer`'s neighbor).
-  `codegen_frames.h`: `shared&` as one pointer, `builder<T>&` split as root
-  parameters are. Stack-top caching (implementation.md §6.10): a builder's
-  stack is reached through its space, as a fat reference's is; `freeze` is a
-  shrink of it for the caches (write back before, reload after).
-  `codegen_stacks.h`: live builders counted into the thread program's
-  regions (`BoundStacks`, the registry, `hardware_threads()`'s cap).
+* **Codegen.** `codegen_types.h`: `CT` of the owners, `gs_att` and
+  `gs_dstack`. `codegen_builtins.h`: emitting each builtin as section 9
+  shows. Scope exits: the two owners' end actions as scope entries
+  (`EmitExitRestores`, `RegisterDefer`'s neighbor). `codegen_frames.h`:
+  `shared&` as one pointer, `dynamic_stack<T>&` split as root parameters
+  are. Stack-top caching (implementation.md §6.10): a dynamic stack's stack
+  is reached through its slot, as a fat reference's is; `freeze` is a shrink
+  of it for the caches (write back before, reload after).
+* **Driver.** `--dynamic-budget size` writes `-DGS_DYNAMIC_BUDGET`, as
+  `--stack-reserve` writes `GS_STACK_RESERVE`.
 * **Runtime.** `runtime_shared.h` (new): the arena registry and records,
-  attach and detach, the per-thread hold stack, spaces and the free list,
-  mapping on POSIX and Windows, the fallback copy, views, freeze,
-  `GS_SHARED_STATS` reporting at exit for tests. `runtime_impl.h`: the
-  fault handlers (`gs_fault_handler`, `gs_fault_filter`) look up the
-  process's mappings for SIGBUS, `EXCEPTION_IN_PAGE_ERROR` and write faults;
-  `gs_trim_memory` trims the free list. `runtime_threads.h`:
-  `gs_thread_main` calls `gs_shm_release_held()` after a contained abort,
-  before `t->release()`. `runtime_inline.h` is regenerated
-  (`--gen-runtime-header`).
-* **Language server.** Hover, completion and signature help for the members
-  on a `shared` receiver come from the builtin table, as for the array
-  members.
+  attach and detach, the per-thread hold stack, the dynamic stacks' budget
+  with its slots and free list, mapping on POSIX and Windows, the fallback
+  copy, views, freeze, `GS_SHARED_STATS` reporting at exit for tests.
+  `runtime_impl.h`: the fault handlers (`gs_fault_handler`,
+  `gs_fault_filter`) look up the process's mappings for SIGBUS,
+  `EXCEPTION_IN_PAGE_ERROR` and write faults, and the budget's slots for
+  commits and overruns; `gs_trim_memory` trims the free slots.
+  `runtime_threads.h`: `gs_thread_main` calls `gs_shm_release_held()` after
+  a contained abort, before `t->release()`. `runtime_inline.h` is
+  regenerated (`--gen-runtime-header`).
+* **Language server.** Hover, completion and signature help for the
+  builtins on a `shared` receiver come from the builtin table, as for the
+  array members.
 * **Nothing else.** No lexer or parser change, no formatter change, no new
   keyword for editors to highlight.
 
@@ -1679,9 +1852,26 @@ considered. Phase 3 of the join needs all P tables at once, which is P
 attachments in one scope, which needs an array of owners (root_structs.md
 lists small constant arrays of owners as a v2 candidate; a run-time P needs
 more than that), or P atomics per worker. And the release of a table would
-then hang on its builder's attachment: a builder that finished its probes
+then hang on its maker's attachment: a worker that finished its probes
 early would release its table while slower workers had not yet attached it.
 The arena moves both to one decision in one place.
+
+**A handle of two words, with `==`.** This note first proposed a 16-byte
+`resource<U>`, a 64-bit serial and a 64-bit region number, so that no
+serial could ever be used up, and allowed `==` on handles. Option C's one
+`u64` holds a 40-bit serial and a 24-bit region number with room no program
+reaches (4.1), keeps handles half the size in every message and coroutine
+frame that carries them, and is what the messaging design's events use too.
+Nothing in this design compares handles. Both were dropped for option C as
+it stands.
+
+**A builder type of its own.** This note first called the frozen array's
+owner `builder<T>`. Goose already calls a `T[>..]` a builder (the README's
+"`u8[>..]` is a builder", §7.10's builders), and what is new here is the
+memory under the array, a stack made at run time, which §11.3 and option A
+already plan. Presenting it as their first step, `dynamic_stack<T>`, keeps
+one concept: option A's collection generalizes it later instead of sitting
+beside a different idea (4.6).
 
 **Structured lifetimes: the owner waits.** The arena's creator could block
 at its scope's end until every attachment has ended, so that lifetimes nest
@@ -1713,10 +1903,11 @@ with other values, in LIFO order, and its pages are the thread's. Freezing
 it would copy it (losing zero copy, and the O(1) handover for large builds)
 or remap its pages (`mremap` is Linux-only and needs page alignment the
 array does not have). Inferring which arrays are frozen and giving them
-regions would change an array's representation by what a distant call does
-with it. A builder says it at the declaration.
+stacks of their own would change an array's representation by what a
+distant call does with it. A dynamic stack says it at the declaration.
 
-**Frozen data on the builder's data stacks, kept alive with the builder.**
+**Frozen data on the freezing thread's data stacks, kept alive with that
+thread.**
 Every reader would read another thread's stack, which that thread releases
 at exit, and which is LIFO: one frozen array could not be released in the
 middle. Workers could not end before their readers.
@@ -1753,78 +1944,112 @@ what a worker built. A frozen region covers both.
 
 ## 13. Consistency with the specification and the other notes
 
-What this design changes, or might be read as contradicting, and the
-resolution of each:
+### 13.1 The deviations that remain
 
-* **§1.2 "There is no general-purpose heap and no `malloc`. All dynamic
-  allocation is expressed as values living on data stacks."** Builder and
-  frozen regions are storage outside the data stacks. They are not a heap:
-  there is no allocation of objects and no `free`; a builder is a data stack
-  that can be handed over, and a mapping is a file. §1.2 gains a third kind
-  of memory, *shared regions*, owned by arenas (§11.4).
-* **§4.1 "no destructors, no `Drop`, no reference counting. The only
-  deallocation is scope exit resetting stack pointers."** True of values,
-  and still true: no value is counted or destroyed. The runtime counts
-  attachments, which are declarations, at their scope's exits, beside the
-  stack resets; and shared regions are released when their arena's last
-  attachment ends. §4.1 says "no reference counting of values" and points to
-  §11.4. README's bullet stays true in that sense.
-* **§1.1, root class.** The root class is "an explicitly declared root
-  struct"; it gains the two builtin owners, which follow every root rule.
-* **§11.2 "Threads never share mutable memory."** Kept: what is shared is
-  never written while shared (4.9). "Only flat values may cross thread
-  boundaries": kept; handles are flat, views do not cross.
-* **§7.10, no slice returns from C.** Unchanged; foreign memory becomes a
-  view only through `map_file`.
-* **§11.2's list of what still ends the program in a contained worker**
-  gains a truncated mapping and a builder overrun, beside guard-page hits.
-* **owning_dynamic_data.md, option C.** Built on, with three differences,
-  each named in 4.1: the runtime defines the kinds rather than a binding;
-  `resource<U>` is 16 bytes, not one `u64`, because a handle must name an
-  entry of a table that is never reused (a 64-bit serial and a region
-  number); and `==` is allowed. Option C's "Cleanup remains unresolved" is
-  resolved for these kinds and no others: the handle never owns, the
-  attachment does, copies of a handle trigger nothing, a released arena's
-  handles are stale and diagnosed, and there is no double release because
-  there is no explicit release. Binding-defined kinds remain as open as
-  option C left them. Option C's "direct mapped views would need a separate
-  design" is this design.
-* **owning_dynamic_data.md, option A** ("bounded independent dynamic
-  stacks"): a builder is a restricted form of it, one independently
-  reserved region per declaration, released independently; an array of
-  builders would be option A itself (section 17).
-* **coroutines.md.** R1 extended to the two owners, for R1's reason plus
-  abandonment (section 6). R4 unchanged: views rooted outside a coroutine
-  cross yields. Frames holding handles are flat and cross queues, as 4.9
-  there wants. Libraries' `select` and channels need nothing else. No
-  contradiction remains.
-* **relative_references.md, root_structs.md.** Self-relative references
-  work in frozen regions because they are position-independent and stay in
-  their array; `in pool` references do not, because each thread has its own
-  pool. Root struct rules apply to the owners unchanged.
+Two, and an upstream review should look at them first. Each departs from a
+sentence of the specification for one reason, the same for both: the
+scopes that see shared memory are in different threads, so no one thread's
+scope can own it, and no one scope's exit can be the moment it is freed.
+
+1. **A third kind of memory.** §1.2: "There is no general-purpose heap and
+   no `malloc`. All dynamic allocation is expressed as values living on data
+   stacks, owned by locals (or globals)." Mapped files and frozen regions
+   live outside every thread's data stacks, in memory that several threads'
+   scopes see at once; a thread's own stacks are released when it ends
+   (§11.2), so they cannot hold what outlives the thread. The deviation is
+   kept to what sharing needs. A live dynamic stack is a data stack in
+   §1.2's sense, made at run time as §11.3 plans and owned by its
+   declaration; what has no owning declaration is a *frozen* dynamic stack
+   and a mapping, and both are owned by an arena, whose life is its
+   attachments' scopes. Nothing is a heap: nothing is allocated object by
+   object or freed one by one, and the memory never moves. §1.2 gains
+   *shared regions* as a third kind of memory for values, beside the data
+   stacks and static data (the native stack holds only a frame's fixed-size
+   values), and points to §11.4.
+2. **The runtime counts attachments.** §4.1: "There is no ownership transfer
+   beyond the return move, no destructors, no `Drop`, no reference
+   counting. The only deallocation is scope exit resetting stack
+   pointers." An arena is released when its last attachment ends, and the
+   runtime counts attachments to know when that is. The compiler cannot
+   know it: handles are flat and travel through global queues, so which
+   threads will attach is known only at run time (section 12 weighs the
+   static alternatives). The deviation is kept small. No value is counted;
+   the count changes only at an attaching declaration and at its scope's
+   exits, beside the stack restores, never when a handle or a view is
+   copied; nothing runs a destructor; and a program whose main attaches,
+   spawns and waits gets a release point it can name (5.1). §4.1 says "no
+   reference counting of values" and points to §11.4. The README's "no
+   reference counting" stays true of values.
+
+### 13.2 What the design adopts as proposed
+
+* **owning_dynamic_data.md, option C.** `resource<U>` as option C states
+  it: one `u64`; stored, copied and passed to the APIs of its kind, and
+  never dereferenced, computed with, compared or converted; kinds that
+  bindings define, the runtime being the binding of its own (4.1).
+  Being a fixed-size value gives a handle a zero default, a text form that
+  is its type alone, and no image, and none of these lets code compute with
+  a handle or make one. Option C's open question, cleanup, stays open for
+  the kinds bindings define; the runtime's kinds of this design need none,
+  since a handle owns nothing. Option C's "direct mapped views would need a
+  separate design connecting their bounds and lifetime to the resource" is
+  this design.
+* **§11.3 and option A.** `dynamic_stack<T>` is their first step, one
+  stack, with option A's stable data, independent release and budgeted
+  reservation (4.6, 5.2, 5.3); option A's recoverable limit errors wait for
+  its collection (section 17), which generalizes `dynamic_stack<T>`.
+* **coroutines.md.** R1 is extended to the two new owners, which a frame,
+  a plain value, cannot hold, and which a dropped frame would never end; R4
+  lets views rooted outside a coroutine cross yields; frames holding handles
+  are flat and cross queues, as its 4.9 wants; its libraries' `select` and
+  channels need nothing else.
+* **root_structs.md.** The two owners follow every root rule unchanged.
+* **relative_references.md.** Self-relative references work in frozen
+  regions because they are position-independent and stay in their array;
+  `in pool` references do not, because each thread has its own pool.
 * **serialization.md.** Mapped bytes of plain data need no verifier because
   there is nothing to verify; anything else from a file still goes through
-  `from_bytes`. `bytes_of` views stay unwritable for the same reason frozen
+  `from_bytes`. `bytes_of` views stay unwritable for the reason frozen
   regions do.
-* **scope_exit_cleanup.md**, "Do not add destructor types now". The owners
+* **string_constants.md.** Views are `const`, and the slots that hold them
+  say so, as for static data.
+* **scope_exit_cleanup.md**, "do not add destructor types now". The owners
   are not destructor types: they live only at declarations, are never
   copied, stored or removed from a container, and their end action is the
   runtime's, like a stack restore. Its section 4.6, on what never runs an
   exit action, does not hold for them, since the runtime releases them after
   a contained abort.
-* **§10.4, the address space budget.** Builders count against a thread
-  program's regions, as stacks do; frozen regions and the free list are
-  outside the budget that sizes `hardware_threads()`, and a refused
-  reservation halves as for stacks.
+
+### 13.3 Additions that contradict nothing
+
+The specification grows in places without any rule of it changing: §1.1's
+root class gains the two builtin owners; §3.12 (new) is `resource<U>`; §7.10
+gains `resource<U>` as a shape that crosses, as `uint64_t`; §9.3 gains the
+new aborts; §10.4 gains the dynamic stacks' budget beside the data stacks';
+§11.2's list of what ends the program in a contained worker gains a
+truncated mapping and a dynamic stack's overrun, beside guard-page hits;
+§11.3 gains its first step; and §11.4 (new) is this design's rules.
 
 ## 14. Test plan
 
 Following docs/testing.md. Positive fixtures go in a new category,
 `test/shared/`, with `expected/<name>.out` (and `.aborts` and `.stderr`
-for the expected aborts); rejections go in `test/errors_tc/` as
-`shared_*.goose` with `// error:` markers. Programs with workers run
-natively (TinyCC refuses them); the others run on every backend. Every
-fixture writes the files it maps under a scratch directory of its own.
+for the expected aborts); rejections go in `test/errors_tc/` with
+`// error:` markers. Programs with workers run natively (TinyCC refuses
+them); the others run on every backend. Every fixture writes the files it
+maps under a scratch directory of its own.
+
+**Step 0**, `resource<U>`:
+
+| Fixture | Checks |
+|---|---|
+| `test/typing/resource_values.goose` | a binding's kind with no C: the zero default from `default<resource<T>>()`, a global with its type alone, a literal's `..` and a missed `qpoll`; handles in structs, arrays and payloads, copied, sent through a queue and to a worker; `print` of a handle and of a struct holding one (the type alone) |
+| `test/packages/pkg_resource` | a program with C of its own (as `pkg_own_c`): a binding's kind made and taken by its `extern fn`s, held in Goose storage, handed back to C, and C seeing the zero handle as 0 |
+| `errors_tc/resource_compare.goose` | `==`, `!=` and the orderings on handles, and `==` of a struct holding one |
+| `errors_tc/resource_arith.goose` | arithmetic and bitwise operators on a handle; `as` and `as!` to and from an integer |
+| `errors_tc/resource_image.goose` | `to_bytes`, `bytes_of` and `from_bytes` of a type holding a handle; `hash` of one |
+| `errors_tc/resource_extern_return.goose` | an `extern fn` returning a handle of a runtime kind, or a struct holding one |
+| `errors_tc/resource_kind_value.goose` | a variable of type `mapping` or `frozen<i64>`, which name kinds |
 
 **Phase 1**, positive:
 
@@ -1841,7 +2066,7 @@ fixture writes the files it maps under a scratch directory of its own.
 | `shared_contained` (`GS_SHARED_STATS=1`) | a contained worker that aborts while attached and viewing; main continues; nothing left attached at the end |
 | `shared_truncated` (abort) | the program truncates a file it has mapped and reads it: the diagnostic and exit status 1 |
 | `shared_replaced` | a file replaced by rename (`write_file_atomic`) while mapped: the old mapping still reads the old bytes |
-| `test/runtime/runtime_shared_lifecycle.c` | direct runtime test, like `runtime_threads_lifecycle.c`: attach/detach churn from many threads, no mapping or record leaked, stale detection, the SIGBUS message in a child process |
+| `test/runtime/runtime_shared_lifecycle.c` | direct runtime test, like `runtime_threads_lifecycle.c`: attach/detach churn from many threads, no mapping or record leaked, stale detection, the serial and region limits with small test values, the SIGBUS message in a child process |
 
 **Phase 1**, rejections, each with its diagnostic:
 
@@ -1855,20 +2080,20 @@ fixture writes the files it maps under a scratch directory of its own.
 | `shared_view_align_const` | `view<i64>(sh, m, 3, 1)` |
 | `shared_owner_rules` | an attachment copied, passed or returned by value, stored by value in a struct or array, made as a temporary (`view<…>(attach(h), …)`), or passed to `thread_spawn` |
 | `shared_owner_worker_global` | a worker using main's global attachment |
-| `shared_resource_ops` | arithmetic, ordering and `as` on a handle; `resource<i64>`; a variable of type `mapping` |
-| `shared_resource_image` | `to_bytes`, `bytes_of` and `from_bytes` of a type holding a handle |
 
 **Phase 2**, positive:
 
 | Fixture | Checks |
 |---|---|
-| `shared_freeze` | push, append, index, write, freeze, view; a builder filled again after a freeze; an empty freeze; a builder never frozen; freezing through a `builder<T>&` parameter |
+| `shared_freeze` | push, append, index, write, freeze, view; a dynamic stack filled again after a freeze; an empty freeze; a dynamic stack never frozen; freezing through a `dynamic_stack<T>&` parameter |
 | `shared_freeze_links` | self-relative chains and `self` links frozen and followed in another worker; a `checkfree` probe (`// bce:elide`) |
 | `shared_hash_join` | the join of 8.3 at W = 1, 2, 4 and 16 and P = W and 4W, against a single-threaded reference, exactly |
 | `shared_dicts` | main's dictionaries (8.2), viewed by every worker |
 | `shared_handles_queues` | handles in messages and in frozen directories, from worker to worker |
-| `shared_contained_phases` (`GS_SHARED_STATS=1`) | contained workers aborting while building, after freezing, and while probing; their builders recycled, their frozen regions kept, the arena released at the end |
-| `shared_regions_reuse` (`GS_SHARED_STATS=1`) | arenas made and released repeatedly reserve no new spaces after the first; `trim_memory` returns the free list's pages |
+| `shared_contained_phases` (`GS_SHARED_STATS=1`) | contained workers aborting while building, after freezing, and while probing; their dynamic stacks' slots recycled, their frozen regions kept, the arena released at the end |
+| `shared_regions_reuse` (`GS_SHARED_STATS=1`) | arenas made and released repeatedly take no fresh slot after the first round; `trim_memory` returns the free slots' pages |
+| `shared_dstack_budget` (abort, `runtime-define: GS_DYNAMIC_BUDGET=…`) | a budget of a few slots: the dynamic stack that finds them all in use aborts with the budget, the slot size, the count and the flag; frozen and live slots both count |
+| `shared_dstack_limits` | `ds.items.check_length(n)` against the slot's reservation, refusing a count before any growth |
 
 **Phase 2**, rejections:
 
@@ -1876,9 +2101,9 @@ fixture writes the files it maps under a scratch directory of its own.
 |---|---|
 | `shared_frozen_write` | writing a frozen view, and through a link loaded from one |
 | `shared_frozen_outlives` | a frozen view, or a reference loaded from one, outliving its attachment |
-| `shared_freeze_live_view` | freezing a builder while a slice or reference into `b.items` is live, directly and through a call |
-| `shared_freeze_types` | `builder<T>` for `T` holding a plain reference, a slice, an optional, an `in pool` reference, an index type, an owner, or a variable-size field; each names the field |
-| `shared_builder_rules` | a builder copied, returned, sent, or made as a temporary |
+| `shared_freeze_live_view` | freezing a dynamic stack while a slice or reference into `ds.items` is live, directly and through a call |
+| `shared_freeze_types` | `freeze` of a dynamic stack whose `T` holds a plain reference, a slice, an optional, an `in pool` reference, an index type, an owner, or a variable-size field; each names the field |
+| `shared_dstack_rules` | a dynamic stack copied, returned, sent, or made as a temporary; a `dynamic_stack<T>` of a variable-size `T` |
 | `shared_freeze_kind` | freezing an ordinary array; `view` of a frozen handle at the wrong `T` |
 
 A frozen handle used after its arena's release is the run-time case, and
@@ -1894,45 +2119,66 @@ against private copies of the tables, with the memory each uses).
 
 ## 15. Documentation plan
 
-* **Specification.** §1.1 (the root class's builtin owners; handles are
-  flat), §1.2 (shared regions), §3.4 (the owners' placement), a new §3.12
-  (`resource<U>`), §4.1 (no reference counting *of values*), §7.10 (a
-  pointer to §11.4), §9.2 (attachments as roots and read-back candidates),
-  §9.3 (the new aborts, and what ends the program), §9.5 (views are
-  read-only), §10.4 (regions in the address space), §10.5 (a view's length),
-  §11.2 (handles cross; attachments are released at a worker's end and
-  abort, before `thread_wait` returns), a new §11.4 *Shared memory* with
-  sections 4 and 5 of this note as rules, §12's builtin table, Appendix B
-  (new TODO items for section 17's deferred parts), C.2 (`resource<U>`'s
-  layout; the owners are private).
-* **Reference.** A subsection of section 22, *Threads*, "Shared memory", with a
-  compiling example per form; adding it there keeps the later sections'
-  numbers and anchors.
+* **Specification.** Step 0: a new §3.12, `resource<U>` (4.1 of this
+  note as rules), §1.1 (handles are flat), §7.10 (the `uint64_t` shape and
+  the runtime's kinds as parameters only), §12's builtin table. Phases 1
+  and 2: §1.1 (the root class's builtin owners), §1.2 (shared regions), §3.4
+  (the owners' placement), §4.1 (no reference counting *of values*), §7.10
+  (a pointer to §11.4), §9.2 (attachments as roots and read-back
+  candidates), §9.3 (the new aborts, and what ends the program), §9.5 (views
+  are read-only), §10.4 (the dynamic stacks' budget beside the data
+  stacks'), §10.5 (a view's length), §11.2 (attachments are released at a
+  worker's end and abort, before `thread_wait` returns), §11.3 (its first
+  step, `dynamic_stack<T>`, no longer only future), a new §11.4 *Shared
+  memory* with sections 4 and 5 of this note as rules, §12's builtin table,
+  Appendix B (TODO items for section 17's deferred parts), C.2 (the owners
+  are private).
+* **Reference.** Step 0: `resource<U>` in section 24, *Calling C and being
+  called from C*, where a binding's kinds are made. Phases 1 and 2: a
+  subsection of section 22, *Threads*, "Shared memory", with a compiling
+  example per form; adding both there keeps the later sections' numbers and
+  anchors.
 * **Standard library.** `trim_memory`'s entry (it also trims the free
-  list).
-* **Implementation notes.** Sections 3 (owners, views' roots, read-back,
-  freeze as a shrink, the type predicates), 5 (the view facts), 6
-  (representations, scope exits, parameters, builder stacks and caches; 6.8,
-  the hold stack) and 7 (the arena registry, counts, spaces and the free
-  list, mapping and the fallback, the fault handlers, trimming).
-* **Testing.** The `test/shared/` category and `runtime_shared_lifecycle.c`
-  in the layout table.
+  slots).
+* **Implementation notes.** Sections 3 (`TY_RESOURCE`, owners, views'
+  roots, read-back, freeze as a shrink, the type predicates), 5 (the view
+  facts), 6 (representations, scope exits, parameters, dynamic stacks and
+  their caches; 6.8, the hold stack) and 7 (the arena registry, counts, the
+  dynamic stacks' budget, its slots and free list, mapping and the
+  fallback, the fault handlers, trimming).
+* **Testing.** The `test/shared/` category, `pkg_resource` and
+  `runtime_shared_lifecycle.c` in the layout table.
 * **Index.** This note in docs/index.md's design notes.
 
 ## 16. Phased plan
 
-### Phase 1: mapped files, handles and views (#3)
+### Step 0: `resource<U>` (both tracks)
 
-1. **Types.** `TY_RESOURCE`, and the builtin owner `shared` (4.1, 4.2):
-   resolution, flatness, image safety, defaults, equality, printing,
-   conversions rejected; root-owner placement through the existing
-   `isroot` paths; owner construction only at declarations.
+The foundation, landed on its own before either track's phase 1 uses it:
+#3 carries it if #5 has not landed it, and #5 builds `resource<event>` on
+it. It adds no runtime state and no builtin.
+
+1. **Types.** `TY_RESOURCE` for any `U`, with the runtime's kinds marked
+   (`shared`, `mapping`, `frozen<T>`, and `event` for the messaging design):
+   resolution, flatness, image safety, the zero default, the text form,
+   comparisons and conversions rejected (4.1).
+2. **The C boundary.** `uint64_t` by value, parameters and results; no
+   result of a runtime kind.
+3. **Codegen.** `gs_res`.
+4. **Tests and documents**: section 14's step 0, section 15's parts for
+   step 0.
+
+### Phase 1: mapped files, attachments and views (#3)
+
+1. **The owner `shared`** (4.2): resolution, root-owner placement through
+   the existing `isroot` paths, construction only at declarations.
 2. **Builtins.** `attach`, `handle`, `map_file` (both forms), `size`,
    `view<T>` for mappings, with `PlainData`, constant alignment and the
    view's roots (4.4, 4.5); read-back candidacy of attachments.
-3. **Codegen.** `gs_res`, `gs_att`; the builtins as in section 9; the
-   scope-exit action; `shared&` parameters.
-4. **Runtime.** `runtime_shared.h`: the registry, counts, the hold stack and
+3. **Codegen.** `gs_att`; the builtins as in section 9; the scope-exit
+   action; `shared&` parameters.
+4. **Runtime.** `runtime_shared.h`: the registry, serials and region
+   numbers with their limits (4.1), counts, the hold stack and
    `gs_shm_release_held` from `gs_thread_main`; `map_file` on POSIX and
    Windows, and its fallback copy (5.5); views; unmapping at release; the
    fault handlers' mapping table; `GS_SHARED_STATS`.
@@ -1943,20 +2189,22 @@ against private copies of the tables, with the memory each uses).
    `read_file`, and a `pread` shim, reported in GB/s (11.1 gives the C-level
    ceiling on this machine).
 
-Phase 1 needs no builder: an arena holds mappings only, and frozen handles
-are not yet a kind.
+Phase 1 needs no dynamic stack: an arena holds mappings only, and frozen
+handles are not yet made.
 
-### Phase 2: frozen regions (#4)
+### Phase 2: dynamic stacks and frozen regions (#4)
 
-1. **Types.** `frozen<T>` as a kind; `builder<T>` as a builtin owner with
-   its component; `Freezable` (4.7).
-2. **Builtins.** `freeze` (the shrink check, the result), `view` of a frozen
-   handle, `view<T>` with `T` checked against the handle.
-3. **Codegen.** `gs_bld`; the component as a resizable whose stack is the
-   space's; stack-top caching and `freeze`; `builder<T>&` parameters split;
-   the builder count in `BoundStacks`.
-4. **Runtime.** Spaces, registration with the thread's registry, the free
-   list, `trim_memory`, freeze, frozen views, the debug-build protection.
+1. **The owner `dynamic_stack<T>`** with its component `items` (4.6), and
+   `Freezable` (4.7).
+2. **Builtins.** `freeze` (the shrink check, `Freezable`, the result),
+   `view` of a frozen handle, `view<T>` with `T` checked against the
+   handle.
+3. **Codegen.** `gs_dstack`; the component as a resizable whose stack is
+   the slot's; stack-top caching and `freeze`; `dynamic_stack<T>&`
+   parameters split; `--dynamic-budget`.
+4. **Runtime.** The budget (one reservation, slots, their states and free
+   list, the limit's abort), the fault handlers' slot lookup, `trim_memory`,
+   freeze, frozen views, the debug-build protection.
 5. **BCE.** `freeze` as `clear`.
 6. **Tests and documents**: section 14's phase 2, section 15's remainder.
    Marking std's `hash` functions `checkfree` (they have no checks) lets the
@@ -1967,9 +2215,10 @@ are not yet a kind.
 
 ### Later
 
-Variable-size and multi-component frozen values, arrays of builders,
-recoverable `attach`, a prefetch hint, verified views of frozen bytes, index
-types and base-relative links into frozen arrays: section 17.
+Option A's collection of dynamic stacks, recoverable limits, variable-size
+and multi-component frozen values, recoverable `attach`, a prefetch hint,
+verified views of frozen bytes, index types and base-relative links into
+frozen arrays: section 17.
 
 ## 17. Open questions
 
@@ -1980,49 +2229,61 @@ Each with the recommended answer.
   alive? *Recommended:* not in v1. An owner cannot be a result, so it would
   be a declaration form (`let sh, ok = attach(h);`); add it when a program
   needs it.
-* **Several builders whose count is known only at run time** (P partitions
-  in P builders). *Recommended:* not in v1; write-combining buffers into one
-  builder (8.3) are how radix partitioning is usually made fast anyway. An
-  array of builders is owning_dynamic_data.md's option A and
-  root_structs.md's arrays of owners; revisit with them.
+* **Option A's collection of dynamic stacks**, a run-time number of them in
+  one owner (P partitions on P dynamic stacks). *Recommended:* the next step
+  after this design, generalizing `dynamic_stack<T>` rather than adding a
+  second concept: its elements draw slots from the same budget and freeze
+  as a single one does (4.6). Until then, write-combining buffers onto one
+  dynamic stack per worker (8.3) are how radix partitioning is usually made
+  fast anyway.
+* **Recoverable limits**, option A's "opening document 257 returns a
+  recoverable limit error". *Recommended:* with the collection, where the
+  limit is a count the program chose; a single declaration aborts with the
+  budget's numbers, as a data stack's overrun ends the program, and
+  `check_length` is the explicit check before growth (4.6).
 * **Frozen values of several components** (a hash table's directory and
   entries, a dictionary's offsets and bytes, as one frozen root struct
   viewed as a `const R&`). *Recommended:* later; v1 freezes one array per
-  builder and a program groups handles in a flat struct (8.2).
-* **Variable-size elements** (a frozen `u8[][>..]` of strings, iterated
-  sequentially). *Recommended:* later; offsets and bytes cover strings now.
-* **A builder's reservation.** Every builder reserves what a data stack
-  does, which caps a process at tens of thousands of frozen regions (the
-  128 TB of user address space on x86-64 holds 64,000 reservations of
-  2 GB). *Recommended:* keep it, and pack small arrays into one
-  builder; add a reservation hint on the literal (`builder<T> { reserve: n
-  }`) if a program needs many small regions, with the self-relative range
-  checks that a larger hint implies.
+  dynamic stack and a program groups handles in a flat struct (8.2).
+* **Variable-size elements** (a dynamic stack of `u8[]` strings, frozen and
+  iterated sequentially). *Recommended:* later; offsets and bytes cover
+  strings now.
+* **A dynamic stack's size.** Every slot is a data stack's reservation, so
+  the default budget holds 8,188 slots. *Recommended:* keep it, and pack
+  small arrays onto a few dynamic stacks; a smaller slot size (one for the
+  budget, or a hint on the literal, `dynamic_stack<T> { reserve: n }`)
+  comes with the self-relative range checks a larger one would need, and
+  can wait for a program with many small frozen arrays.
 * **Per-region release inside an arena.** *Recommended:* no; an arena per
   lifetime (8.3's note on partitions) is the unit, and per-region counts
   were the design rejected in section 12.
 * **A prefetch hint** (`sh.prefetch(m, offset, length)`, `MADV_WILLNEED` or
   `PrefetchVirtualMemory`). *Recommended:* not until a cold-scan workload
   shows a gain; 11.1 found none.
-* **Huge pages for builder spaces** (`MADV_HUGEPAGE` on large builders, for
+* **Huge pages for dynamic stacks** (`MADV_HUGEPAGE` on large slots, for
   probes' TLB misses). *Recommended:* measure in #4's join; it is invisible
   to programs.
-* **Verified views of frozen bytes** (a `u8` builder holding an image,
-  viewed in place as a `T` array after `from_bytes`'s verifier). Sound,
-  since frozen bytes cannot change after the check. *Recommended:* later,
-  when a program needs to share images it did not build as typed arrays.
+* **Verified views of frozen bytes** (a `u8` dynamic stack holding an
+  image, viewed in place as a `T` array after `from_bytes`'s verifier).
+  Sound, since frozen bytes cannot change after the check. *Recommended:*
+  later, when a program needs to share images it did not build as typed
+  arrays.
 * **Index types into frozen arrays**, and base-relative links from one
   frozen region into another (a directory's entries pointing at rows).
   A frozen array's length never changes, so `u32 in r` would be sound, but
   index types name a global by its declaration. *Recommended:* later; use
   indices and one check per use, or self-relative links within one region.
+* **Comparing handles.** Option C allows no comparison, and nothing in this
+  design needs one. *Recommended:* none; if a program comes to need to know
+  whether two handles name the same thing, a named builtin
+  (`same_resource(a, b)`), never an operator.
 * **Member calls with type arguments.** `sh.view<i64>(m, offset, count)`
   would read better than `view<i64>(sh, m, offset, count)`, but a member call
   takes no type arguments today, for any function (Appendix D's grammar has
   them only after a name). *Recommended:* not part of this feature; it is a
   parser change for every generic function, to make on its own merits.
-* **Handles as dictionary keys.** *Recommended:* no hashing in v1: it
-  would expose a handle's bits as an integer; key by what the handle stands
+* **Handles as dictionary keys.** *Recommended:* no hashing, as option C
+  says: it would hand code a handle's bits; key by what the handle stands
   for (a row group, a partition).
 * **Processes.** Sharing regions between processes (`shm_open`, memory
   files) would need a cross-process registry and different failure
@@ -2048,7 +2309,8 @@ Spec sections referred to above:
 [§9.5 writability](../goose_spec.md#95-writability),
 [§10.4 runtime environment](../goose_spec.md#104-runtime-environment),
 [§10.5 bounds-check elimination](../goose_spec.md#105-bounds-check-elimination),
-[§11.2 concurrency](../goose_spec.md#112-concurrency);
+[§11.2 concurrency](../goose_spec.md#112-concurrency),
+[§11.3 dynamic stacks](../goose_spec.md#113-dynamic-stacks-future);
 [implementation.md §3.4 roots](../implementation.md#34-roots-and-provenance),
 [§6.2 stack assignment](../implementation.md#62-stack-assignment),
 [§6.8 threads and queues](../implementation.md#68-threads-and-queues),
