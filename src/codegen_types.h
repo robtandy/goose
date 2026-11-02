@@ -29,13 +29,78 @@ inline bool CodeGen::TEq(TypeExpr *a, TypeExpr *b) {
                 default:        return true;
             }
         }
-        case TY_SLICE: case TY_RESOURCE: return TEq(a->sub, b->sub);
+        case TY_SLICE: return TEq(a->sub, b->sub);
+        case TY_RESOURCE: return KindEq(a->sub, b->sub);
         case TY_REF:
             return TEq(a->ref->sub, b->ref->sub) && a->ref->optional == b->ref->optional &&
                    a->ref->lenstorage == b->ref->lenstorage;
         case TY_VARIANT:
             return a->var->variant == b->var->variant && TEq(a->var->adt, b->var->adt);
         default: assert(false); return false;
+    }
+}
+
+// A handle's kind, compared as the checker compares types (TypeCheck::TypeEq):
+// `const` at any depth, an index type's array and an `in pool` reference's
+// pool are part of it, though no C type has them (§3.12).
+inline bool CodeGen::KindEq(TypeExpr *a, TypeExpr *b) {
+    if (a == b) return true;
+    if (a->kind != b->kind || a->cq != b->cq) return false;
+    auto args = [&](const vector<TypeExpr *> &x, const vector<TypeExpr *> &y) {
+        if (x.size() != y.size()) return false;
+        for (size_t i = 0; i < x.size(); i++)
+            if (!KindEq(x[i], y[i])) return false;
+        return true;
+    };
+    switch (a->kind) {
+        case TY_INT:
+            return a->intstorage == b->intstorage && !a->ix == !b->ix &&
+                   (!a->ix || (a->ix->arr == b->ix->arr && a->ix->upto == b->ix->upto));
+        case TY_STRUCT:
+            return a->struc->st == b->struc->st && args(a->struc->args, b->struc->args);
+        case TY_ENUM:
+            return a->enu->en == b->enu->en && a->enu->varmode == b->enu->varmode &&
+                   args(a->enu->args, b->enu->args);
+        case TY_VARIANT:
+            return a->var->variant == b->var->variant && KindEq(a->var->adt, b->var->adt);
+        case TY_ARRAY: {
+            auto &x = *a->arr, &y = *b->arr;
+            if (x.akind != y.akind || !KindEq(x.sub, y.sub)) return false;
+            switch (x.akind) {
+                case A_FIXED: case A_LIMITED: return ArrSize(a->arr) == ArrSize(b->arr);
+                case A_VAR:     return LenStore(a->arr) == LenStore(b->arr);
+                default:        return true;
+            }
+        }
+        case TY_SLICE: case TY_RESOURCE: return KindEq(a->sub, b->sub);
+        case TY_REF:
+            return a->ref->optional == b->ref->optional &&
+                   a->ref->lenstorage == b->ref->lenstorage && a->ref->pool == b->ref->pool &&
+                   KindEq(a->ref->sub, b->ref->sub);
+        default: return TEq(a, b);
+    }
+}
+
+// Whether two values of a shape SameMangle takes for one hold, by value,
+// handles of one kind wherever they hold one (§3.12). Two instances of a
+// declaration whose arguments differ only in a `const` share a mangle, and
+// so a C type and a queue (QueueFor), unless their handles' kinds differ.
+inline bool CodeGen::SameHeldKinds(TypeExpr *a, TypeExpr *b) {
+    if (a == b || a->kind != b->kind) return true;
+    switch (a->kind) {
+        case TY_RESOURCE: return KindEq(a->sub, b->sub);
+        case TY_ARRAY: return SameHeldKinds(a->arr->sub, b->arr->sub);
+        case TY_STRUCT: case TY_ENUM: case TY_VARIANT: {
+            auto ra = FieldRuns(a), rb = FieldRuns(b);
+            for (size_t r = 0; r < ra.size() && r < rb.size(); r++) {
+                auto &fa = *ra[r].ftypes, &fb = *rb[r].ftypes;
+                if (&fa == &fb) continue;   // One instance.
+                for (size_t i = 0; i < fa.size() && i < fb.size(); i++)
+                    if (fa[i] && fb[i] && !SameHeldKinds(fa[i], fb[i])) return false;
+            }
+            return true;
+        }
+        default: return true;
     }
 }
 
@@ -407,7 +472,8 @@ inline string CodeGen::Mangle(TypeExpr *t) {
 // Whether two types are made of the parts RawMangle spells: TEq, but for
 // a nominal type its declaration and arguments rather than its instance,
 // so that instances whose arguments differ only in `const`, which shares a
-// layout, keep sharing their C types too.
+// layout, keep sharing their C types too, unless the handles they hold are
+// of two kinds (SameHeldKinds): a mangle names a queue as well.
 inline bool CodeGen::SameMangle(TypeExpr *a, TypeExpr *b) {
     if (a == b) return true;
     if (a->kind != b->kind) return false;
@@ -422,10 +488,11 @@ inline bool CodeGen::SameMangle(TypeExpr *a, TypeExpr *b) {
             return a->intstorage == b->intstorage && !a->ix == !b->ix &&
                    (!a->ix || (a->ix->arr == b->ix->arr && a->ix->upto == b->ix->upto));
         case TY_STRUCT:
-            return a->struc->st == b->struc->st && sameargs(a->struc->args, b->struc->args);
+            return a->struc->st == b->struc->st && sameargs(a->struc->args, b->struc->args) &&
+                   SameHeldKinds(a, b);
         case TY_ENUM:
             return a->enu->en == b->enu->en && a->enu->varmode == b->enu->varmode &&
-                   sameargs(a->enu->args, b->enu->args);
+                   sameargs(a->enu->args, b->enu->args) && SameHeldKinds(a, b);
         case TY_VARIANT:
             return a->var->variant == b->var->variant && SameMangle(a->var->adt, b->var->adt);
         case TY_ARRAY: {
@@ -438,6 +505,8 @@ inline bool CodeGen::SameMangle(TypeExpr *a, TypeExpr *b) {
             }
         }
         case TY_SLICE: return SameMangle(a->sub, b->sub);
+        // One C type, but a kind is a handle's identity (§3.12).
+        case TY_RESOURCE: return KindEq(a->sub, b->sub);
         case TY_REF:
             return a->ref->optional == b->ref->optional &&
                    a->ref->lenstorage == b->ref->lenstorage &&

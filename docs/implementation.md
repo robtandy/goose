@@ -5032,8 +5032,11 @@ Layout details needed for byte/C compatibility (`FixedSize`, `LayoutFields`,
   `{ tag; union }`; plain references as pointers; slices as
   `{ data, len }`; handles as `gs_res`, a one-byte-aligned `uint64_t`
   (`uint64_t` as a member), for every kind; and relative references as their
-  stored integer. A
-  wrapped array has one slot where `k` is 0, since C has no empty arrays.
+  stored integer. A kind changes no C type but is a handle's identity, so
+  `TEq` and the mangle, which queues and format overloads follow, compare
+  it as `TypeEq` does (`KindEq`), inside generic instances too
+  (`SameHeldKinds`). A wrapped array has one slot where `k` is 0, since C
+  has no empty arrays.
   That slot would take bytes the layout does not count, which is why spec
   §3.4 keeps such arrays out of fields and elements. An empty slice's
   `data` is null where the slice was zero-filled (`default<T>()`, a default
