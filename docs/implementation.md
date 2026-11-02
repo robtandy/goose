@@ -4416,7 +4416,10 @@ references whose new value points outside the activation). Tails inside
 loops or function-value bodies are skipped, and a callee that can
 `return ... from` the function disables the transform, as does a `defer`
 anywhere in the body, whose run after a tail call's return the loop could
-not reproduce. The recursion keeps
+not reproduce, or the declaration of an attachment (§11.4), whose end
+the loop would bring before the next round: a callee attaching the
+caller's arena by a handle the caller saved would find it released
+(`HasScopeEnd`). The recursion keeps
 each caller's locals and by-value parameters alive and unchanged under its
 call, whereas the loop reinitializes and rebinds them for the next
 iteration. So the loop cannot carry a reference that a tail call passes
