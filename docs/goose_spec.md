@@ -4626,7 +4626,10 @@ fn main() {
   its arrays; and `0 <= offset`, `0 <= count` and
   `offset + count * size <= sh.size(m)`, computed without overflow, so an
   empty view fits anywhere up to the size. A constant `offset` that is
-  not aligned is a compile error. A view's length is its `count` (§10.5).
+  not aligned is a compile error, an unsigned one or one an integer `as`
+  or `as!` converts (`12 as u64`) too: a conversion keeps the low bits an
+  alignment reads, or aborts (§6.3). A view's length is its `count`
+  (§10.5).
 * **Read-back.** An attachment's storage is every region of its arena, so
   it is a read-back candidate for every plain-data pointee (§9.5), as
   static data is for what a literal supplies: a view read out of a

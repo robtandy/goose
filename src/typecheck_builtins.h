@@ -721,8 +721,18 @@ inline Val TypeCheck::CheckSharedMember(Call *c, const BuiltinDef &d, vector<Nod
             CheckIntAny(args[3]);
             string part;
             auto align = WidestScalar(t, part);
-            if (off.ck == CK_INT && !off.uns && off.ival % align)
-                Error(args[2], cat("view<", TypeStr(t), "> at byte offset ", off.ival,
+            // A constant offset, unsigned above i64.max too, or an integer
+            // conversion of one (`12 as u64`): a conversion keeps the low
+            // bits an alignment of a scalar's size reads, or aborts in a
+            // debug build, so its view could never be made either.
+            auto conv = Is<AsCast>(args[2]);
+            auto known = off.ck == CK_INT || (conv && !conv->implicit && conv->constint);
+            auto bits = off.ck == CK_INT ? off.ival : known ? conv->constbits : 0;
+            auto uns = off.ck == CK_INT ? off.uns
+                                        : known && bits < 0 && IsUnsigned(conv->totype->intstorage);
+            if (known && (uint64_t)bits % (uint64_t)align)
+                Error(args[2], cat("view<", TypeStr(t), "> at byte offset ",
+                                   uns ? to_string((uint64_t)bits) : to_string(bits),
                                    ", which is not a multiple of ", align, ", the size of ", part,
                                    ": a file's format aligns its arrays, so the bytes would not be "
                                    "the values written (§11.4)"));
