@@ -4604,9 +4604,10 @@ fn main() {
   is not regular, a path holding a NUL byte, a file the program may not
   read or larger than 2^48 bytes (§10.4), and a mapping the system
   refuses fail; an empty file maps, with size 0. A regular file the system
-  cannot map is read into memory of the runtime's own, made read-only, and
-  is a mapping as any other. `sh.size(m)` is the file's size in bytes when
-  it was mapped.
+  cannot map, or reports no size for though it has bytes (as `/proc`'s
+  files), is read to its end into memory of the runtime's own, made
+  read-only, and is a mapping as any other. `sh.size(m)` is the file's size
+  in bytes when it was mapped.
 * **Views.** `view<T>(sh, m, offset, count)` is `count` `T`s from byte
   `offset` of the file `m` maps, read in place: a `const T[:]` (§3.10,
   §9.5), used as any slice and kept in `const` slots. It is rooted at the

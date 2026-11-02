@@ -6374,7 +6374,13 @@ saves before it, so every exit of the block (its end, `break`, `continue`,
 end where it would emit a `defer` declared there, in reverse order with the
 restores. A global's declaration has no end; it lasts the run. Every use of
 an attachment goes through `AttPtr`, the address of the location `GenLoc`
-gives it, so a captured or aliased one is the same record. A root reference
+gives it, so a captured or aliased one is the same record. That address,
+a handle argument (`PinnedRes`) and `map_file`'s path are each taken into
+a temporary where they are evaluated, and `why` is resolved before the
+call, whether or not the file maps: an argument that assigns the handle an
+earlier one named, or rebinds the reference the receiver is reached
+through, changes nothing the call took, as in any call
+(`shared/shared_argument_order.goose`). A root reference
 parameter's descriptor is taken apart for the callee (`FindSplitRootParams`)
 and may be resolved to a global (`FindKnownRootParams`); an attachment's is
 neither, since the runtime takes the record itself.
@@ -6592,18 +6598,27 @@ The JIT host does the same for main after a run.
 `CreateFileW` without `FILE_SHARE_WRITE` on Windows, where a mapped file
 can be neither written by another process nor truncated) and maps it
 read-only and shared (`mmap(PROT_READ, MAP_SHARED)`, the descriptor closed
-after; `CreateFileMappingW` and `MapViewOfFile`, the handles kept). A file
-system that will not map a regular file (`ENODEV`) has the file read into
-anonymous memory, made read-only; an empty file maps nothing, and its views
-point at a static byte. The system calls run before the lock is taken,
-which is only held to append the region. A refusal's reason is a message
-the program appends to `why` and frees (`gs_free_msg`). The mapping is
-registered for the fault handlers (`gs_mapchunks`, `runtime_impl.h`): chunks
-of entries that are never freed or moved, read by a handler without a lock.
-On a read past the end of a file another process truncated (SIGBUS,
-`EXCEPTION_IN_PAGE_ERROR`), or a write to a mapping (SIGSEGV, an access
-violation), the handler names the file and the byte, without stdio, and
-ends the process, as for a guard gap.
+after; `CreateFileMappingW` and `MapViewOfFile`, the handles kept). A
+regular file the system reports no size for, as `/proc`'s, and one it will
+not map (`ENODEV`, as sysfs's, which report 4096 bytes) are read to their
+end into anonymous memory, grown by doubling and made read-only
+(`gs_shm_copy_in`); a file that is empty that way too maps nothing, and its
+views point at a static byte. The system calls run before the lock is
+taken, which is only held to append the region. A refusal's reason is a
+message the program appends to `why` and frees (`gs_free_msg`). The
+mapping is registered for the fault handlers (`gs_mapchunks`,
+`runtime_impl.h`): chunks of entries that are never freed or moved, read
+by a handler without a lock, on any thread. An entry's base and length are
+words loaded with acquire and stored with release (`gs_word_load`,
+`gs_word_store`, lock-free and so safe in a handler); an entry is filled
+while its base is 0 and published by storing the base last, and cleared by
+storing 0 there first, before its file is unmapped. Its path is a copy in
+the entry, so no free of the region's own can race a handler, which reads
+the path only of the entry its fault lies in, a live mapping's that
+nothing writes. On a read past the end of a file another process truncated
+(SIGBUS, `EXCEPTION_IN_PAGE_ERROR`), or a write to a mapping (SIGSEGV, an
+access violation), the handler names the file and the byte, without stdio,
+and ends the process, as for a guard gap.
 
 A view's check is inline (`gs_shm_view`, `runtime.h`). An attachment keeps
 the region its last view or size looked up (`gs_att::res`, base and

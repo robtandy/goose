@@ -332,8 +332,8 @@ ending together serialize: 80 ms for 16 threads, 4.8 ms for one
 
 Any thread may map, but one thread mapping each file once gives one system call
 and one set of page tables, shared by every thread and kept across scans. A
-regular file that the system will not map (`/proc`, a file system without
-`mmap`) is read into anonymous memory, made read-only and handled as a mapping,
+regular file that the system will not map or gives no size (`/proc`, sysfs) is
+read to its end into anonymous memory, made read-only and handled as a mapping,
 as on a platform with no `mmap`. The runtime neither prefaults nor advises, as
 neither helped (`bench/shared_memory/mapbench.c`); advice is invisible, so it
 may come later. A read past the new end of a truncated file raises SIGBUS

@@ -113,7 +113,7 @@ Test fixtures are grouped by category; `run_tests.py` stays at the root of `test
 | `runtime/` | Runtime diagnostics, reusable slot and slice pool operations and array size checks, `runtime_trim_memory.c`, the native test of releasing unused data-stack memory, and `runtime_shared_lifecycle.c`, the native test of shared arenas. |
 | `storage/` | Relative references, pools and serialization. |
 | `threads/` | Workers, queues, shared globals, contained workers' aborts and `runtime_threads_lifecycle.c`, the native runtime lifecycle test. Imported helpers live in `threads/spawn/`. |
-| `shared/` | Shared memory (spec §11.4): views of every plain type of a mapped file, map_file's refusals and a rename while mapped (`shared_views`), `checkfree` loops over views (`shared_checkfree`), handles passed to 1, 2 and 16 workers as arguments and through a queue (`shared_workers`), every exit ending an attachment and a contained worker's abort ending its attachments, counted under `GS_SHARED_STATS` (`shared_release`), each runtime check of a view and an attachment in a contained worker (`shared_aborts`) and one on main's thread (`shared_view_bounds`). Each fixture writes the files it maps under a scratch directory of its own in the working directory and removes it. The rejections are `errors_tc/shared_*`. |
+| `shared/` | Shared memory (spec §11.4): views of every plain type of a mapped file, map_file's refusals and a rename while mapped (`shared_views`), `checkfree` loops over views (`shared_checkfree`), handles passed to 1, 2 and 16 workers as arguments and through a queue (`shared_workers`), every exit ending an attachment and a contained worker's abort ending its attachments, counted under `GS_SHARED_STATS` (`shared_release`), each runtime check of a view and an attachment in a contained worker (`shared_aborts`) and one on main's thread (`shared_view_bounds`), and the builtins' arguments taken in order, each once, `map_file`'s `why` on success too (`shared_argument_order`). Each fixture writes the files it maps under a scratch directory of its own in the working directory and removes it. The rejections are `errors_tc/shared_*`. |
 | `stdlib/` | Standard-library modules. |
 | `goose_in_goose/` | A Goose-written compiler used as one multi-file bootstrap regression: build and run three generations, check a C fixed point and repeated self-checks of the stage-2 compiler, and compare JIT/native self-compilation. |
 | `audio/` | The `audio` module: the offline PCM mixer advanced by exact frame counts; the rejection of bad rates, PCM, parameters and output; voice and sound capacity and stale handles; and the threading rejection. |
@@ -204,10 +204,15 @@ workers, and checks that every arena, region, path and hold is freed and
 every mapping unmapped, counting allocations and mappings as the threads
 test counts them. It also checks the aborts of a stale and a zero handle
 and of views that do not fit, in contained workers whose attachments the
-runtime then ends; the abort at the 5th region and at the 600th arena,
-with the limits lowered (`GS_SHM_MAX_REGIONS`, `GS_SHM_MAX_SERIAL`); and,
-in a child process on POSIX, the message and exit of a read past the end
-of a file truncated while mapped and of a write to a mapping. On Windows,
+runtime then ends; files the system reports no size for or will not map
+(on Linux, `/proc/version` and a sysfs file), read in whole; the abort at
+the 5th region and at the 600th arena, with the limits lowered
+(`GS_SHM_MAX_REGIONS`, `GS_SHM_MAX_SERIAL`); and, in a child process on
+POSIX, the message and exit of a read past the end of a file truncated
+while mapped, also while four workers map files and release arenas, adding
+and clearing the fault handlers' entries as the handler reads them (which
+ThreadSanitizer checks when the test is built with it), and of a write to
+a mapping. On Windows,
 where a mapped file cannot be truncated, it checks that the file cannot
 be opened to write instead. All three run in both
 profiles. The normal suite also checks
