@@ -28,8 +28,10 @@ extern fn gpu_release(g: resource<GpuBuffer>) -> bool;
 // those, and the binding refuses them, since it made them for another kind.
 extern fn gpu_draw_bytes(b: resource<ByteBuffer>) -> f64 = "gpu_draw";
 
-// A struct holding a handle crosses by value, as its packed C form.
-struct Named { tag: i32, buf: resource<ByteBuffer> }
+// A struct holding a handle crosses by value, as its packed C form. Its
+// fields sit where C places them: a handle after an i32, at offset 4, would
+// go in memory by x86-64 C compilers' rules but in registers from TinyCC.
+struct Named { tag: i64, buf: resource<ByteBuffer> }
 extern fn named_size(n: Named) -> i64;
 
 var kept: resource<ByteBuffer>;

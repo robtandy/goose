@@ -35,10 +35,11 @@ typedef struct { const uint8_t *data; int64_t len; } Bytes;
 typedef struct { const float *data; int64_t len; } Floats;
 typedef struct { const gs_res *data; int64_t len; } Handles;
 
-/* Named { tag: i32, buf: resource<ByteBuffer> }, by value: its packed C
-   form. */
+/* Named { tag: i64, buf: resource<ByteBuffer> }, by value: its packed C
+   form, 16 bytes with each field where C places it, which every C compiler
+   passes in two registers on x86-64 and arm64. */
 #pragma pack(push, 1)
-typedef struct { int32_t tag; gs_res buf; } Named;
+typedef struct { int64_t tag; gs_res buf; } Named;
 #pragma pack(pop)
 
 static gs_res make(uint64_t kind, int64_t size, size_t elem) {
