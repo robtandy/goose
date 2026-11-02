@@ -1171,20 +1171,20 @@ extern fn buffer_new(size: i64) -> resource<Buffer>;
 extern fn buffer_free(b: resource<Buffer>);
 ```
 
-* A handle is a fixed-size, flat value (§1.1). It is stored, copied, passed
-  and returned wherever such a value can be, workers and queues included
-  (§11.2).
-* Nothing else: no arithmetic, no comparison (§4.5), no conversion to or
-  from another type (`as` and `as!` included), no field access, indexing
+* **Uses.** A handle is a fixed-size, flat value (§1.1). It is stored,
+  copied, passed and returned wherever such a value can be, workers and
+  queues included (§11.2).
+* **Nothing else.** No arithmetic, no comparison (§4.5), no conversion to
+  or from another type (`as` and `as!` included), no field access, indexing
   or iteration, and no literal. So no code makes a handle its binding did
   not hand out.
-* Its default is the zero handle, all bits zero, which names nothing
-  (§4.2). A binding never hands out zero.
-* Its text is its type alone: `print` writes `resource<Buffer>` (§3.7).
-* It has no image: `to_bytes`, `bytes_of` and `from_bytes` reject a type
+* **Default.** The zero handle, all bits zero, which names nothing (§4.2).
+  A binding never hands out zero.
+* **Text.** Its type alone: `print` writes `resource<Buffer>` (§3.7).
+* **No image.** `to_bytes`, `bytes_of` and `from_bytes` reject a type
   holding one (§12).
-* It crosses to C as a `uint64_t` (§7.10). The bits are the binding's.
-* It owns nothing. Copying one copies the name only, and only the
+* **C.** It crosses as a `uint64_t` (§7.10). The bits are the binding's.
+* **No ownership.** Copying one copies the name only, and only the
   binding's API releases what it names.
 
 ---
