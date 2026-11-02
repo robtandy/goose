@@ -310,9 +310,10 @@ static void serials(uint8_t *args) {
    ranges of other places and sizes, as arenas made and released do: the
    lookup sees an entry whole or not at all, so it finds Y, and never a
    reused entry's old base with its new, longer length, which would cover
-   Y. The ranges are numbers only, as the lookup only compares them. */
-#define FAKE_Y ((uintptr_t)1 << 40)
-static int reuse_done;
+   Y. The ranges are numbers only, as the lookup only compares them. The
+   flag is a word of the runtime's own (gs_word_load), portable as it is. */
+#define FAKE_Y ((uintptr_t)1 << (sizeof(uintptr_t) * 4))
+static uintptr_t reuse_done;
 
 static void reuser(uint8_t *args) {
     (void)args;
@@ -324,7 +325,7 @@ static void reuser(uint8_t *args) {
         gs_shm_clear_fault(gs_shm_add_fault((const uint8_t *)(FAKE_Y << 1), 1 << 20, "Z"));
         gs_shm_unlock();
     }
-    __atomic_store_n(&reuse_done, 1, __ATOMIC_RELEASE);
+    gs_word_store(&reuse_done, 1);
 }
 
 static void lookups_during_reuse(void) {
@@ -339,7 +340,7 @@ static void lookups_during_reuse(void) {
     check(before < y, "the reused entry is looked at first");
     int64_t id = gs_thread_spawn(reuser, NULL, 0, 0);
     long looked = 0, wrong = 0;
-    while (!__atomic_load_n(&reuse_done, __ATOMIC_ACQUIRE)) {
+    while (!gs_word_load(&reuse_done)) {
         gs_mapsnap e;
         if (!gs_mapfault((const void *)(FAKE_Y + 100), &e) || e.base != FAKE_Y ||
             e.len != 4096 || strcmp(e.path, "Y"))
@@ -447,7 +448,7 @@ static void written(void) {
 /* Workers that make arenas, map files into them and release them, so
    adding and clearing the fault handlers' entries, while main's thread
    faults in a truncated file. */
-static int churned;
+static volatile long churned;
 
 static void churner(uint8_t *args) {
     (void)args;
@@ -457,13 +458,13 @@ static void churner(uint8_t *args) {
         map(&a, col);
         map(&a, col);
         gs_shm_detach(&a);
-        __atomic_fetch_add(&churned, 1, __ATOMIC_RELAXED);
+        counter_add(&churned, 1);
     }
 }
 
 static void truncated_churning(void) {
     for (int i = 0; i < 4; i++) gs_thread_spawn(churner, NULL, 0, 0);
-    while (__atomic_load_n(&churned, __ATOMIC_RELAXED) < 40) {}
+    while (counter_add(&churned, 0) < 40) {}
     truncated();
 }
 #endif
