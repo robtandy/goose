@@ -4576,9 +4576,10 @@ fn main() {
   (§11.1). None is a keyword. In a member call `sh.f(...)` the
   attachment's members come before the program's functions, as an
   array's do (§7.1). A function of the program named like one of them
-  takes the plain calls it matches, and the builtin only a call naming an
-  attachment first (`view`, `size`, `map_file`), or `attach` at an owning
-  declaration.
+  takes the plain calls it matches, and the builtin only a call whose first
+  argument is an attachment or a reference to one, however reached
+  (`view<i64>(holder.sh, m, 0, 1)`), for `view`, `size` and `map_file`,
+  or `attach` at an owning declaration.
 * **Attachments.** `shared` is a builtin root owner with no components
   (§3.4), an **attachment**. It is made only by an owning declaration,
   local or global: `shared {}` makes a new arena, and `attach(h)` another

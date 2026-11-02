@@ -79,14 +79,23 @@ inline Val TypeCheck::CheckNamedCall(Call *c, Ident *id, TypeExpr *expected) {
         // A user function set sharing a builtin's name (a `format`
         // overload, §3.7) takes the calls it matches; the builtin the rest.
         // A shared-memory builtin (§11.4) takes only what no function of
-        // a program's can be meant to: a call naming an attachment first,
-        // or attach at its owning declaration.
+        // a program's can be meant to: a call whose first argument is an
+        // attachment, or attach at its owning declaration. That argument's
+        // type is known once resolution has checked the arguments; where
+        // it is no attachment, resolution runs again to give its own
+        // error, or its last resort, as the builtin was never there.
         auto entryreach = reachable;
         auto nomatch = false;
-        auto falls = bd && !SharedBuiltinHidden(c, *bd);
+        auto byarg = bd && bd->kind != B_ATTACH && bd->recv == BR_SHARED;
+        auto falls = bd && (byarg || !SharedBuiltinHidden(c, *bd));
         auto v = ResolveCall(c, cands, env, id->name, nullptr, nopre,
                              entryreach, falls ? &nomatch : nullptr, expected);
         if (!nomatch) return v;
+        if (byarg && SharedBuiltinHidden(c, *bd)) {
+            reachable = entryreach;
+            return ResolveCall(c, cands, env, id->name, nullptr, nopre, entryreach, nullptr,
+                               expected);
+        }
         // Without a cast, an argument might have matched a function (JudgeCastAt).
         auto fallback = builtinfallback;
         fallback.insert(c->args.begin(), c->args.end());
@@ -106,13 +115,12 @@ inline Val TypeCheck::CheckNamedCall(Call *c, Ident *id, TypeExpr *expected) {
 
 // Whether a function of the program named like the shared-memory builtin
 // d (§11.4) hides it at c: unless c is attach at its owning declaration, or
-// names an attachment, or a reference to one, as its first argument.
+// its first argument, as resolution checked it, is an attachment or a
+// reference to one, however it is reached: a name, a field, a call.
 inline bool TypeCheck::SharedBuiltinHidden(Call *c, const BuiltinDef &d) {
     if (d.kind == B_ATTACH) return rootinit != c;
     if (d.recv != BR_SHARED) return false;
-    auto id = c->args.empty() ? nullptr : Is<Ident>(c->args[0]);
-    auto vd = id ? LookupVar(id->name, id->ns) : nullptr;
-    auto t = vd ? vd->type : nullptr;
+    auto t = c->args.empty() ? nullptr : c->args[0]->exprtype;
     if (t && t->kind == TY_REF) t = t->ref->sub;
     return !IsAttachment(t);
 }

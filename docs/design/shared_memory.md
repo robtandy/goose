@@ -83,7 +83,7 @@ Five names resolve as types (`resource`, `shared`, `mapping`, `frozen`,
 `dynamic_stack`) and six as builtins: `attach`, and `handle`, `map_file`,
 `size`, `view` and `freeze`, which take an attachment first and read as its
 members (§7.1). Like builtin functions they are not keywords: a program's
-function so named takes the plain calls it matches, and the builtin one naming
+function so named takes the plain calls it matches, and the builtin one taking
 an attachment first (section 12); `::name` reaches one past a namespace
 (§11.1). Every form parses today; `view<i64>(sh, …)` is a call, as `qget<T>()`
 is, since a member call takes no type arguments (Appendix D).
@@ -523,7 +523,7 @@ kind's namespace, so a binding's functions are its handles' methods (§11.1).
 **Built**: `shared`, `attach`, `handle`, both `map_file`s, `size` and mapping
 views, all of section 8 but dynamic stacks and `freeze`, on POSIX and Windows,
 with four changes. A program's function named like a builtin takes the plain
-calls it matches, and the builtin a call naming an attachment first: one
+calls it matches, and the builtin a call taking an attachment first: one
 applying only where nothing is so named hid views from a program with a `view`.
 C makes no runtime handle in storage it writes, or as an export's argument. An
 attachment keeps the region it looked up last, so the inline check reads its own
