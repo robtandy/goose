@@ -90,6 +90,7 @@ static int counted_munmap(void *base, size_t size) {
 #include "../../src/runtime/runtime.h"
 #include "../../src/runtime/runtime_impl.h"
 #include "../../src/runtime/runtime_threads.h"
+#include "../../src/runtime/runtime_shared.h"
 
 static gs_mutex test_mutex = GS_MUTEX_INIT;
 static gs_cond test_cond = GS_COND_INIT;

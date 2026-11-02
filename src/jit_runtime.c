@@ -18,6 +18,7 @@ static void gs_jit_exit(int code);
 #include "runtime/runtime.h"
 #include "runtime/runtime_impl.h"
 #include "runtime/runtime_threads.h"
+#include "runtime/runtime_shared.h"
 #include "runtime/runtime_ext.h"
 #include "runtime/runtime_os.h"
 
@@ -79,6 +80,8 @@ int goose_jit_run(int (*entry)(int, char **), void (*cleanup)(void),
     gs_jit_status = 0;
     if (!setjmp(gs_jit_jump)) gs_jit_status = entry(argc, argv);
     fflush(NULL);
+    /* The globals' attachments, and those an exit or abort left. */
+    gs_shm_release_held();
     gs_release_regions();
     cleanup();
 #ifdef _WIN32

@@ -1,9 +1,10 @@
 /* Goose runtime — what runtime.h declares and leaves to the runtime: aborts,
-   the data stack regions and the faults that reach them, slice pool
-   freelists, byte search, text forms and printing. Follows runtime.h, in a
-   standalone program's unit or in the runtime object (runtime.h has the
-   two); this, runtime_threads.h and runtime_os.h are the only parts of
-   either that include the platform's headers. */
+   the data stack regions and the faults that reach them (mapped files'
+   included), slice pool freelists, byte search, text forms and printing.
+   Follows runtime.h, in a standalone program's unit or in the runtime
+   object (runtime.h has the two); this, runtime_threads.h,
+   runtime_shared.h and runtime_os.h are the only parts of either that
+   include the platform's headers. */
 
 static const char *gs_errmsgs[] = {
     "limited array capacity exceeded",
@@ -270,6 +271,56 @@ static size_t gs_overflow_text(char *buf, const gs_region *r) {
     return (size_t)(p - buf);
 }
 
+/* The files mapped into shared arenas (runtime_shared.h), for the fault
+   handlers. A read past the end of a file truncated while it is mapped
+   faults (SIGBUS, EXCEPTION_IN_PAGE_ERROR), as one the disk cannot serve
+   does, and nothing recovers from that soundly: the fault can come inside
+   the runtime's own C. So the handler names the file and ends the process,
+   in a contained worker too (§11.4). A write fault in a mapping, which is
+   read-only, is a defect, reported the same way. Entries are added and
+   cleared under the shared registry's lock and read by a handler without
+   it, from any thread: they lie in chunks of GS_MAPCHUNK, allocated as
+   needed and never freed or moved, so whatever a handler reads is an
+   entry, and one is cleared before its file is unmapped. A thread faults
+   only in a mapping it can see, whose entry it can see too. */
+typedef struct {
+    const uint8_t *volatile base;
+    volatile size_t len;
+    const char *volatile path;
+} gs_mapent;
+#define GS_MAPCHUNK 1024
+#define GS_MAPCHUNKS 1024
+static gs_mapent *volatile gs_mapchunks[GS_MAPCHUNKS];
+static volatile int64_t gs_nmapents;   /* Entries used or cleared, in order. */
+
+/* The report of a fault at `at` in the mapping e, for one write from the
+   handler: what was mapped, and at which byte. Fits GS_MAPFAULT_TEXT. */
+#define GS_MAPFAULT_TEXT 4400
+static size_t gs_mapfault_text(char *buf, const gs_mapent *e, const uint8_t *at, int write) {
+    char *end = buf + GS_MAPFAULT_TEXT - 200;
+    char *p = gs_text(buf, "goose runtime error: ");
+    if (write) p = gs_text(p, "a write to ");
+    for (const char *s = e->path; *s && p < end; s++) *p++ = *s;
+    p = gs_text(p, write ? ", which is mapped read-only, faulted at byte "
+                         : " was truncated or could not be read while mapped: a read at byte ");
+    p = gs_dec(p, (uint64_t)(at - e->base));
+    p = gs_text(p, write ? ": a defect of the compiler or of C code\n" : " faulted\n");
+    return (size_t)(p - buf);
+}
+
+/* The mapping `at` lies in, or NULL. */
+static const gs_mapent *gs_mapfault(const void *at) {
+    int64_t n = gs_nmapents;
+    if (n > (int64_t)GS_MAPCHUNK * GS_MAPCHUNKS) n = (int64_t)GS_MAPCHUNK * GS_MAPCHUNKS;
+    for (int64_t i = 0; i < n; i++) {
+        gs_mapent *c = gs_mapchunks[i / GS_MAPCHUNK];
+        if (!c) continue;
+        gs_mapent *e = &c[i % GS_MAPCHUNK];
+        if (e->base && e->path && (uintptr_t)at - (uintptr_t)e->base < e->len) return e;
+    }
+    return NULL;
+}
+
 GS_API GS_NORETURN void gs_stack_overflow(const void *at) {
     for (long i = 0; i < gs_nregions; i++) {
         const gs_region *r = &gs_regions[i];
@@ -333,6 +384,20 @@ static LONG WINAPI gs_fault_filter(EXCEPTION_POINTERS *ep) {
         DWORD written;
         WriteFile(GetStdHandle(STD_ERROR_HANDLE), msg, sizeof(msg) - 1, &written, NULL);
         ExitProcess(1);
+    }
+    /* A read past a mapped file's end, or one the disk could not serve
+       (EXCEPTION_IN_PAGE_ERROR), or a write to the mapping. */
+    if (code == EXCEPTION_IN_PAGE_ERROR || code == STATUS_ACCESS_VIOLATION) {
+        const uint8_t *at = (const uint8_t *)ep->ExceptionRecord->ExceptionInformation[1];
+        const gs_mapent *m = gs_mapfault(at);
+        if (m) {
+            char msg[GS_MAPFAULT_TEXT];
+            DWORD written;
+            WriteFile(GetStdHandle(STD_ERROR_HANDLE), msg,
+                      (DWORD)gs_mapfault_text(msg, m, at, code == STATUS_ACCESS_VIOLATION),
+                      &written, NULL);
+            ExitProcess(1);
+        }
     }
     if (code != STATUS_ACCESS_VIOLATION)
         return EXCEPTION_CONTINUE_SEARCH;
@@ -464,6 +529,14 @@ static void gs_fault_handler(int sig, siginfo_t *info, void *ctx) {
     if ((uintptr_t)hit - gs_native_lo < gs_native_hi - gs_native_lo) {
         static const char msg[] = "goose runtime error: native call stack overflow\n";
         ssize_t w = write(2, msg, sizeof(msg) - 1);
+        (void)w;
+        _exit(1);
+    }
+    /* A read past a mapped file's end (SIGBUS), or a write to the mapping. */
+    const gs_mapent *m = gs_mapfault(hit);
+    if (m) {
+        char msg[GS_MAPFAULT_TEXT];
+        ssize_t w = write(2, msg, gs_mapfault_text(msg, m, hit, sig == SIGSEGV));
         (void)w;
         _exit(1);
     }

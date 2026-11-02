@@ -74,6 +74,7 @@ add_executable(goose
     src/runtime/runtime.h
     src/runtime/runtime_impl.h
     src/runtime/runtime_threads.h
+    src/runtime/runtime_shared.h
     src/runtime/runtime_ext.h
     src/runtime/runtime_os.h
     src/runtime/goose.h
