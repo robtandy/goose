@@ -271,52 +271,84 @@ static size_t gs_overflow_text(char *buf, const gs_region *r) {
     return (size_t)(p - buf);
 }
 
+/* Words that threads share without a lock, read from a fault handler too:
+   loads that acquire and stores that release, lock-free, which a signal
+   handler may use. */
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+static uintptr_t gs_word_load(uintptr_t *p) {
+    return (uintptr_t)_InterlockedCompareExchangePointer((void *volatile *)p, NULL, NULL);
+}
+static void gs_word_store(uintptr_t *p, uintptr_t v) {
+    _InterlockedExchangePointer((void *volatile *)p, (void *)v);
+}
+#else
+#ifndef __ATOMIC_ACQUIRE
+#define __ATOMIC_ACQUIRE 2
+#endif
+#ifndef __ATOMIC_RELEASE
+#define __ATOMIC_RELEASE 3
+#endif
+static uintptr_t gs_word_load(uintptr_t *p) {
+    uintptr_t v;
+    __atomic_load(p, &v, __ATOMIC_ACQUIRE);
+    return v;
+}
+static void gs_word_store(uintptr_t *p, uintptr_t v) { __atomic_store(p, &v, __ATOMIC_RELEASE); }
+#endif
+
 /* The files mapped into shared arenas (runtime_shared.h), for the fault
    handlers. A read past the end of a file truncated while it is mapped
    faults (SIGBUS, EXCEPTION_IN_PAGE_ERROR), as one the disk cannot serve
    does, and nothing recovers from that soundly: the fault can come inside
    the runtime's own C. So the handler names the file and ends the process,
    in a contained worker too (§11.4). A write fault in a mapping, which is
-   read-only, is a defect, reported the same way. Entries are added and
-   cleared under the shared registry's lock and read by a handler without
-   it, from any thread: they lie in chunks of GS_MAPCHUNK, allocated as
-   needed and never freed or moved, so whatever a handler reads is an
-   entry, and one is cleared before its file is unmapped. A thread faults
-   only in a mapping it can see, whose entry it can see too. */
-typedef struct {
-    const uint8_t *volatile base;
-    volatile size_t len;
-    const char *volatile path;
-} gs_mapent;
+   read-only, is a defect, reported the same way.
+
+   Entries are added and cleared under the shared registry's lock and read
+   by a handler on any thread without it. They lie in chunks of GS_MAPCHUNK,
+   allocated as needed and never freed or moved, so whatever a handler reads
+   is an entry. Its base and length are words (gs_word_load): an entry is
+   filled while its base is 0 and published by storing the base last, and
+   cleared by storing 0 there first, before its file is unmapped. The path
+   is a copy in the entry, so that no free of the region's own can race a
+   handler; a handler reads it only for the entry its fault lies in, which
+   is a mapping its thread can see, live, whose entry nothing writes. */
 #define GS_MAPCHUNK 1024
 #define GS_MAPCHUNKS 1024
-static gs_mapent *volatile gs_mapchunks[GS_MAPCHUNKS];
-static volatile int64_t gs_nmapents;   /* Entries used or cleared, in order. */
+#define GS_MAPPATH 1008
+typedef struct {
+    uintptr_t base;             /* 0 for a free entry. */
+    uintptr_t len;
+    char path[GS_MAPPATH];      /* Written only while the entry is free. */
+} gs_mapent;
+static uintptr_t gs_mapchunks[GS_MAPCHUNKS];    /* gs_mapent *, as words. */
+static uintptr_t gs_nmapents;                   /* Entries used or freed, in order. */
 
 /* The report of a fault at `at` in the mapping e, for one write from the
    handler: what was mapped, and at which byte. Fits GS_MAPFAULT_TEXT. */
-#define GS_MAPFAULT_TEXT 4400
-static size_t gs_mapfault_text(char *buf, const gs_mapent *e, const uint8_t *at, int write) {
-    char *end = buf + GS_MAPFAULT_TEXT - 200;
+#define GS_MAPFAULT_TEXT (GS_MAPPATH + 200)
+static size_t gs_mapfault_text(char *buf, gs_mapent *e, const uint8_t *at, int write) {
     char *p = gs_text(buf, "goose runtime error: ");
     if (write) p = gs_text(p, "a write to ");
-    for (const char *s = e->path; *s && p < end; s++) *p++ = *s;
+    for (int i = 0; i < GS_MAPPATH && e->path[i]; i++) *p++ = e->path[i];
     p = gs_text(p, write ? ", which is mapped read-only, faulted at byte "
                          : " was truncated or could not be read while mapped: a read at byte ");
-    p = gs_dec(p, (uint64_t)(at - e->base));
+    p = gs_dec(p, (uint64_t)((uintptr_t)at - gs_word_load(&e->base)));
     p = gs_text(p, write ? ": a defect of the compiler or of C code\n" : " faulted\n");
     return (size_t)(p - buf);
 }
 
 /* The mapping `at` lies in, or NULL. */
-static const gs_mapent *gs_mapfault(const void *at) {
-    int64_t n = gs_nmapents;
-    if (n > (int64_t)GS_MAPCHUNK * GS_MAPCHUNKS) n = (int64_t)GS_MAPCHUNK * GS_MAPCHUNKS;
-    for (int64_t i = 0; i < n; i++) {
-        gs_mapent *c = gs_mapchunks[i / GS_MAPCHUNK];
+static gs_mapent *gs_mapfault(const void *at) {
+    uintptr_t n = gs_word_load(&gs_nmapents);
+    if (n > (uintptr_t)GS_MAPCHUNK * GS_MAPCHUNKS) n = (uintptr_t)GS_MAPCHUNK * GS_MAPCHUNKS;
+    for (uintptr_t i = 0; i < n; i++) {
+        gs_mapent *c = (gs_mapent *)gs_word_load(&gs_mapchunks[i / GS_MAPCHUNK]);
         if (!c) continue;
         gs_mapent *e = &c[i % GS_MAPCHUNK];
-        if (e->base && e->path && (uintptr_t)at - (uintptr_t)e->base < e->len) return e;
+        uintptr_t base = gs_word_load(&e->base);
+        if (base && (uintptr_t)at - base < gs_word_load(&e->len)) return e;
     }
     return NULL;
 }
@@ -389,7 +421,7 @@ static LONG WINAPI gs_fault_filter(EXCEPTION_POINTERS *ep) {
        (EXCEPTION_IN_PAGE_ERROR), or a write to the mapping. */
     if (code == EXCEPTION_IN_PAGE_ERROR || code == STATUS_ACCESS_VIOLATION) {
         const uint8_t *at = (const uint8_t *)ep->ExceptionRecord->ExceptionInformation[1];
-        const gs_mapent *m = gs_mapfault(at);
+        gs_mapent *m = gs_mapfault(at);
         if (m) {
             char msg[GS_MAPFAULT_TEXT];
             DWORD written;
@@ -533,7 +565,7 @@ static void gs_fault_handler(int sig, siginfo_t *info, void *ctx) {
         _exit(1);
     }
     /* A read past a mapped file's end (SIGBUS), or a write to the mapping. */
-    const gs_mapent *m = gs_mapfault(hit);
+    gs_mapent *m = gs_mapfault(hit);
     if (m) {
         char msg[GS_MAPFAULT_TEXT];
         ssize_t w = write(2, msg, gs_mapfault_text(msg, m, hit, sig == SIGSEGV));

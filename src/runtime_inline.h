@@ -1731,54 +1731,88 @@ static size_t gs_overflow_text(char *buf, const gs_region *r) {
 }
 
 )GSRT"
+R"GSRT(/* Words that threads share without a lock, read from a fault handler too:
+   loads that acquire and stores that release, lock-free, which a signal
+   handler may use. */
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+static uintptr_t gs_word_load(uintptr_t *p) {
+    return (uintptr_t)_InterlockedCompareExchangePointer((void *volatile *)p, NULL, NULL);
+}
+static void gs_word_store(uintptr_t *p, uintptr_t v) {
+    _InterlockedExchangePointer((void *volatile *)p, (void *)v);
+}
+#else
+#ifndef __ATOMIC_ACQUIRE
+#define __ATOMIC_ACQUIRE 2
+#endif
+#ifndef __ATOMIC_RELEASE
+#define __ATOMIC_RELEASE 3
+#endif
+static uintptr_t gs_word_load(uintptr_t *p) {
+    uintptr_t v;
+    __atomic_load(p, &v, __ATOMIC_ACQUIRE);
+    return v;
+}
+static void gs_word_store(uintptr_t *p, uintptr_t v) { __atomic_store(p, &v, __ATOMIC_RELEASE); }
+#endif
+
+)GSRT"
 R"GSRT(/* The files mapped into shared arenas (runtime_shared.h), for the fault
    handlers. A read past the end of a file truncated while it is mapped
    faults (SIGBUS, EXCEPTION_IN_PAGE_ERROR), as one the disk cannot serve
    does, and nothing recovers from that soundly: the fault can come inside
    the runtime's own C. So the handler names the file and ends the process,
    in a contained worker too (§11.4). A write fault in a mapping, which is
-   read-only, is a defect, reported the same way. Entries are added and
-   cleared under the shared registry's lock and read by a handler without
-   it, from any thread: they lie in chunks of GS_MAPCHUNK, allocated as
-   needed and never freed or moved, so whatever a handler reads is an
-   entry, and one is cleared before its file is unmapped. A thread faults
-   only in a mapping it can see, whose entry it can see too. */
-typedef struct {
-    const uint8_t *volatile base;
-    volatile size_t len;
-    const char *volatile path;
-} gs_mapent;
+   read-only, is a defect, reported the same way.
+
+)GSRT"
+R"GSRT(   Entries are added and cleared under the shared registry's lock and read
+   by a handler on any thread without it. They lie in chunks of GS_MAPCHUNK,
+   allocated as needed and never freed or moved, so whatever a handler reads
+   is an entry. Its base and length are words (gs_word_load): an entry is
+   filled while its base is 0 and published by storing the base last, and
+   cleared by storing 0 there first, before its file is unmapped. The path
+   is a copy in the entry, so that no free of the region's own can race a
+   handler; a handler reads it only for the entry its fault lies in, which
+   is a mapping its thread can see, live, whose entry nothing writes. */
 #define GS_MAPCHUNK 1024
 #define GS_MAPCHUNKS 1024
-static gs_mapent *volatile gs_mapchunks[GS_MAPCHUNKS];
-static volatile int64_t gs_nmapents;   /* Entries used or cleared, in order. */
+#define GS_MAPPATH 1008
+typedef struct {
+    uintptr_t base;             /* 0 for a free entry. */
+    uintptr_t len;
+    char path[GS_MAPPATH];      /* Written only while the entry is free. */
+} gs_mapent;
+static uintptr_t gs_mapchunks[GS_MAPCHUNKS];    /* gs_mapent *, as words. */
+static uintptr_t gs_nmapents;                   /* Entries used or freed, in order. */
 
 )GSRT"
 R"GSRT(/* The report of a fault at `at` in the mapping e, for one write from the
    handler: what was mapped, and at which byte. Fits GS_MAPFAULT_TEXT. */
-#define GS_MAPFAULT_TEXT 4400
-static size_t gs_mapfault_text(char *buf, const gs_mapent *e, const uint8_t *at, int write) {
-    char *end = buf + GS_MAPFAULT_TEXT - 200;
+#define GS_MAPFAULT_TEXT (GS_MAPPATH + 200)
+static size_t gs_mapfault_text(char *buf, gs_mapent *e, const uint8_t *at, int write) {
     char *p = gs_text(buf, "goose runtime error: ");
     if (write) p = gs_text(p, "a write to ");
-    for (const char *s = e->path; *s && p < end; s++) *p++ = *s;
+    for (int i = 0; i < GS_MAPPATH && e->path[i]; i++) *p++ = e->path[i];
     p = gs_text(p, write ? ", which is mapped read-only, faulted at byte "
                          : " was truncated or could not be read while mapped: a read at byte ");
-    p = gs_dec(p, (uint64_t)(at - e->base));
+    p = gs_dec(p, (uint64_t)((uintptr_t)at - gs_word_load(&e->base)));
     p = gs_text(p, write ? ": a defect of the compiler or of C code\n" : " faulted\n");
     return (size_t)(p - buf);
 }
 
 )GSRT"
 R"GSRT(/* The mapping `at` lies in, or NULL. */
-static const gs_mapent *gs_mapfault(const void *at) {
-    int64_t n = gs_nmapents;
-    if (n > (int64_t)GS_MAPCHUNK * GS_MAPCHUNKS) n = (int64_t)GS_MAPCHUNK * GS_MAPCHUNKS;
-    for (int64_t i = 0; i < n; i++) {
-        gs_mapent *c = gs_mapchunks[i / GS_MAPCHUNK];
+static gs_mapent *gs_mapfault(const void *at) {
+    uintptr_t n = gs_word_load(&gs_nmapents);
+    if (n > (uintptr_t)GS_MAPCHUNK * GS_MAPCHUNKS) n = (uintptr_t)GS_MAPCHUNK * GS_MAPCHUNKS;
+    for (uintptr_t i = 0; i < n; i++) {
+        gs_mapent *c = (gs_mapent *)gs_word_load(&gs_mapchunks[i / GS_MAPCHUNK]);
         if (!c) continue;
         gs_mapent *e = &c[i % GS_MAPCHUNK];
-        if (e->base && e->path && (uintptr_t)at - (uintptr_t)e->base < e->len) return e;
+        uintptr_t base = gs_word_load(&e->base);
+        if (base && (uintptr_t)at - base < gs_word_load(&e->len)) return e;
     }
     return NULL;
 }
@@ -1859,7 +1893,7 @@ R"GSRT(static LONG WINAPI gs_fault_filter(EXCEPTION_POINTERS *ep) {
        (EXCEPTION_IN_PAGE_ERROR), or a write to the mapping. */
     if (code == EXCEPTION_IN_PAGE_ERROR || code == STATUS_ACCESS_VIOLATION) {
         const uint8_t *at = (const uint8_t *)ep->ExceptionRecord->ExceptionInformation[1];
-        const gs_mapent *m = gs_mapfault(at);
+        gs_mapent *m = gs_mapfault(at);
         if (m) {
             char msg[GS_MAPFAULT_TEXT];
             DWORD written;
@@ -2015,7 +2049,7 @@ R"GSRT(static void gs_fault_handler(int sig, siginfo_t *info, void *ctx) {
         _exit(1);
     }
     /* A read past a mapped file's end (SIGBUS), or a write to the mapping. */
-    const gs_mapent *m = gs_mapfault(hit);
+    gs_mapent *m = gs_mapfault(hit);
     if (m) {
         char msg[GS_MAPFAULT_TEXT];
         ssize_t w = write(2, msg, gs_mapfault_text(msg, m, hit, sig == SIGSEGV));
@@ -3960,6 +3994,8 @@ R"GSRT(/* The most serials and regions a handle's bits hold: the 2^40-th arena a
 #ifndef GS_SHM_MAX_REGIONS
 #define GS_SHM_MAX_REGIONS ((1ll << GS_RES_REGION_BITS) - 1)
 #endif
+/* The size past which no value lies (§10.4). */
+#define GS_SHM_MAX_FILE ((int64_t)1 << 48)
 
 )GSRT"
 R"GSRT(#if GS_NEED_THREADS
@@ -4045,34 +4081,42 @@ R"GSRT(static void gs_shm_hold(struct gs_arena *a) {
 
 )GSRT"
 R"GSRT(/* The fault handlers' entry for a mapping (runtime_impl.h), under the lock:
-   a cleared one again, else a new one. */
+   a cleared one again, else a new one, filled while its base is 0 and
+   published by its base. A path too long for it ends in "...". */
 static int64_t gs_shm_add_fault(const uint8_t *base, size_t len, const char *path) {
-    int64_t i = 0, n = gs_nmapents;
+    uintptr_t i = 0, n = gs_word_load(&gs_nmapents);
     for (; i < n; i++) {
-        gs_mapent *c = gs_mapchunks[i / GS_MAPCHUNK];
-        if (!c[i % GS_MAPCHUNK].base) break;
+        gs_mapent *c = (gs_mapent *)gs_word_load(&gs_mapchunks[i / GS_MAPCHUNK]);
+        if (!gs_word_load(&c[i % GS_MAPCHUNK].base)) break;
     }
-    if (i >= (int64_t)GS_MAPCHUNK * GS_MAPCHUNKS) return -1;
-    if (!gs_mapchunks[i / GS_MAPCHUNK]) {
-        gs_mapent *c = (gs_mapent *)calloc(GS_MAPCHUNK, sizeof(gs_mapent));
+    if (i >= (uintptr_t)GS_MAPCHUNK * GS_MAPCHUNKS) return -1;
+    gs_mapent *c = (gs_mapent *)gs_word_load(&gs_mapchunks[i / GS_MAPCHUNK]);
+    if (!c) {
+        c = (gs_mapent *)calloc(GS_MAPCHUNK, sizeof(gs_mapent));
         if (!c) return -1;
-        gs_mapchunks[i / GS_MAPCHUNK] = c;
+        gs_word_store(&gs_mapchunks[i / GS_MAPCHUNK], (uintptr_t)c);
     }
-    gs_mapent *e = &gs_mapchunks[i / GS_MAPCHUNK][i % GS_MAPCHUNK];
-    e->path = path;
-    e->len = len;
-    e->base = base;
-    if (i == n) gs_nmapents = n + 1;
-    return i;
+    gs_mapent *e = &c[i % GS_MAPCHUNK];
+    size_t k = strlen(path);
+    if (k < GS_MAPPATH) {
+        memcpy(e->path, path, k + 1);
+    } else {
+        memcpy(e->path, path, GS_MAPPATH - 4);
+        memcpy(e->path + GS_MAPPATH - 4, "...", 4);
+    }
+    gs_word_store(&e->len, (uintptr_t)len);
+    gs_word_store(&e->base, (uintptr_t)base);
+    if (i == n) gs_word_store(&gs_nmapents, n + 1);
+    return (int64_t)i;
 }
 
 )GSRT"
-R"GSRT(static void gs_shm_clear_fault(int64_t i) {
+R"GSRT(/* Before the mapping goes: no handler matches the entry once its base is 0. */
+static void gs_shm_clear_fault(int64_t i) {
     if (i < 0) return;
-    gs_mapent *e = &gs_mapchunks[i / GS_MAPCHUNK][i % GS_MAPCHUNK];
-    e->base = NULL;
-    e->len = 0;
-    e->path = NULL;
+    gs_mapent *c = (gs_mapent *)gs_word_load(&gs_mapchunks[i / GS_MAPCHUNK]);
+    gs_word_store(&c[i % GS_MAPCHUNK].base, 0);
+    gs_word_store(&c[i % GS_MAPCHUNK].len, 0);
 }
 
 )GSRT"
@@ -4230,21 +4274,56 @@ static const char *gs_shm_winerror(DWORD e, char *buf, size_t n) {
 #endif
 
 )GSRT"
-R"GSRT(/* Reads the n bytes a file says it holds into memory of the runtime's own,
-   made read-only, where the system will not map it (§11.4): its region's
-   memory, or 0. Fewer bytes than that are what the file held. */
+R"GSRT(/* Reads a file to its end into memory of the runtime's own, made read-only
+   (§11.4), where the system will not map it, or reports no size for it
+   though it has bytes, as /proc's and sysfs's files do: its region, or 0
+   with errno set. A size the system reports (`hint`) is where the memory
+   starts, and the end of the file is where the bytes do: a sysfs file says
+   4096 and holds what it holds. A file that is empty is the empty region,
+   and takes no memory. */
 #ifndef _WIN32
-static int gs_shm_copy_in(int fd, int64_t n, gs_shm_region *r) {
+static int gs_shm_copy_in(int fd, int64_t hint, gs_shm_region *r) {
+    uint8_t first[4096];
+    ssize_t k;
+    while ((k = read(fd, first, sizeof first)) < 0 && errno == EINTR) {}
+    if (k < 0) return 0;
+    if (k == 0) {
+        r->base = gs_shm_empty;
+        r->len = 0;
+        return 1;
+    }
     size_t page = gs_page_size ? gs_page_size : 4096;
-    size_t cap = ((size_t)n + page - 1) / page * page;
-    void *p = mmap(NULL, cap, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (p == MAP_FAILED) return 0;
-    int64_t got = 0;
-    while (got < n) {
-        ssize_t k = read(fd, (uint8_t *)p + got, (size_t)(n - got));
+    size_t cap = (size_t)(hint > k ? hint : k);
+    cap = (cap + page - 1) / page * page;
+    uint8_t *p = (uint8_t *)mmap(NULL, cap, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS,
+                                 -1, 0);
+    if (p == (uint8_t *)MAP_FAILED) return 0;
+    memcpy(p, first, (size_t)k);
+    int64_t got = k;
+    for (;;) {
+        if ((size_t)got == cap) {
+            if (got >= GS_SHM_MAX_FILE) {
+                munmap(p, cap);
+                errno = EFBIG;
+                return 0;
+            }
+            uint8_t *q = (uint8_t *)mmap(NULL, cap * 2, PROT_READ | PROT_WRITE,
+                                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            if (q == (uint8_t *)MAP_FAILED) {
+                munmap(p, cap);
+                return 0;
+            }
+            memcpy(q, p, cap);
+            munmap(p, cap);
+            p = q;
+            cap *= 2;
+        }
+        k = read(fd, p + got, cap - (size_t)got);
         if (k < 0 && errno == EINTR) continue;
         if (k < 0) {
+            int e = errno;
             munmap(p, cap);
+            errno = e;
             return 0;
         }
         if (k == 0) break;
@@ -4253,7 +4332,7 @@ static int gs_shm_copy_in(int fd, int64_t n, gs_shm_region *r) {
     mprotect(p, cap, PROT_READ);
     r->mem = p;
     r->memlen = cap;
-    r->base = got ? (const uint8_t *)p : gs_shm_empty;
+    r->base = p;
     r->len = got;
     r->copied = 1;
     return 1;
@@ -4271,10 +4350,6 @@ static void gs_shm_thousands(char *buf, int64_t n) {
     }
     buf[j] = 0;
 }
-
-)GSRT"
-R"GSRT(/* The size past which no value lies (§10.4). */
-#define GS_SHM_MAX_FILE ((int64_t)1 << 48)
 
 )GSRT"
 R"GSRT(GS_API uint8_t gs_shm_map_file(gs_att *att, const uint8_t *path, int64_t pathlen, gs_res *m,
@@ -4366,7 +4441,8 @@ R"GSRT(GS_API uint8_t gs_shm_map_file(gs_att *att, const uint8_t *path, int64_t 
     } else if ((int64_t)st.st_size > GS_SHM_MAX_FILE) {
         what = "larger than 2^48 bytes, the most any value holds";
     } else if (st.st_size == 0) {
-        r.base = gs_shm_empty;
+        /* Empty, or a file the system makes up as it is read (/proc). */
+        if (!gs_shm_copy_in(fd, 0, &r)) what = strerror(errno);
     } else {
         void *p = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_SHARED, fd, 0);
         if (p != MAP_FAILED) {
@@ -4375,7 +4451,7 @@ R"GSRT(GS_API uint8_t gs_shm_map_file(gs_att *att, const uint8_t *path, int64_t 
             r.base = (const uint8_t *)p;
             r.len = (int64_t)st.st_size;
         } else if (errno == ENODEV || errno == EINVAL) {
-            /* A file system without mmap (/proc, some network ones). */
+            /* A file system without mmap (sysfs, some network ones). */
             if (!gs_shm_copy_in(fd, (int64_t)st.st_size, &r)) what = strerror(errno);
         } else {
             what = strerror(errno);

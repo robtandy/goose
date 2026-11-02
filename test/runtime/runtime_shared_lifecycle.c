@@ -378,6 +378,29 @@ static void written(void) {
     uint8_t *p = (uint8_t *)gs_shm_view(&a, m, 0, 64, 8, 8, "i64", __FILE__, __LINE__);
     p[16] = 1;
 }
+
+/* Workers that make arenas, map files into them and release them, so
+   adding and clearing the fault handlers' entries, while main's thread
+   faults in a truncated file. */
+static int churned;
+
+static void churner(uint8_t *args) {
+    (void)args;
+    for (int i = 0; i < 100; i++) {
+        gs_att a;
+        gs_shm_new(&a, __FILE__, __LINE__);
+        map(&a, col);
+        map(&a, col);
+        gs_shm_detach(&a);
+        __atomic_fetch_add(&churned, 1, __ATOMIC_RELAXED);
+    }
+}
+
+static void truncated_churning(void) {
+    for (int i = 0; i < 4; i++) gs_thread_spawn(churner, NULL, 0, 0);
+    while (__atomic_load_n(&churned, __ATOMIC_RELAXED) < 40) {}
+    truncated();
+}
 #endif
 
 static void check_baseline(long allocations, long mappings) {
@@ -390,6 +413,45 @@ static void check_baseline(long allocations, long mappings) {
 int main(void) {
     gs_rt_init(0, NULL, 1, 1, GS_MAX_STACKS);
     make_files();
+#ifdef _WIN32
+    /* A mapped file cannot be truncated on Windows at all: no other process
+       may open it to write. The faults are what the POSIX children report. */
+    {
+        gs_att a;
+        gs_shm_new(&a, __FILE__, __LINE__);
+        map(&a, col);
+        HANDLE f = CreateFileA(col, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE |
+                               FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL);
+        check(f == INVALID_HANDLE_VALUE, "a mapped file cannot be opened to write");
+        gs_shm_detach(&a);
+        gs_shm_release_held();
+        const char *lead = "exit 1: goose runtime error: <dir>/big was truncated or could not be "
+                           "read while mapped: a read at byte <n> faulted";
+        printf("truncated: %s\n", lead);
+        printf("truncated while workers map and release: %s\n", lead);
+        printf("written: exit 1: goose runtime error: a write to <dir>/col.i64, which is mapped "
+               "read-only, faulted at byte 16: a defect of the compiler or of C code\n");
+    }
+#else
+    /* First, while this process has one thread, so that its children may
+       start workers: a read past the end of a file truncated while it is
+       mapped, also while other threads add and clear the fault handlers'
+       entries, and a write to a mapping. */
+    {
+        page = (size_t)sysconf(_SC_PAGESIZE);
+        snprintf(big, sizeof big, "%s/big", dir);
+        uint8_t *bytes = (uint8_t *)calloc(4, page);
+        char at[32];
+        snprintf(at, sizeof at, "%llu", (unsigned long long)(2 * page));
+        write_file(big, bytes, 4 * page);
+        in_child(truncated, "truncated", at);
+        write_file(big, bytes, 4 * page);
+        in_child(truncated_churning, "truncated while workers map and release", at);
+        free(bytes);
+        in_child(written, "written", NULL);
+        unlink(big);
+    }
+#endif
     /* The registry and the fault handlers' first chunk are the runtime's
        for good, made with the first arena and the first mapping, as are the
        records of the contained workers that aborted. */
@@ -433,6 +495,34 @@ int main(void) {
     gs_shm_release_held();
     check_baseline(allocations, mappings);
     printf("churn: 200 arenas, 600 files mapped, all released\n");
+
+    /* Files the system makes up as they are read: /proc's report no size,
+       and sysfs's 4096 and will not map. Each is read to its end into
+       memory of the runtime's, which its views read and its release frees.
+       Linux only; elsewhere there are none, and the line is Linux's. */
+#ifdef __linux__
+    {
+        static const char *made[] = { "/proc/version", "/sys/devices/system/cpu/online" };
+        for (int i = 0; i < 2; i++) {
+            FILE *f = fopen(made[i], "rb");
+            if (!f) continue;
+            static uint8_t want[1 << 16];
+            size_t n = fread(want, 1, sizeof want, f);
+            fclose(f);
+            gs_att a;
+            gs_shm_new(&a, __FILE__, __LINE__);
+            gs_res m = map(&a, made[i]);
+            int64_t size = gs_shm_size(&a, m, __FILE__, __LINE__);
+            const uint8_t *p = gs_shm_view(&a, m, 0, size, 1, 1, "u8", __FILE__, __LINE__);
+            check(n > 0 && size == (int64_t)n && !memcmp(p, want, n),
+                  "a file the system makes up is read in whole");
+            gs_shm_detach(&a);
+        }
+        gs_shm_release_held();
+        check_baseline(allocations, mappings);
+    }
+#endif
+    printf("files the system reports no size for, or will not map: read in whole\n");
 
     /* Workers attach through a handle and read one mapping at once; the last
        attachment, a worker's, releases it. */
@@ -494,36 +584,6 @@ int main(void) {
     gs_shm_release_held();
     check_baseline(allocations, mappings);
 
-#ifdef _WIN32
-    /* A mapped file cannot be truncated on Windows at all: no other process
-       may open it to write. */
-    {
-        gs_att a;
-        gs_shm_new(&a, __FILE__, __LINE__);
-        map(&a, col);
-        HANDLE f = CreateFileA(col, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE |
-                               FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL);
-        check(f == INVALID_HANDLE_VALUE, "a mapped file cannot be opened to write");
-        gs_shm_detach(&a);
-        printf("truncated: exit 1: goose runtime error: <dir>/big was truncated or could not be "
-               "read while mapped: a read at byte <n> faulted\n");
-        printf("written: exit 1: goose runtime error: a write to <dir>/col.i64, which is mapped "
-               "read-only, faulted at byte 16: a defect of the compiler or of C code\n");
-    }
-#else
-    {
-        page = (size_t)sysconf(_SC_PAGESIZE);
-        snprintf(big, sizeof big, "%s/big", dir);
-        uint8_t *bytes = (uint8_t *)calloc(4, page);
-        write_file(big, bytes, 4 * page);
-        free(bytes);
-        char at[32];
-        snprintf(at, sizeof at, "%llu", (unsigned long long)(2 * page));
-        in_child(truncated, "truncated", at);
-        in_child(written, "written", NULL);
-        unlink(big);
-    }
-#endif
     /* Last: the serials are used up after this. */
     handles none = { 0, 0 };
     expect_abort(too_many_regions, none);

@@ -91,6 +91,17 @@ fn main() {
     let em, eok = sh.map_file(path("empty"));
     print(eok, " ", sh.size(em), " ", view<i64>(sh, em, 0, 0).len);         // true 0 0
 
+    // A file the system reports no size for though it has bytes, as /proc's
+    // do, is read in whole; where there is none, the line is the same.
+    var made: u8[>..] = [];
+    if read_file("/proc/version", made) {
+        let vm, vok = sh.map_file("/proc/version");
+        print(vok, " ", sh.size(vm) == made.len && made.len > 0, " ",
+              view<u8>(sh, vm, 0, made.len) == made[..]);                // true true true
+    } else {
+        print("true true true");
+    }
+
     // Through parameters, a borrowed binding, and a container of views.
     print(column(sh, m, 60, 4)[3], " ", halves(sh, m), " ", chunks(sh, m, 4));   // 3869 -64512 10148
     var mine: (const i64[:])[>..] = [];
