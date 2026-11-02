@@ -475,6 +475,95 @@ inline void TypeCheck::NameExtents(TypeExpr *t) {
     }
 }
 
+// Plain data (§11.4): integers and floats, and fixed arrays and structs of
+// plain data, pads allowed, so that every byte pattern of the type's size
+// is one of its values, as bytes a file holds may be anything. Not a bool,
+// an enum's tag, a limited array's length, a varint, a reference, an index
+// type or a handle, which hold only some patterns, or patterns that mean
+// something only where they were made; nor what has no bytes or no fixed
+// size.
+inline bool TypeCheck::PlainData(TypeExpr *t, string &why) {
+    auto no = [&](const char *what) {
+        why = cat(TypeStr(t), what);
+        return false;
+    };
+    if (auto zs = ZeroSizeKind(t)) return no(cat(", ", zs, ", which has no bytes").c_str());
+    switch (t->kind) {
+        case TY_INT:
+            if (t->ix) return no(", an index or bound type, which is checked against one "
+                                 "thread's array (§3.11)");
+            if (t->intstorage == IS_VARINT) return no(", which is variable-size (§3.6)");
+            return true;
+        case TY_FLT: return true;
+        case TY_BOOL: return no(", of which only the bytes 0 and 1 are values");
+        case TY_ENUM: case TY_VARIANT:
+            return no(", an enum, whose tag holds only its variants' numbers");
+        case TY_REF: case TY_SLICE: return no(", whose bits are an address");
+        case TY_RESOURCE: return no(", a handle, which only its kind's binding makes (§3.12)");
+        case TY_ARRAY:
+            if (t->arr->akind == A_LIMITED)
+                return no(", a limited array, whose length only goes up to its capacity");
+            if (t->arr->akind != A_FIXED) return no(", which is not fixed-size");
+            if (!PlainData(t->arr->sub, why)) {
+                why = cat("the elements of ", TypeStr(t), " are ", why);
+                return false;
+            }
+            return true;
+        case TY_STRUCT: {
+            if (t->struc->st->isroot) return no(", a root owner, which has no bytes of its own");
+            auto inst = GetStructInst(t);
+            if (EmptyLayout(inst->st->fields)) return no(", which has no bytes");
+            for (size_t i = 0; i < inst->ftypes.size(); i++) {
+                auto ft = inst->ftypes[i];
+                if (!ft || PlainData(ft, why)) continue;
+                why = cat("field ", inst->st->fields[i].name, " of ", TypeStr(t), " is ", why);
+                return false;
+            }
+            return true;
+        }
+        default: return no(", which is not plain data");
+    }
+}
+
+// The size of plain data t's widest scalar (§11.4): a view's byte offset is a
+// multiple of it, as a file's format aligns its arrays; 1 where t is bytes.
+inline int64_t TypeCheck::WidestScalar(TypeExpr *t, string &part) {
+    switch (t->kind) {
+        case TY_INT: part = TypeStr(t); return IntBits(t->intstorage) / 8;
+        case TY_FLT: part = TypeStr(t); return t->fltstorage == FS_F32 ? 4 : 8;
+        case TY_ARRAY: {
+            auto w = WidestScalar(t->arr->sub, part);
+            part = cat("an element of ", TypeStr(t), ", ", part);
+            return w;
+        }
+        case TY_STRUCT: {
+            auto inst = GetStructInst(t);
+            int64_t w = 0;
+            for (size_t i = 0; i < inst->ftypes.size(); i++) {
+                if (!inst->ftypes[i]) continue;
+                string p;
+                auto k = WidestScalar(inst->ftypes[i], p);
+                if (k <= w) continue;
+                w = k;
+                part = cat("field ", inst->st->fields[i].name, " of ", TypeStr(t), ", ", p);
+            }
+            return w ? w : 1;
+        }
+        default: part = TypeStr(t); return 1;
+    }
+}
+
+// A runtime handle (§11.4) a value of type t holds at any depth by value, in
+// a field, an element or a payload, or null.
+inline TypeExpr *TypeCheck::RuntimeHandleIn(TypeExpr *t) {
+    if (IsRuntimeHandle(t)) return t;
+    if (t->kind == TY_ARRAY) return RuntimeHandleIn(t->arr->sub);
+    TypeExpr *h = nullptr;
+    if (t->kind == TY_STRUCT || t->kind == TY_ENUM || t->kind == TY_VARIANT)
+        EachField(t, [&](TypeExpr *ft) { if (!h) h = RuntimeHandleIn(ft); });
+    return h;
+}
+
 // The handle an == of two values of type t would compare (§4.5), or null:
 // the value itself, or one it holds by value, in a field, an element or a
 // payload. A reference or slice operand compares what it views, while an
@@ -680,7 +769,8 @@ inline void TypeCheck::ValidateType(TypeExpr *t, Line l, int pos) {
         case TY_INT: {
             // varint is encoded storage: it exists only inside compound
             // types (fields, elements) and behind references (§3.6).
-            auto compound = pos == VT_FIELD || pos == VT_ELEM || pos == VT_POINTEE;
+            auto compound = pos == VT_FIELD || pos == VT_ELEM || pos == VT_POINTEE ||
+                            pos == VT_KIND;
             if (t->intstorage == IS_VARINT && !compound)
                 Error(l, "varint is a storage type: only fields and array elements");
             return;
@@ -695,8 +785,12 @@ inline void TypeCheck::ValidateType(TypeExpr *t, Line l, int pos) {
             // Check placement before instantiation: nested root ownership is
             // unsupported even if the nested type is empty, fixed-only,
             // generic, or the enclosing declaration is itself a root.
+            // The kind of a mapped file's handle is no value's type (§11.4).
+            if (t->struc->st->rtkind == RK_MAPPING && pos != VT_KIND)
+                Error(l, "mapping is the kind of a mapped file's handle, written only as "
+                         "resource's argument: resource<mapping> (§11.4)");
             if (t->struc->st->isroot && pos != VT_LOCAL && pos != VT_GLOBAL &&
-                pos != VT_POINTEE)
+                pos != VT_POINTEE && pos != VT_KIND)
                 Error(l, cat("root struct ", TypeStr(t),
                              " can only be owned by a local or global variable; ",
                              pos == VT_PARAM ? "pass it by reference instead"
@@ -780,7 +874,7 @@ inline void TypeCheck::ValidatePointee(TypeExpr *t, Line l) {
         return;
     }
     if (t->kind == TY_RESOURCE) {
-        ValidateType(t->sub, l, VT_POINTEE);
+        ValidateType(t->sub, l, VT_KIND);
         NameExtents(t->sub);
         return;
     }
@@ -1270,6 +1364,12 @@ inline bool TypeCheck::CanContainWalk(TypeExpr *t, TypeExpr *of) {
     auto loaded = LoadedTypeEq(t, of);
     assert(loaded == TypeEq(LoadType(t), of));
     if (loaded) return true;
+    // An attachment's storage is every region of its arena (§11.4), which
+    // hold plain data, as static data holds what a literal can supply.
+    if (IsAttachment(t)) {
+        string why;
+        return PlainData(of, why);
+    }
     // A root's component variables enumerate their own regions; the owner
     // itself names only the control record, never all their storage at once.
     if (t->kind == TY_STRUCT && t->struc->st->isroot) return false;

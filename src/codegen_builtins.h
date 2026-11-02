@@ -166,6 +166,62 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
             return { t };
         }
         case B_THREAD_SPAWN: case B_THREAD_SPAWN_CONTAINED: return EmitThreadSpawn(c, an);
+        case B_ATTACH:
+            // Only an owning declaration holds one (BindAttachment).
+            Fail(ln, "internal: attach outside an owning declaration");
+        case B_MAP_FILE: {
+            // The handle and whether the file was mapped; with `why`, the
+            // reason appended to it where it was not (§11.4).
+            auto att = AttPtr(an[0]);
+            auto path = GenPure(an[1]);
+            auto m = T(), ok = T();
+            L("gs_res ", m, ";");
+            if (an.size() == 2) {
+                L("uint8_t ", ok, " = gs_shm_map_file(", att, ", ", path, ".data, ", path,
+                  ".len, &", m, ", NULL, NULL, ", LocArgs(ln), ");");
+                return { m, ok };
+            }
+            auto w = T(), n = T();
+            L("uint8_t *", w, ";");
+            L("int64_t ", n, ";");
+            L("uint8_t ", ok, " = gs_shm_map_file(", att, ", ", path, ".data, ", path, ".len, &",
+              m, ", &", w, ", &", n, ", ", LocArgs(ln), ");");
+            L("if (", w, ") {");
+            ind++;
+            AppendBytes(RecvLoc(an[2]), w, n, ln);
+            L("gs_free_msg(", w, ");");
+            ind--;
+            L("}");
+            return { m, ok };
+        }
+        case B_SIZE: {
+            // Emitted here, not returned as text: a discarded result would
+            // drop the check of the handle.
+            auto att = AttPtr(an[0]);
+            auto m = GenX(an[1]);
+            auto t = T();
+            L("int64_t ", t, " = gs_shm_size(", att, ", ", m, ", ", LocArgs(ln), ");");
+            return { t };
+        }
+        case B_VIEW: {
+            // count T's from byte offset of the region, in place: the slice
+            // the runtime's check gives the address of (§11.4).
+            auto el = c->qtype;
+            auto att = AttPtr(an[0]);
+            auto m = GenX(an[1]);
+            auto off = T(), count = T();
+            auto offx = GenX(an[2]);
+            L("int64_t ", off, " = (int64_t)(", offx, ");");
+            auto countx = GenX(an[3]);
+            L("int64_t ", count, " = (int64_t)(", countx, ");");
+            string name;
+            el->Dump(name);
+            auto p = T(), v = T();
+            L("const uint8_t *", p, " = gs_shm_view(", att, ", ", m, ", ", off, ", ", count, ", ",
+              FixedSize(el), ", ", ScalarAlign(el), ", ", CStr(name), ", ", LocArgs(ln), ");");
+            L(CT(c->exprtype), " ", v, " = { (void *)", p, ", ", count, " };");
+            return { v };
+        }
         case B_QPUT: {
             auto t = an[0]->exprtype;
             auto q = QueueFor(t);

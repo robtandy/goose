@@ -171,6 +171,7 @@ struct CodeGen {
     string code;        // Function bodies, size/eq helpers, thunks, main.
     string exportprotos;
     bool usesthreads = false;
+    bool usesshared = false;   // An attachment or a view (§11.4): GS_SHARED_STATS reports.
     bool library = false;
     // Measurement only, and unsound: emit the whole `return ... from`
     // machinery but none of the post-call discriminant checks, so a program
@@ -619,11 +620,17 @@ struct CodeGen {
         int kind;
         int stkbase;
         vector<pair<string, string>> saves;   // (stack expr, base var) to restore.
-        // The `defer` bodies registered in this scope (§6.6), each with how
-        // many saves came before it: an exit runs them among the restores,
-        // latest first, each before the release of the storage declared
-        // before it (EmitRestores).
-        vector<pair<size_t, Defer *>> defers;
+        // The `defer` bodies registered in this scope (§6.6), and the ends of
+        // the attachments declared in it (§11.4, the C statement `end`),
+        // each with how many saves came before it: an exit runs them among
+        // the restores, latest first, each before the release of the
+        // storage declared before it (EmitRestores).
+        struct ScopeEnd {
+            size_t saves;
+            Defer *d;
+            string end;
+        };
+        vector<ScopeEnd> defers;
         SFunction *ibsf = nullptr;            // SC_IB: which returns exit here.
         string brklbl, cntlbl;
         bool usedbrk = false, usedcnt = false;
@@ -813,6 +820,11 @@ struct CodeGen {
     void PopSc();
     void EmitExitRestores(int to);
     void RegisterDefer(Defer *d);
+    void RegisterEnd(const string &end);
+    // The attachment n names, as the runtime takes it (§11.4).
+    string AttPtr(Node *n);
+    void BindAttachment(const string &name, Node *init, bool global);
+    int64_t ScalarAlign(TypeExpr *t);
     void EmitDeferBody(Defer *d);
     string AllocStk(bool forlocal);
     void SaveBase(bool forlocal, const string &stk, const string &basevar);

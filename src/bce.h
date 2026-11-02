@@ -2027,7 +2027,7 @@ struct BCE {
     // literal's is its element count.
     Term ArgLenTerm(Node *a, const Term &slen) {
         if (auto u = Is<Unary>(a); u && u->op == T_BITAND) a = u->child;
-        if (Is<SliceExpr>(a)) return slen;
+        if (Is<SliceExpr>(a) || IsView(a)) return slen;
         if (auto t = FreshLenOf(a); t.ok) return t;
         return LenTermOf(a);
     }
@@ -2638,6 +2638,13 @@ struct BCE {
     // The length of the value the last walked SliceExpr produced, consumed by
     // the declaration or assignment that binds it.
     Term slicelen;
+    // The same for the last view<T>(sh, m, offset, count) walked: its count
+    // (§10.5, §11.4), which a view that returns has as its length.
+    Term viewlen;
+    static bool IsView(Node *n) {
+        auto c = Is<Call>(n);
+        return c && c->builtin == B_VIEW;
+    }
 
     void JudgeSlice(SliceExpr *se, const Term &lent, const Term &lot, const Term &hit) {
         if (probing) {
@@ -3579,7 +3586,7 @@ inline bool Call::BceWalk(BCE &b) {
         auto isint = BCE::MachineInt(t);
         auto it = isint ? b.TermOf(a) : BCE::Term {};
         ints.push_back(isint && b.NoWrap(it, t->intstorage) ? it : BCE::Term {});
-        slens.push_back(Is<SliceExpr>(a) ? b.slicelen : BCE::Term {});
+        slens.push_back(Is<SliceExpr>(a) ? b.slicelen : BCE::IsView(a) ? b.viewlen : BCE::Term {});
     };
     if (auto d = Is<Dot>(callee)) {
         recv = d->obj;
@@ -3672,6 +3679,20 @@ inline bool Call::BceWalk(BCE &b) {
                 // thread_wait(id, msg) appends the abort's message to msg.
                 if (arg0) b.GrowShrinkKill(arg0, 1);
                 break;
+            case B_MAP_FILE: {
+                // map_file(path, why) appends a refusal's reason to why.
+                auto why = recv ? (args.size() > 1 ? args[1] : nullptr)
+                                : (args.size() > 2 ? args[2] : nullptr);
+                if (why) b.GrowShrinkKill(why, 1);
+                break;
+            }
+            case B_VIEW: {
+                // A view that returns has its count for its length (§11.4).
+                // The count is the last argument, after which nothing ran.
+                auto count = recv ? args.back() : args.size() == 4 ? args[3] : nullptr;
+                b.viewlen = b.mode == BCE::M_KILLS || !count ? BCE::Term {} : b.TermOf(count);
+                break;
+            }
             case B_POP: {
                 // A pop that returns proves its own precondition: popping an
                 // empty array aborts (§9.3), so the length was at least one
@@ -4144,6 +4165,9 @@ inline bool VarDecl::BceWalk(BCE &b) {
         if (b.mode != BCE::M_KILLS && v->type && v->type->kind == TY_SLICE &&
             Is<SliceExpr>(inits[0]))
             lt = b.slicelen;
+        else if (b.mode != BCE::M_KILLS && v->type && v->type->kind == TY_SLICE &&
+                 BCE::IsView(inits[0]))
+            lt = b.viewlen;
         else if (b.mode != BCE::M_KILLS && v->type && IsRefOrSlice(v->type))
             lt = b.BoundLenOf(inits[0]);
         if (BCE::IntBaseVar(v)) {
@@ -4222,7 +4246,9 @@ inline bool Assign::BceWalk(BCE &b) {
         auto fresh = b.mode != BCE::M_KILLS && t && t->kind == TY_ARRAY && op == T_ASSIGN
                          ? b.FreshLenOf(rhs) : BCE::Term {};
         if (b.mode != BCE::M_KILLS && t && t->kind == TY_SLICE && op == T_ASSIGN)
-            fresh = Is<SliceExpr>(rhs) ? b.slicelen : b.BoundLenOf(rhs);
+            fresh = Is<SliceExpr>(rhs) ? b.slicelen
+                  : BCE::IsView(rhs)   ? b.viewlen
+                                       : b.BoundLenOf(rhs);
         // A slice variable is the slot that references to it measure too.
         if (t && t->kind == TY_SLICE) b.SlotWriteKill(BCE::UK_OWNED, v);
         else if (t && t->kind != TY_FLT && t->kind != TY_BOOL && t->kind != TY_INT)

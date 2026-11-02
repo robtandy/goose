@@ -633,6 +633,8 @@ inline void CodeGen::EmitCoreTypes() {
 // its type has reduced alignment. References and slices still use the
 // alignment-one aliases for accesses through escaped member addresses.
 inline string CodeGen::CT(TypeExpr *t, bool unaligned) {
+    // An attachment is the runtime's record of it (§11.4).
+    if (IsAttachment(t)) return "gs_att";
     switch (t->kind) {
         case TY_INT:  assert(t->intstorage != IS_VARINT); return IntCT(t->intstorage, unaligned);
         case TY_FLT:  return t->fltstorage == FS_F32 ? (unaligned ? "gs_f32" : "float")
@@ -767,6 +769,7 @@ inline bool CodeGen::StructLike(TypeExpr *t) {
 // The C name of a fixed-class type, assigned (and, for struct-like kinds,
 // forward-declared) on first sight; CT emits the body.
 inline string CodeGen::NameCT(TypeExpr *t) {
+    if (IsAttachment(t)) return "gs_att";
     auto m = Mangle(t);
     auto it = ctypes.find(m);
     if (it != ctypes.end()) return it->second;

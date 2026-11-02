@@ -2,7 +2,8 @@
 // file is in (top-level declarations are order-independent). Every parse-time
 // TY_UNRESOLVED is rewritten in place: struct and enum names become TY_STRUCT /
 // TY_ENUM, alias uses are substituted with the aliased type, `resource<U>`
-// where no declaration has the name becomes TY_RESOURCE (§3.12), and
+// where no declaration has the name becomes TY_RESOURCE (§3.12), `shared`
+// and `mapping` the runtime's declarations (§11.4), and
 // anything else becomes TY_GENERIC — a generic type parameter, or an unknown
 // name, which typecheck decides since it knows scopes. A qualified name
 // (`ns::Name`) can only be a declaration, so an unknown one is an error here,
@@ -81,6 +82,21 @@ inline void ResolveTypeNames(Ast &ast) {
             t->enu = d;
         } else if (ast.LookupAlias(nm->name, nm->ns)) {
             // Alias uses stay TY_UNRESOLVED for the substitution loop below.
+        } else if (auto rk = GlobalLeaf(nm->name) == "shared"    ? RK_SHARED
+                             : GlobalLeaf(nm->name) == "mapping" ? RK_MAPPING
+                                                                 : RK_NONE) {
+            // The runtime's declarations (§11.4), found as resource is: an
+            // attachment, and the kind of a mapped file's handle.
+            if (!nm->args.empty())
+                ErrorAt(t, nm, cat(GlobalLeaf(nm->name), " takes no type arguments (§11.4)"),
+                        nm->name);
+            if (nm->varmode)
+                ErrorAt(t, nm, cat(GlobalLeaf(nm->name),
+                                   " has no variable mode (.. applies to enums)"));
+            auto d = ast.NewDetail<TypeStruct>();
+            d->st = ast.RuntimeDecl(rk);
+            t->kind = TY_STRUCT;
+            t->struc = d;
         } else if (GlobalLeaf(nm->name) == "resource") {
             // A handle (§3.12), found as a builtin is: where no declaration
             // of the program has the name, `::resource` past a namespaced

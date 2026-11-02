@@ -494,9 +494,9 @@ GS_API const uint8_t *gs_shm_view_slow(gs_att *att, gs_res m, int64_t off, int64
     const char *path = gs_shm_lookup(att, m, op, file, line);
     int64_t len = att->len;
     if (off < 0 || count < 0 || off > len || (uint64_t)count > (uint64_t)(len - off) / (uint64_t)size)
-        gs_failf(file, line, "%s of %s out of bounds: %lld element(s) of %lld bytes at byte "
-                 "offset %lld, in a file of %lld bytes", op, path, (long long)count,
-                 (long long)size, (long long)off, (long long)len);
+        gs_failf(file, line, "%s of %s out of bounds: count %lld at byte offset %lld, in a "
+                 "file of %lld bytes", op, path, (long long)count, (long long)off,
+                 (long long)len);
     if (off & (align - 1))
         gs_failf(file, line, "%s of %s misaligned: byte offset %lld is not a multiple of %lld, "
                  "the size of %s's widest scalar", op, path, (long long)off, (long long)align,

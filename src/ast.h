@@ -372,6 +372,21 @@ inline bool IsU8(const TypeExpr *t) {
 inline bool IsIndexT(const TypeExpr *t) { return t && t->kind == TY_INT && t->ix; }
 // A handle, resource<U> (§3.12).
 inline bool IsResource(const TypeExpr *t) { return t && t->kind == TY_RESOURCE; }
+// The declarations the runtime provides (§11.4), in no namespace and no
+// declaration list (Ast::RuntimeDecl): `shared`, an attachment, a builtin
+// root owner with no components, which is also the kind of an arena's
+// handle; and `mapping`, the kind of a mapped file's handle, which names a
+// kind only (`resource<mapping>`) and is no type of any value.
+enum RuntimeKind { RK_NONE, RK_SHARED, RK_MAPPING };
+// The runtime's declaration a type names: RK_NONE for any other.
+RuntimeKind RuntimeKindOf(const TypeExpr *t);
+// An attachment, `shared` (§11.4).
+inline bool IsAttachment(const TypeExpr *t) { return RuntimeKindOf(t) == RK_SHARED; }
+// A handle of a kind the runtime binds, `resource<shared>` or
+// `resource<mapping>` (§11.4), which C takes but never makes.
+inline bool IsRuntimeHandle(const TypeExpr *t) {
+    return IsResource(t) && RuntimeKindOf(t->sub) != RK_NONE;
+}
 inline bool IsF32(const TypeExpr *t) { return t && t->kind == TY_FLT && t->fltstorage == FS_F32; }
 // The ADT a variant type is a variant of, and an enum type's own; else null.
 inline TypeExpr *AdtOf(TypeExpr *t) {
@@ -1540,6 +1555,7 @@ struct SStruct {
     Line end;                   // As SFunction::end.
     string_view doc;            // As SFunction::doc.
     bool isroot = false;       // Explicit owning layout (docs/design/root_structs.md).
+    RuntimeKind rtkind = RK_NONE;
     vector<GenericParam> generics;
     vector<Field> fields;
     vector<StructInst *> insts;  // Instantiations (typecheck), owned by Ast.
@@ -1554,6 +1570,10 @@ struct SStruct {
     // code at hand silently.
     bool unknown = false;
 };
+
+inline RuntimeKind RuntimeKindOf(const TypeExpr *t) {
+    return t && t->kind == TY_STRUCT ? t->struc->st->rtkind : RK_NONE;
+}
 
 struct SVariant {
     string_view name;
@@ -2554,6 +2574,26 @@ struct Ast {
     // The structs standing for the type names that name nothing
     // (SStruct::unknown), in no namespace and no declaration list.
     vector<SStruct *> unknowntypes;
+    // The runtime's declarations (§11.4), made as a use first names one.
+    SStruct *runtimedecls[RK_MAPPING + 1] = {};
+    SStruct *RuntimeDecl(RuntimeKind k) {
+        auto &st = runtimedecls[k];
+        if (!st) {
+            st = new SStruct();
+            st->name = st->qname = k == RK_SHARED ? "shared" : "mapping";
+            st->isroot = k == RK_SHARED;
+            st->rtkind = k;
+        }
+        return st;
+    }
+    // A type naming one: `shared`, or the kind `mapping`.
+    TypeExpr *RuntimeType(RuntimeKind k, Line line) {
+        auto t = NewType(TY_STRUCT, line);
+        auto d = NewDetail<TypeStruct>();
+        d->st = RuntimeDecl(k);
+        t->struc = d;
+        return t;
+    }
 
     // Typecheck products (owned here so later phases can rely on them).
     vector<VarDef *> vardefs;
@@ -2612,6 +2652,7 @@ struct Ast {
         for (auto f : functions) delete f;
         for (auto s : structs) delete s;
         for (auto s : unknowntypes) delete s;
+        for (auto s : runtimedecls) delete s;
         for (auto e : enums) delete e;
         for (auto a : aliases) delete a;
         for (auto v : vardefs) delete v;

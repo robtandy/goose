@@ -1765,7 +1765,7 @@ static size_t gs_mapfault_text(char *buf, const gs_mapent *e, const uint8_t *at,
     p = gs_text(p, write ? ", which is mapped read-only, faulted at byte "
                          : " was truncated or could not be read while mapped: a read at byte ");
     p = gs_dec(p, (uint64_t)(at - e->base));
-    p = gs_text(p, write ? " (a defect of the compiler or of C code)\n" : " faulted\n");
+    p = gs_text(p, write ? ": a defect of the compiler or of C code\n" : " faulted\n");
     return (size_t)(p - buf);
 }
 
@@ -4314,12 +4314,14 @@ R"GSRT(GS_API uint8_t gs_shm_map_file(gs_att *att, const uint8_t *path, int64_t 
        deletes still work. */
     r.file = CreateFileW(w, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, NULL,
                          OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    free(w);
     LARGE_INTEGER size;
     const char *what = NULL;
     if (r.file == INVALID_HANDLE_VALUE) {
+        DWORD e = GetLastError(), attrs = GetFileAttributesW(w);
         r.file = NULL;
-        what = gs_shm_winerror(GetLastError(), err, sizeof err);
+        what = attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)
+                   ? "a directory, not a regular file"
+                   : gs_shm_winerror(e, err, sizeof err);
     } else if (GetFileType(r.file) != FILE_TYPE_DISK) {
         what = "not a regular file";
     } else if (!GetFileSizeEx(r.file, &size)) {
@@ -4338,6 +4340,7 @@ R"GSRT(GS_API uint8_t gs_shm_map_file(gs_att *att, const uint8_t *path, int64_t 
         r.len = size.QuadPart;
         r.memlen = (size_t)size.QuadPart;
     }
+    free(w);
     if (what) {
         refused = gs_shm_refuse(why, whylen, r.path, what);
         gs_shm_unmap(&r);
@@ -4444,9 +4447,9 @@ R"GSRT(GS_API const uint8_t *gs_shm_view_slow(gs_att *att, gs_res m, int64_t off
     const char *path = gs_shm_lookup(att, m, op, file, line);
     int64_t len = att->len;
     if (off < 0 || count < 0 || off > len || (uint64_t)count > (uint64_t)(len - off) / (uint64_t)size)
-        gs_failf(file, line, "%s of %s out of bounds: %lld element(s) of %lld bytes at byte "
-                 "offset %lld, in a file of %lld bytes", op, path, (long long)count,
-                 (long long)size, (long long)off, (long long)len);
+        gs_failf(file, line, "%s of %s out of bounds: count %lld at byte offset %lld, in a "
+                 "file of %lld bytes", op, path, (long long)count, (long long)off,
+                 (long long)len);
     if (off & (align - 1))
         gs_failf(file, line, "%s of %s misaligned: byte offset %lld is not a multiple of %lld, "
                  "the size of %s's widest scalar", op, path, (long long)off, (long long)align,
