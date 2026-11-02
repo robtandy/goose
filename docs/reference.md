@@ -290,6 +290,7 @@ this table is an overview.
 | `const T`, `const T&`, `const T[:]` | read-only contents, a read-only reference or view | [12](#12-lifetimes-roots-stores-and-writability) |
 | `u32 in a`, `u32 upto a` | an index of the global array `a`, a bound of it | [15](#15-index-types-and-checkfree-functions) |
 | `fn(i64) -> bool` | a function value's shape, as documentation | [18](#18-generics-and-function-values) |
+| `resource<Buffer>` | a handle to something a C binding owns | [24](#handles-resourceu) |
 
 `const` qualifies the first reference or slice built on the base type:
 `const u8[:]` is a read-only view of bytes. To apply `const` to an outer
@@ -3959,6 +3960,42 @@ program's own C goes in a sidecar `foo.build` beside `foo.goose`
 or by `--include header.h` can use Goose's generated types directly; see
 [Using Goose types in a C header](packages.md#using-goose-types-in-a-c-header).
 
+### Handles: `resource<U>`
+
+A `resource<U>` names something a binding owns, such as a GPU buffer or a
+native byte buffer. It is one `u64` that only the binding reads. `U` is the
+kind: a type the binding declares for it, usually an empty struct.
+
+```goose
+struct Buffer {}
+
+extern fn buffer_new(size: i64) -> resource<Buffer>;
+extern fn buffer_size(b: resource<Buffer>) -> i64;
+extern fn buffer_free(b: resource<Buffer>);
+
+struct Mesh { vertices: resource<Buffer>, count: i64 }
+```
+
+* C sees a `uint64_t`, as a parameter or a result. The binding picks the
+  bits, and never hands out 0.
+* Goose code stores, copies and passes a handle: a local, a global, a
+  field, an element, a payload, an argument, a result, a worker's argument
+  or a queue message.
+* Nothing else. No arithmetic, no `==` or `<`, no `hash`, no `as` or `as!`
+  either way, no field access. So no code makes up a handle.
+* Kinds don't mix: a `resource<Buffer>` is never a `resource<Texture>`.
+* The default is the zero handle, which names nothing:
+  `default<resource<Buffer>>()`, a global with its type alone, or a
+  literal's `..`.
+* It prints as its type, `resource<Buffer>`, and has no bytes:
+  `to_bytes`, `bytes_of` and `from_bytes` reject it.
+* It owns nothing. A copy is the same name, and `buffer_free` is what
+  releases the buffer.
+* A binding's functions in its namespace are its handles' methods:
+  `b.size()` calls `gpu::size(b)` for a `resource<gpu::Buffer>`.
+
+Spec §3.12.
+
 ### `extern "lib" { … }`: a shared library, bound by name
 
 An `extern` block names a shared library and declares functions bound
@@ -4005,8 +4042,8 @@ prototype in terms of Goose's shapes:
   Windows, so a function with a `long` needs a per-platform declaration or
   an adapter.
 * **Opaque handles**, such as the `SDL_Window *` a library returns and
-  takes back, are `u64`: a token Goose passes along and cannot look
-  inside.
+  takes back, are `u64`, or better a `resource<Window>` (above): a token
+  Goose passes along and cannot look inside.
 * **A pointer to something Goose owns** is `T&` for a flat fixed `T`:
   `fn SDL_GetWindowSize(w: u64, x: i32&, y: i32&)`. Where C wants
   `(ptr, count)`, pass `xs[0]` and `xs.len` as two arguments; where it

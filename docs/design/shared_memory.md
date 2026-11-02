@@ -59,9 +59,10 @@
 
 </details>
 
-Design note, November 2026. Nothing here is implemented. Step 0 (the
-`resource<U>` handle), phase 1 (mapped files, attachments and views) and
-phase 2 (dynamic stacks and frozen regions) are specified in section 16
+Design note, November 2026. Of what follows, only step 0, the
+`resource<U>` handle, is implemented (spec §3.12). Step 0, phase 1 (mapped
+files, attachments and views) and phase 2 (dynamic stacks and frozen
+regions) are specified in section 16
 closely enough to be built as written; the syntax is proposed for
 implementation as it stands, and section 17 lists what is still open, each
 with a recommended answer. The measurements of section 11 were taken
@@ -1601,7 +1602,7 @@ names, `gs_` runtime names, and a check's file and line passed as
 
 ```c
 /* Representation (runtime.h, after gs_rref). */
-typedef uint64_t gs_res;                    /* resource<U>, every kind: one u64; 0 is no resource */
+typedef uint64_t gs_res GS_ALIGN1;          /* resource<U>, every kind: one u64; 0 is no resource */
 #define GS_RES_SERIAL_BITS 40               /* the runtime's kinds: the arena's serial, high bits */
 #define GS_RES_REGION_BITS 24               /* and the region's number in it, low bits */
 _Static_assert(GS_RES_SERIAL_BITS + GS_RES_REGION_BITS == 64, "a handle is one u64");
@@ -2214,15 +2215,23 @@ The foundation, landed on its own before either track's phase 1 uses it:
 #3 carries it if #5 has not landed it, and #5 builds `resource<event>` on
 it. It adds no runtime state and no builtin.
 
-1. **Types.** `TY_RESOURCE` for any `U`, with the runtime's kinds marked
-   (`shared`, `mapping`, `frozen<T>`, and `event` for the messaging design):
-   resolution, flatness, image safety, the zero default, the text form,
-   comparisons and conversions rejected (4.1).
-2. **The C boundary.** `uint64_t` by value, parameters and results; no
-   result of a runtime kind.
+1. **Types.** `TY_RESOURCE` for any `U`: resolution, flatness, image
+   safety, the zero default, the text form, comparisons and conversions
+   rejected (4.1).
+2. **The C boundary.** `uint64_t` by value, parameters and results.
 3. **Codegen.** `gs_res`.
 4. **Tests and documents**: section 14's step 0, section 15's parts for
    step 0.
+
+Built (spec §3.12). Two changes from the above:
+
+* **No runtime kinds yet.** Step 0 adds no kind of its own. The first phase
+  that adds one (#3's `shared`, `mapping` and `frozen<T>`, or #5's `event`)
+  declares it in the compiler and adds its one rule: an `extern fn` takes it
+  but does not return it. Section 14's `resource_extern_return` and
+  `resource_kind_value` move there, since they need such a kind.
+* **Methods.** UFCS looks in the kind's namespace, so a binding's functions
+  are its handles' methods (spec §11.1).
 
 ### Phase 1: mapped files, attachments and views (#3)
 

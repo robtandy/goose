@@ -822,6 +822,21 @@ does so at the enum's declaration, once all variants are built. A
 resizable payload, which the C backend does not bind at all yet, is left
 alone.
 
+**Handles.** `resource<U>` (spec §3.12) resolves to `TY_RESOURCE` where no
+declaration has the name (`ResolveTypeNames`). Its `sub` is the kind.
+
+* `TypeEq`, `Subst` and `BindTypes` treat the kind as a type argument. It is
+  validated as a pointee (`ValidatePointee`), so a struct may name itself.
+* A handle is fixed-size and flat, has a default (`HasDefault`), is not
+  image-safe (`ImageSafe`), and passes `ExternValueOk` by value.
+* `NoHandleOperand` rejects every operator on a handle, and `==` on a value
+  holding one (`ComparedHandle`). `AsCast` and `FitsAt` reject conversions
+  (`HandleFitHint`).
+* `NominalNs` gives a handle its kind's namespace, for UFCS and `format`.
+* A kind the runtime provides would be a type the compiler declares. The
+  one rule it adds is that an `extern fn` takes it but never returns it
+  (design/shared_memory.md §4.1).
+
 **Root owners and component regions.** Root ownership is valid only at a local
 or global declaration, with an immediate literal initializer (including the
 default initializer of a typed global). `ValidateType` forbids by-value
@@ -5015,7 +5030,9 @@ Layout details needed for byte/C compatibility (`FixedSize`, `LayoutFields`,
   packed structs; fixed and static-capacity limited arrays wrapped in
   structs (`{ T e[k]; }`, `{ len; T e[k]; }`); fixed-mode ADTs as
   `{ tag; union }`; plain references as pointers; slices as
-  `{ data, len }`; and relative references as their stored integer. A
+  `{ data, len }`; handles as `gs_res`, a one-byte-aligned `uint64_t`
+  (`uint64_t` as a member), for every kind; and relative references as their
+  stored integer. A
   wrapped array has one slot where `k` is 0, since C has no empty arrays.
   That slot would take bytes the layout does not count, which is why spec
   §3.4 keeps such arrays out of fields and elements. An empty slice's
