@@ -457,7 +457,7 @@ runtime's entry points are in section 8.
 | Read-back, bounds checks (`RootCandidates`, `HoldsByValue`, `bce.h`) | an attachment holds every plain-data and freezable type by value, as `StaticCanContain` does; the facts of 4.6; views' own checks are aborts, and `Call::nobc` is not involved |
 | Codegen | step 0: `CT` of a handle is `gs_res`. Then the owners' `CT`s (`codegen_types.h`), the builtins (`codegen_builtins.h`), their ends beside `RegisterDefer`'s, `shared&` and split `dynamic_stack<T>&` (`codegen_frames.h`), and freeze as a rebind for stack-top caching and view hoisting (implementation.md §6.10) |
 | Coroutines, driver, editors | R1's check (`CycleCallTemps`) covers both owners, once coroutines exist; `--dynamic-budget size` writes `-DGS_DYNAMIC_BUDGET`, as `--stack-reserve` writes `GS_STACK_RESERVE`; the language server's hover and completion come from the builtin table; no lexer, parser or formatter change, and no new keyword |
-| Runtime | `runtime.h` declares, and a new `runtime_shared.h` after `runtime_threads.h` defines: `gs_shm_new(gs_att *, loc)`, registering a new arena, attached once, or aborting when serials are used up; `gs_shm_attach(gs_att *, gs_res, loc)`, under the registry's lock, aborting for a stale or zero handle; `gs_shm_detach(gs_att *)`, releasing at zero and popping the hold; `gs_shm_map_file(gs_att *, path, len, gs_res *, why, whylen, loc)`, the reason a message as `thread_wait`'s is, registering the mapping for the fault handlers; `gs_shm_size(gs_att *, gs_res, loc)`; the inline `gs_shm_view(...)`, against the region `gs_att` looked up last, and `gs_shm_view_slow`, which looks one up and aborts for another arena's or a misfit; `gs_shm_frozen(gs_att *, gs_res, elemsize, int64_t *len, loc)`; `gs_dstack_open(gs_dstack *, loc)` (`GS_E_BUDGET`, reserving the budget on first use) and `gs_dstack_close(gs_dstack *)`; `gs_shm_freeze(gs_att *, gs_dstack *, elemsize, loc)`; `gs_shm_release_held(void)`, for a contained abort; and `GS_SHARED_STATS`, a report at exit for tests. In `runtime_impl.h`, `gs_fault_handler` and `gs_fault_filter` look up mappings and slots, and `gs_trim_memory` trims free slots; `gs_thread_main` calls `gs_shm_release_held()` after a contained abort, before `t->release()`; `runtime_inline.h` is regenerated |
+| Runtime | `runtime.h` declares, and a new `runtime_shared.h` after `runtime_threads.h` defines: `gs_shm_new(gs_att *, loc)`, registering a new arena, attached once, or aborting when serials are used up; `gs_shm_attach(gs_att *, gs_res, loc)`, under the registry's lock, aborting for a stale or zero handle; `gs_shm_detach(gs_att *)`, releasing at zero and popping the hold; `gs_shm_map_file(gs_att *, path, len, gs_res *, why, whylen, loc)`, the reason a message the runtime holds until `gs_shm_reason_done` or the worker's end, registering the mapping for the fault handlers, whose entries are sequence locks; `gs_shm_size(gs_att *, gs_res, loc)`; the inline `gs_shm_view(...)`, against the region `gs_att` looked up last, and `gs_shm_view_slow`, which looks one up and aborts for another arena's or a misfit; `gs_shm_frozen(gs_att *, gs_res, elemsize, int64_t *len, loc)`; `gs_dstack_open(gs_dstack *, loc)` (`GS_E_BUDGET`, reserving the budget on first use) and `gs_dstack_close(gs_dstack *)`; `gs_shm_freeze(gs_att *, gs_dstack *, elemsize, loc)`; `gs_shm_release_held(void)`, for a contained abort; and `GS_SHARED_STATS`, a report at exit for tests. In `runtime_impl.h`, `gs_fault_handler` and `gs_fault_filter` look up mappings and slots, and `gs_trim_memory` trims free slots; `gs_thread_main` calls `gs_shm_release_held()` after a contained abort, before `t->release()`; `runtime_inline.h` is regenerated |
 
 ## 9. Alternatives considered
 
@@ -521,14 +521,14 @@ kind's namespace, so a binding's functions are its handles' methods (§11.1).
 ### Phase 1: mapped files, attachments and views (#3)
 
 **Built**: `shared`, `attach`, `handle`, both `map_file`s, `size` and mapping
-views, every piece of section 8 but those of dynamic stacks and `freeze`, on
-POSIX and Windows, with four changes. A program's function named like a builtin
-takes the plain calls it matches, and the builtin a call naming an attachment
-first: one applying only where nothing is so named hid views from a program
-with a `view`. C makes no runtime handle in storage it writes, or as an export's
-argument. An attachment keeps the region it looked up last, so the inline check
-reads its own thread's record, with no atomic; one lock guards the registry and
-the tables. And `why` comes back as `thread_wait`'s message. Numbers: section 2.
+views, all of section 8 but dynamic stacks and `freeze`, on POSIX and Windows,
+with four changes. A program's function named like a builtin takes the plain
+calls it matches, and the builtin a call naming an attachment first: one
+applying only where nothing is so named hid views from a program with a `view`.
+C makes no runtime handle in storage it writes, or as an export's argument. An
+attachment keeps the region it looked up last, so the inline check reads its own
+thread's record, with no atomic; one lock guards registry and tables. And the
+runtime keeps `why`'s message until it is appended, as an append may abort.
 
 ### Phase 2: dynamic stacks and frozen regions (#4)
 

@@ -6388,8 +6388,8 @@ neither, since the runtime takes the record itself.
 `sh.handle` is `gs_shm_handle` (`Dot::CgX`), `sh.size(m)` a call into a
 temporary, so that a discarded size still checks its handle, and
 `sh.map_file(path, why)` the handle and the flag, with the reason the
-runtime hands over appended to `why` as `thread_wait`'s message is
-(`AppendBytes`, `gs_free_msg`). A view is the address `gs_shm_view` returns
+runtime hands over appended to `why` (`AppendBytes`) and then let go of
+(`gs_shm_reason_done`). A view is the address `gs_shm_view` returns
 for the offset, the count, `T`'s size, its widest scalar (`ScalarAlign`)
 and its name, made the slice `{ data, count }`. Nothing else differs: a
 loop over a view is a loop over a slice, plain loads. A program that uses
@@ -6605,17 +6605,27 @@ end into anonymous memory, grown by doubling and made read-only
 (`gs_shm_copy_in`); a file that is empty that way too maps nothing, and its
 views point at a static byte. The system calls run before the lock is
 taken, which is only held to append the region. A refusal's reason is a
-message the program appends to `why` and frees (`gs_free_msg`). The
+message the program appends to `why`. The runtime keeps it, as the
+thread's pending reason, until the program has appended it
+(`gs_shm_reason_done`): an append to a `why` with no room for it aborts,
+and a contained worker's abort skips the rest of its code, so the worker's
+end frees the reason with its attachments (`gs_shm_release_held`). The
 mapping is registered for the fault handlers (`gs_mapchunks`,
 `runtime_impl.h`): chunks of entries that are never freed or moved, read
-by a handler without a lock, on any thread. An entry's base and length are
-words loaded with acquire and stored with release (`gs_word_load`,
-`gs_word_store`, lock-free and so safe in a handler); an entry is filled
-while its base is 0 and published by storing the base last, and cleared by
-storing 0 there first, before its file is unmapped. Its path is a copy in
-the entry, so no free of the region's own can race a handler, which reads
-the path only of the entry its fault lies in, a live mapping's that
-nothing writes. On a read past the end of a file another process truncated
+by a handler without a lock, on any thread, while other threads add,
+clear and reuse entries for mappings of other places and sizes. Every
+word of an entry is loaded with acquire and stored with release
+(`gs_word_load`, `gs_word_store`, lock-free and so safe in a handler), the
+path too, a copy in the entry, so that no free of the region's own can
+race a handler. Each entry is a sequence lock (`gs_mapent_set`): its count
+is odd while it is written, and a lookup (`gs_mapfault`) takes a copy of
+an entry (`gs_mapsnap`) only where the count was even before it read the
+entry and is the same after, so it never puts an old base with a reused
+entry's longer length, which could cover another mapping, nor reads a
+path being rewritten. It skips an entry being written, which is never the
+one its fault lies in: that is a live mapping's, written only before its
+handle exists and after its arena's last attachment ends. On a read past
+the end of a file another process truncated
 (SIGBUS, `EXCEPTION_IN_PAGE_ERROR`), or a write to a mapping (SIGSEGV, an
 access violation), the handler names the file and the byte, without stdio,
 and ends the process, as for a guard gap.
