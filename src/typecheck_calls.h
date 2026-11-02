@@ -2688,8 +2688,9 @@ inline void TypeCheck::CheckExternSpec(FnSpec *spec) {
                                 why));
         if (auto h = RuntimeHandleIn(t))
             Error(sf->line, cat("extern fn ", sf->name, " cannot return ", TypeStr(t), ": ",
-                                h == t ? string("a ") : cat("it holds a "), TypeStr(h),
-                                ", which C takes but only the runtime makes (§7.10, §11.4)"));
+                                h == t ? string() : cat("it holds a ", TypeStr(h), ", and "),
+                                "C takes the runtime's handles, but only the runtime makes one "
+                                "(§7.10, §11.4)"));
         spec->rets.push_back(t);
     }
     spec->retsknown = true;

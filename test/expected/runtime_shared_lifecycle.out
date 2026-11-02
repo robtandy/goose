@@ -10,6 +10,7 @@ abort: attach of the zero handle, which names no shared arena
 refused a missing file: <dir>/missing: <the system's reason>
 refused a directory: <dir>: a directory, not a regular file
 refused a path holding a NUL byte: col: the path holds a NUL byte
+refused a FIFO, without waiting for a writer: <dir>/fifo: not a regular file
 truncated: exit 1: goose runtime error: <dir>/big was truncated or could not be read while mapped: a read at byte <n> faulted
 written: exit 1: goose runtime error: a write to <dir>/col.i64, which is mapped read-only, faulted at byte 16: a defect of the compiler or of C code
 abort: a shared arena holds at most 4 regions

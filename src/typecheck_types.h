@@ -483,6 +483,8 @@ inline void TypeCheck::NameExtents(TypeExpr *t) {
 // something only where they were made; nor what has no bytes or no fixed
 // size.
 inline bool TypeCheck::PlainData(TypeExpr *t, string &why) {
+    // An exemplar's opaque type stands for any type (CheckExemplars).
+    if (IsOpaque(t)) return true;
     auto no = [&](const char *what) {
         why = cat(TypeStr(t), what);
         return false;

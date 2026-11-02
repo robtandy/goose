@@ -3946,6 +3946,9 @@ R"GSRT(#ifndef _WIN32
 #ifndef O_CLOEXEC
 #define O_CLOEXEC 0
 #endif
+#ifndef O_NONBLOCK
+#define O_NONBLOCK 0
+#endif
 #endif
 
 )GSRT"
@@ -4347,8 +4350,10 @@ R"GSRT(GS_API uint8_t gs_shm_map_file(gs_att *att, const uint8_t *path, int64_t 
         return refused;
     }
 #else
+    /* Not blocking where the path is a FIFO, which is refused below, as
+       an open of one would wait for a writer. */
     const char *what = NULL;
-    int fd = open(r.path, O_RDONLY | O_CLOEXEC);
+    int fd = open(r.path, O_RDONLY | O_CLOEXEC | O_NONBLOCK);
     struct stat st;
     if (fd < 0) {
         what = strerror(errno);
@@ -4399,7 +4404,8 @@ R"GSRT(GS_API uint8_t gs_shm_map_file(gs_att *att, const uint8_t *path, int64_t 
         a->regions = p;
         a->capregions = cap;
     }
-    if (r.mem && !r.copied) r.fault = gs_shm_add_fault(r.base, (size_t)r.len, r.path);
+    /* A copy cannot be truncated, but a write to it faults as to a mapping. */
+    if (r.mem) r.fault = gs_shm_add_fault(r.base, (size_t)r.len, r.path);
     a->regions[++a->nregions] = r;
     *m = (gs_res)(a->serial << GS_RES_REGION_BITS | (uint64_t)a->nregions);
     gs_shm_mapped++;

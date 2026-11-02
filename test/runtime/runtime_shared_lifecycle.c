@@ -479,6 +479,18 @@ int main(void) {
     refused(missing, (int64_t)strlen(missing), "refused a missing file: ");
     refused(dir, (int64_t)strlen(dir), "refused a directory: ");
     refused("col\0x", 5, "refused a path holding a NUL byte: ");
+#ifdef _WIN32
+    /* Windows has no FIFO a path names. */
+    printf("refused a FIFO, without waiting for a writer: <dir>/fifo: not a regular file\n");
+#else
+    {
+        char fifo[600];
+        snprintf(fifo, sizeof fifo, "%s/fifo", dir);
+        check(mkfifo(fifo, 0600) == 0, "make a FIFO");
+        refused(fifo, (int64_t)strlen(fifo), "refused a FIFO, without waiting for a writer: ");
+        unlink(fifo);
+    }
+#endif
     gs_shm_release_held();
     check_baseline(allocations, mappings);
 
