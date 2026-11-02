@@ -17,4 +17,6 @@ attach of the zero handle: false attach of the zero handle, which names no share
 attach of a released arena: false attach of a released shared arena: it was released when its last attachment ended
 attached
 attach of a live arena: true 
+attach of a returned base case's arena: false attach of a released shared arena: it was released when its last attachment ended
+levels: 3
 main goes on: 7

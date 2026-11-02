@@ -6,7 +6,9 @@
 // arena's mapping; an attach of the zero handle or of a released arena.
 // Each message names what failed; main goes on, and prints them. A refusal's
 // reason appended to a `why` with no room for it aborts too, and the reason
-// the runtime made goes with the worker's storage, three times over.
+// the runtime made goes with the worker's storage, three times over. And an
+// attachment a recursive base case made has ended once its call returns,
+// optimized too, where the base case is copied into the caller.
 import os;
 
 let DIR = "gs_shared_aborts";
@@ -58,6 +60,25 @@ fn report(what: const u8[:], id: i64) {
     print(what, ": ", ok, " ", why[..located(why)]);
 }
 
+var leafsaved: resource<shared>;
+
+// The copy of the base case the optimizer makes at the self-call declares
+// the callee's attachment in a block of the caller's, which ends with the
+// copy, as the call would end it: the handle saved names a released arena.
+recursive fn leaf(n: i64) -> i64 {
+    let mine = shared {};
+    if n > 0 {
+        let below = leaf(n - 1);
+        if n == 1 {
+            report("attach of a returned base case's arena",
+                   thread_spawn_contained(attacher, leafsaved));
+        }
+        return below + 1;
+    }
+    leafsaved = mine.handle;
+    0
+}
+
 fn main() {
     make_dir(DIR);
     let p = str(DIR, "/col.i64");
@@ -75,6 +96,7 @@ fn main() {
     };
     report("attach of a released arena", thread_spawn_contained(attacher, gone));
     report("attach of a live arena", thread_spawn_contained(attacher, sh.handle));
+    print("levels: ", leaf(3));
     print("main goes on: ", view<i64>(sh, m, 56, 1)[0]);
     delete_file(p);
     delete_dir(DIR);
