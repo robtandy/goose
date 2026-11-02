@@ -1,6 +1,6 @@
 churn: 200 arenas, 600 files mapped, all released
 abort: assert failed
-abort: view<i64> of <dir>/col.i64 out of bounds: 64 element(s) of 8 bytes at byte offset 8, in a file of 512 bytes
+abort: view<i64> of <dir>/col.i64 out of bounds: count 64 at byte offset 8, in a file of 512 bytes
 abort: view<i64> of <dir>/col.i64 misaligned: byte offset 4 is not a multiple of 8, the size of i64's widest scalar
 abort: view<i64> of the zero handle, which names no mapping
 abort: view<i64> of a mapping of another shared arena than the attachment's

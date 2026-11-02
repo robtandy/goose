@@ -1,0 +1,1 @@
+goose runtime error: view<i64> of gs_shared_view_bounds/col out of bounds: count 3 at byte offset 8, in a file of 24 bytes
