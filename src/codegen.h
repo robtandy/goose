@@ -821,8 +821,10 @@ struct CodeGen {
     void EmitExitRestores(int to);
     void RegisterDefer(Defer *d);
     void RegisterEnd(const string &end);
-    // The attachment n names, as the runtime takes it (§11.4).
+    // The attachment n names, as the runtime takes it (§11.4), and a
+    // handle argument, each pinned where it is evaluated.
     string AttPtr(Node *n);
+    string PinnedRes(Node *n);
     void BindAttachment(const string &name, Node *init, bool global);
     int64_t ScalarAlign(TypeExpr *t);
     void EmitDeferBody(Defer *d);

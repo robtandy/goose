@@ -171,24 +171,30 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
             Fail(ln, "internal: attach outside an owning declaration");
         case B_MAP_FILE: {
             // The handle and whether the file was mapped; with `why`, the
-            // reason appended to it where it was not (§11.4).
+            // reason appended to it where it was not (§11.4). Each argument
+            // is taken as it is evaluated, in order, `why` included, whose
+            // expression runs whether or not the file maps.
             auto att = AttPtr(an[0]);
             auto path = GenPure(an[1]);
+            auto pd = T(), pl = T();
+            L("const uint8_t *", pd, " = (const uint8_t *)(", path, ").data;");
+            L("int64_t ", pl, " = (", path, ").len;");
             auto m = T(), ok = T();
             L("gs_res ", m, ";");
             if (an.size() == 2) {
-                L("uint8_t ", ok, " = gs_shm_map_file(", att, ", ", path, ".data, ", path,
-                  ".len, &", m, ", NULL, NULL, ", LocArgs(ln), ");");
+                L("uint8_t ", ok, " = gs_shm_map_file(", att, ", ", pd, ", ", pl, ", &", m,
+                  ", NULL, NULL, ", LocArgs(ln), ");");
                 return { m, ok };
             }
+            auto why = RecvLoc(an[2]);
             auto w = T(), n = T();
             L("uint8_t *", w, ";");
             L("int64_t ", n, ";");
-            L("uint8_t ", ok, " = gs_shm_map_file(", att, ", ", path, ".data, ", path, ".len, &",
-              m, ", &", w, ", &", n, ", ", LocArgs(ln), ");");
+            L("uint8_t ", ok, " = gs_shm_map_file(", att, ", ", pd, ", ", pl, ", &", m, ", &", w,
+              ", &", n, ", ", LocArgs(ln), ");");
             L("if (", w, ") {");
             ind++;
-            AppendBytes(RecvLoc(an[2]), w, n, ln);
+            AppendBytes(why, w, n, ln);
             L("gs_free_msg(", w, ");");
             ind--;
             L("}");
@@ -198,17 +204,19 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
             // Emitted here, not returned as text: a discarded result would
             // drop the check of the handle.
             auto att = AttPtr(an[0]);
-            auto m = GenX(an[1]);
+            auto m = PinnedRes(an[1]);
             auto t = T();
             L("int64_t ", t, " = gs_shm_size(", att, ", ", m, ", ", LocArgs(ln), ");");
             return { t };
         }
         case B_VIEW: {
             // count T's from byte offset of the region, in place: the slice
-            // the runtime's check gives the address of (§11.4).
+            // the runtime's check gives the address of (§11.4). The
+            // attachment and the handle are taken before the offset and
+            // the count run, which may assign or rebind what named them.
             auto el = c->qtype;
             auto att = AttPtr(an[0]);
-            auto m = GenX(an[1]);
+            auto m = PinnedRes(an[1]);
             auto off = T(), count = T();
             auto offx = GenX(an[2]);
             L("int64_t ", off, " = (int64_t)(", offx, ");");

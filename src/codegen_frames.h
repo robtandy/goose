@@ -1089,12 +1089,25 @@ inline void CodeGen::BindAttachment(const string &name, Node *init, bool global)
     if (!global) RegisterEnd(cat("gs_shm_detach(&", name, ");"));
 }
 
-// A local's or a global's address, or the value of a shared& parameter.
+// A local's or a global's address, or the value of a shared& parameter:
+// taken into a temporary where it is evaluated, so that a later argument
+// rebinding a reference it is reached through changes nothing the call took.
 inline string CodeGen::AttPtr(Node *n) {
     usesshared = true;
     auto lv = GenLoc(n);
     if (lv.t->kind == TY_REF) DerefLoc(lv);
-    return cat("(&", lv.s, ")");
+    auto p = T();
+    L("gs_att *", p, " = &(", lv.s, ");");
+    return p;
+}
+
+// A handle argument, taken into a temporary where it is evaluated, which a
+// later argument assigning the variable it names leaves as it was.
+inline string CodeGen::PinnedRes(Node *n) {
+    auto x = GenX(n);
+    auto t = T();
+    L("gs_res ", t, " = ", x, ";");
+    return t;
 }
 
 // The size of plain data t's widest scalar, a view's alignment (§11.4), as
