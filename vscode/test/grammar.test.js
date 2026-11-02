@@ -57,12 +57,18 @@ test('every compiler keyword is recognized without treating from as reserved', a
     assert.deepEqual(line[0].scopes, ['source.goose']);
 });
 
-test('all builtin calls and namespace declarations highlight', async () => {
+test('all builtin calls, properties and namespace declarations highlight', async () => {
     const builtins = fs.readFileSync(path.resolve(__dirname, '../../src/builtins.h'), 'utf8');
-    const names = [...builtins.matchAll(/F\(B_\w+,\s*"(\w+)"/g)].map(match => match[1]).filter(name => !['len', 'cap'].includes(name));
+    const properties = [...builtins.matchAll(/F\(B_\w+,\s*"(\w+)".*\bBF_PROPERTY\b/g)].map(match => match[1]);
+    assert.ok(['len', 'cap'].every(name => properties.includes(name)), properties.join());
+    const names = [...builtins.matchAll(/F\(B_\w+,\s*"(\w+)"/g)].map(match => match[1]).filter(name => !properties.includes(name));
     for (const name of names) {
         const [line] = await tokenize(`${name}()`);
         assert.ok(has(line, name, 'support.function'), name);
+    }
+    for (const name of properties) {
+        const [line] = await tokenize(`let n = x.${name};`);
+        assert.ok(has(line, name, 'support.variable.property'), name);
     }
     const [line] = await tokenize('thread_fn image::worker(n: i64) {}');
     assert.ok(has(line, 'image::worker', 'entity.name.function'));

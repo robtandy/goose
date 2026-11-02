@@ -1,0 +1,12 @@
+block: 11
+released after its block: true
+released after the loop: 3 of 3
+1 0 7
+released after returns: 7 of 7
+defer views 151
+released after the defer: true
+holder sees 31
+holder returned: false
+assert failed
+still attached here: true 1
+released after the abort: true

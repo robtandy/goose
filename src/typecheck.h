@@ -67,8 +67,10 @@ namespace goose {
 
 enum IterKind { IK_RANGE, IK_COUNT, IK_ARRAY, IK_SLICE };
 
-// Type validation positions: what may be declared where.
-enum ValidPos { VT_LOCAL, VT_GLOBAL, VT_PARAM, VT_RET, VT_FIELD, VT_ELEM, VT_POINTEE };
+// Type validation positions: what may be declared where. VT_KIND is a
+// handle's kind (§3.12), which only names a type, as a pointee does, and is
+// the one place the runtime's `mapping` may be written (§11.4).
+enum ValidPos { VT_LOCAL, VT_GLOBAL, VT_PARAM, VT_RET, VT_FIELD, VT_ELEM, VT_POINTEE, VT_KIND };
 
 // Whether a `break` in a loop's body gives the loop a value: one no construct
 // inside the body is the target of instead (FindBreakScope) -- a nested
@@ -1279,6 +1281,17 @@ struct TypeCheck {
             return ": only its kind's binding makes a handle (§3.12)";
         return "";
     }
+
+    // Shared memory (§11.4). Plain data, which every byte pattern of its
+    // size is a value of, is what a view of a mapped file may have; `why`
+    // names the part of t at fault. Its widest scalar is what a view's
+    // offset is a multiple of, `part` naming it. A runtime handle in a value
+    // C makes is one C forged (§7.10).
+    bool PlainData(TypeExpr *t, string &why);
+    int64_t WidestScalar(TypeExpr *t, string &part);
+    TypeExpr *RuntimeHandleIn(TypeExpr *t);
+    Val CheckSharedMember(Call *c, const BuiltinDef &d, vector<Node *> &args, const Val &rv);
+    bool SharedBuiltinHidden(Call *c, const BuiltinDef &d);
 
     // Serialization (docs/design/serialization.md): what to_bytes will write
     // out, and the stricter question of what from_bytes can verify its way

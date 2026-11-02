@@ -934,6 +934,17 @@ unchanged, on Windows too, where the C library's text mode would turn each
 `\r\n` into a `\n` and stop at a Ctrl-Z. `read_line` strips a `\r` before a
 line's newline, along with the newline.
 
+`read_file` copies a file into a growable array of the thread that reads
+it. A large file that the program only reads, such as a column of numbers
+that several workers scan, can be mapped instead: the builtin
+`sh.map_file(path)` maps it read-only into a shared arena, and
+`view<T>(sh, m, offset, count)` reads it in place, typed, from any thread
+attached to the arena, with no copy (spec §11.4, the reference's
+[section 22](reference.md#shared-memory-mapped-files)). Summing a 2 GB
+`i64` column from the page cache that way runs at 15 to 20 GB/s on one
+thread, where reading it with `read_file` first takes about a second
+(`bench/shared_memory/colsum.goose`, its README).
+
 `write_file_atomic` is for files that must never be seen half-written, such
 as saved games. It writes the data to a new file in the same directory as
 `path`, named after `path` with a random tag and `.tmp` added. It then

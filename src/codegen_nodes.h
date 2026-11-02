@@ -272,6 +272,8 @@ inline string Dot::CgX(CodeGen &cg) {
         }
         cg.Fail(line, "variant constant in a non-fixed context reached GenX");
     }
+    // An attachment's arena's handle (§11.4).
+    if (member == B_HANDLE) return cat("gs_shm_handle(", cg.AttPtr(obj), ")");
     if (member >= 0) {   // .len / .cap property.
         auto lv = cg.GenLoc(obj);
         if (lv.t->kind == TY_REF) cg.DerefLoc(lv);

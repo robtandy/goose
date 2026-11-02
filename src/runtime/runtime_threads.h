@@ -74,6 +74,12 @@ GS_API void gs_stack_stats(int64_t stacks) {
             cap);
 }
 
+/* A message the runtime allocated for the program: thread_wait's, and a
+   failed map_file's reason (runtime_shared.h), which needs no threads. */
+GS_API void gs_free_msg(uint8_t *msg) {
+    free(msg);
+}
+
 #if GS_NEED_THREADS
 
 #ifdef _WIN32
@@ -197,6 +203,9 @@ static void *gs_thread_main(void *p)
     gs_contained contain;
     if (t->contained) aborted = gs_run_contained(t, &contain);
     else t->run(t->entry, t->args);
+    /* The attachments whose ends an abort skipped (§11.4), released with
+       the rest of the worker's storage, before any wait returns. */
+    gs_shm_release_held();
     t->release();
     free(t->args);
     gs_release_regions();
@@ -304,10 +313,6 @@ GS_API uint8_t gs_thread_wait(int64_t id, uint8_t **msg, int64_t *len,
     }
     gs_mutex_unlock(&gs_threads_mutex);
     return returned;
-}
-
-GS_API void gs_free_msg(uint8_t *msg) {
-    free(msg);
 }
 
 /* ---------------------------------------------------------------------------

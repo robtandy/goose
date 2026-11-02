@@ -108,9 +108,11 @@ inline void CodeGen::FindKnownRootParams() {
     unordered_map<const VarDef *, Root> roots;
     vector<pair<VarDef *, Node *>> bindings;
     vector<pair<FnSpec *, FnSpec *>> edges;
+    // An attachment's reference is the runtime's pointer, always.
     auto rootref = [&](const VarDef *v) {
         return v && v->type && v->type->kind == TY_REF &&
-               !v->type->ref->optional && IsRoot(v->type->ref->sub);
+               !v->type->ref->optional && IsRoot(v->type->ref->sub) &&
+               !IsAttachment(v->type->ref->sub);
     };
     auto admit = [&](VarDef *v) {
         if (!rootref(v)) return false;
@@ -211,8 +213,8 @@ inline void CodeGen::FindKnownRootParams() {
 inline void CodeGen::FindSplitRootParams() {
     auto rootref = [&](const VarDef *v) {
         return v && v->type && v->type->kind == TY_REF && !v->type->ref->optional &&
-               IsRoot(v->type->ref->sub) && !v->isvar && !v->isglobal && !v->captured &&
-               !capturedvars.count(v);
+               IsRoot(v->type->ref->sub) && !IsAttachment(v->type->ref->sub) && !v->isvar &&
+               !v->isglobal && !v->captured && !capturedvars.count(v);
     };
     unordered_map<const VarDef *, const VarDef *> standsfor;
     set<const VarDef *> fixed;
@@ -1039,7 +1041,10 @@ inline void CodeGen::EmitRestores(const CScope &s) {
     auto defers = s.defers;
     auto di = (int)defers.size() - 1;
     for (auto k = (int)saves.size(); k >= 0; k--) {
-        for (; di >= 0 && (int)defers[di].first == k; di--) EmitDeferBody(defers[di].second);
+        for (; di >= 0 && (int)defers[di].saves == k; di--) {
+            if (defers[di].d) EmitDeferBody(defers[di].d);
+            else L(defers[di].end);
+        }
         if (k > 0) L(Top(saves[k - 1].first), " = ", saves[k - 1].second, ";");
     }
     assert(di < 0);
@@ -1051,10 +1056,74 @@ inline void CodeGen::EmitRestores(const CScope &s) {
 inline void CodeGen::RegisterDefer(Defer *d) {
     for (auto i = (int)cscopes.size() - 1; i >= 0; i--) {
         if (cscopes[i].kind == SC_STMT) continue;
-        cscopes[i].defers.push_back({ cscopes[i].saves.size(), d });
+        cscopes[i].defers.push_back({ cscopes[i].saves.size(), d, {} });
         return;
     }
     assert(false);
+}
+
+// An attachment's end (§11.4), `end`: at each exit of the block declaring
+// it, where a `defer` registered there runs, so in reverse order with the
+// block's restores and defers.
+inline void CodeGen::RegisterEnd(const string &end) {
+    for (auto i = (int)cscopes.size() - 1; i >= 0; i--) {
+        if (cscopes[i].kind == SC_STMT) continue;
+        cscopes[i].defers.push_back({ cscopes[i].saves.size(), nullptr, end });
+        return;
+    }
+    assert(false);
+}
+
+// A local attachment's declaration (§11.4): a new arena, or another
+// attachment to the one attach(h) names, ending with the block; a global's
+// lasts the run.
+inline void CodeGen::BindAttachment(const string &name, Node *init, bool global) {
+    usesshared = true;
+    auto c = Is<Call>(init);
+    if (c && c->builtin == B_ATTACH) {
+        auto h = GenX(c->ArgNodes()[0]);
+        L("gs_shm_attach(&", name, ", ", h, ", ", LocArgs(init->line), ");");
+    } else {
+        L("gs_shm_new(&", name, ", ", LocArgs(init->line), ");");
+    }
+    if (!global) RegisterEnd(cat("gs_shm_detach(&", name, ");"));
+}
+
+// A local's or a global's address, or the value of a shared& parameter:
+// taken into a temporary where it is evaluated, so that a later argument
+// rebinding a reference it is reached through changes nothing the call took.
+inline string CodeGen::AttPtr(Node *n) {
+    usesshared = true;
+    auto lv = GenLoc(n);
+    if (lv.t->kind == TY_REF) DerefLoc(lv);
+    auto p = T();
+    L("gs_att *", p, " = &(", lv.s, ");");
+    return p;
+}
+
+// A handle argument, taken into a temporary where it is evaluated, which a
+// later argument assigning the variable it names leaves as it was.
+inline string CodeGen::PinnedRes(Node *n) {
+    auto x = GenX(n);
+    auto t = T();
+    L("gs_res ", t, " = ", x, ";");
+    return t;
+}
+
+// The size of plain data t's widest scalar, a view's alignment (§11.4), as
+// TypeCheck::WidestScalar has it.
+inline int64_t CodeGen::ScalarAlign(TypeExpr *t) {
+    switch (t->kind) {
+        case TY_INT: return IntBits(t->intstorage) / 8;
+        case TY_FLT: return t->fltstorage == FS_F32 ? 4 : 8;
+        case TY_ARRAY: return ScalarAlign(t->arr->sub);
+        case TY_STRUCT: {
+            int64_t w = 1;
+            for (auto ft : SI(t)->ftypes) if (ft) w = std::max(w, ScalarAlign(ft));
+            return w;
+        }
+        default: return 1;
+    }
 }
 
 // One run of a deferred body at an exit of its block: its statements as

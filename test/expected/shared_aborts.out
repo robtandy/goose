@@ -1,0 +1,22 @@
+4
+check 0: true 
+check 1: false view<i64> of gs_shared_aborts/col.i64 out of bounds: count 8 at byte offset 8, in a file of 64 bytes
+check 2: false view<i64> of gs_shared_aborts/col.i64 out of bounds: count 1 at byte offset -8, in a file of 64 bytes
+check 3: false view<u8> of gs_shared_aborts/col.i64 out of bounds: count -1 at byte offset 0, in a file of 64 bytes
+check 4: false view<Pt> of gs_shared_aborts/col.i64 out of bounds: count 4611686018427387912 at byte offset 0, in a file of 64 bytes
+check 5: false view<i64> of gs_shared_aborts/col.i64 misaligned: byte offset 12 is not a multiple of 8, the size of i64's widest scalar
+check 6: false view<Pt> of gs_shared_aborts/col.i64 misaligned: byte offset 10 is not a multiple of 4, the size of Pt's widest scalar
+check 7: false view<i64> of the zero handle, which names no mapping
+check 8: false size of the zero handle, which names no mapping
+check 9: false view<i64> of a mapping of another shared arena than the attachment's
+check 10: false size of a mapping of another shared arena than the attachment's
+check 11: false limited array capacity exceeded
+check 12: false limited array capacity exceeded
+check 13: false limited array capacity exceeded
+attach of the zero handle: false attach of the zero handle, which names no shared arena
+attach of a released arena: false attach of a released shared arena: it was released when its last attachment ended
+attached
+attach of a live arena: true 
+attach of a returned base case's arena: false attach of a released shared arena: it was released when its last attachment ended
+levels: 3
+main goes on: 7

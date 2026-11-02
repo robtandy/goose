@@ -1,0 +1,25 @@
+true 512
+64 -100 3869 78944
+-99 -1 -96 -1
+4294967197 4294967295
+156 255 255
+-1 -1 -1
+3869
+-1
+65440 65535 -1 -1
+-84 21
+true 4 9 0.75
+0.0
+1
+0 0
+true 0 0
+true true true
+3869 -64512 10148
+0 861
+true -99
+false true 512
+false gs_shared_views: a directory, not a regular file
+false col: the path holds a NUL byte
+resource<mapping> resource<mapping> resource<mapping>
+true 3 8
+true 0.75

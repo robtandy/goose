@@ -8,8 +8,8 @@
    This file holds what a program's own translation unit needs: types,
    macros, the configuration, the helpers that must inline (arithmetic,
    checks, varints), the data stack state the emitted code reads, and
-   declarations of the rest. That rest (runtime_impl.h,
-   runtime_threads.h, and runtime_os.h after runtime_ext.h) needs the
+   declarations of the rest. That rest (runtime_impl.h, runtime_threads.h,
+   runtime_shared.h, and runtime_os.h after runtime_ext.h) needs the
    platform's headers, which no program's unit includes, and is built one
    of two ways:
 
@@ -135,6 +135,9 @@ typedef uint64_t gs_res GS_ALIGN1;
 #endif
 #ifndef GS_STACK_STATS
 #define GS_STACK_STATS 0    /* 1: each thread program reports its stack use as it ends. */
+#endif
+#ifndef GS_SHARED_STATS
+#define GS_SHARED_STATS 0   /* 1: the main program reports its shared arenas as it ends. */
 #endif
 /* §10.4 caps a stack reservation at 2^48 bytes, which is what lets the
    compiler treat every size, count and index as fitting in 48 bits: the
@@ -997,6 +1000,71 @@ GS_API gs_qnode *gs_qget(gs_queue *q);
 GS_API gs_qnode *gs_qwait(gs_queue *q, int64_t ms);
 GS_API gs_qnode *gs_qpoll(gs_queue *q);
 GS_API void gs_qlimit(gs_queue *q, int64_t n, const char *file, int line);
+
+/* ---------------------------------------------------------------------------
+   Shared memory (§11.4, docs/design/shared_memory.md), runtime_shared.h: an
+   arena of read-only regions, which any thread that attaches to it reads in
+   place through views. A runtime handle (§3.12) names an arena, its serial
+   in bits 63..24, never reused, with 0 below it, or one of its regions,
+   numbered from 1 in bits 23..0; the zero handle names nothing. */
+
+#define GS_RES_SERIAL_BITS 40
+#define GS_RES_REGION_BITS 24
+typedef char gs_res_bits_check[GS_RES_SERIAL_BITS + GS_RES_REGION_BITS == 64 ? 1 : -1];
+
+/* An attachment (`shared {}`, `attach(h)`): a local or global of its owning
+   declaration, which counts once in its arena until the declaration's scope
+   ends (gs_shm_detach) or a contained worker holding it aborts
+   (gs_shm_release_held). It also keeps the region its last view or size
+   looked up, which only its own thread reads: a view of that region is the
+   inline check below, and any other goes to the runtime once. */
+struct gs_arena;
+typedef struct {
+    struct gs_arena *arena;
+    gs_res res;              /* The region the rest describes; 0 for none. */
+    const uint8_t *base;
+    int64_t len;
+} gs_att;
+
+/* A new arena, attached once; another attachment to the arena h names. */
+GS_API void gs_shm_new(gs_att *a, const char *file, int line);
+GS_API void gs_shm_attach(gs_att *a, gs_res h, const char *file, int line);
+/* The end of an attachment: the last one releases its arena, whose files
+   are unmapped. */
+GS_API void gs_shm_detach(gs_att *a);
+GS_API gs_res gs_shm_handle(const gs_att *a);
+/* map_file: the whole file read-only as a region of a's arena, *m its handle
+   and 1; or 0 and the zero handle, with the reason, where `why` is not
+   NULL, in a buffer the runtime keeps for the calling thread until the
+   caller, having appended it, calls gs_shm_reason_done, or until an abort
+   on the way there ends a contained worker (gs_shm_release_held). */
+GS_API uint8_t gs_shm_map_file(gs_att *a, const uint8_t *path, int64_t pathlen, gs_res *m,
+                               uint8_t **why, int64_t *whylen, const char *file, int line);
+GS_API void gs_shm_reason_done(void);
+GS_API int64_t gs_shm_size(gs_att *a, gs_res m, const char *file, int line);
+/* What gs_shm_view does where the region is not the one a's cache holds,
+   or where the view does not fit: looks the region up, or aborts. */
+GS_API const uint8_t *gs_shm_view_slow(gs_att *a, gs_res m, int64_t off, int64_t count,
+                                       int64_t size, int64_t align, const char *type,
+                                       const char *file, int line);
+/* After a contained worker's abort, and as any worker ends: the end of every
+   attachment its thread still holds. */
+GS_API void gs_shm_release_held(void);
+/* The arenas and mappings made and released so far, on stderr
+   (GS_SHARED_STATS). */
+GS_API void gs_shm_stats(void);
+
+/* view<T>(sh, m, offset, count): `count` T's of `size` bytes from byte
+   `offset` of region m, `align` the size of T's widest scalar, a power of
+   two. Checked once, without overflow: within the region, and aligned. */
+static const uint8_t *gs_shm_view(gs_att *a, gs_res m, int64_t off, int64_t count,
+                                  int64_t size, int64_t align, const char *type,
+                                  const char *file, int line) {
+    if (m == a->res && m && (uint64_t)off <= (uint64_t)a->len &&
+        (uint64_t)count <= (uint64_t)(a->len - off) / (uint64_t)size && !(off & (align - 1)))
+        return a->base + off;
+    return gs_shm_view_slow(a, m, off, count, size, align, type, file, line);
+}
 
 #ifndef GS_RUNTIME_OBJECT
 

@@ -3,8 +3,9 @@
 The programs behind the numbers in
 [docs/design/shared_memory.md](../../docs/design/shared_memory.md), kept so
 that they can be reproduced on another machine and compared against by the
-implementation (#3 and #4). They are small C programs and one Goose program,
-not part of the benchmark suite of [design.md](../design.md).
+implementation (#3 and #4), whose own measurement, `colsum.goose`, is here
+too. They are small C programs and two Goose programs, not part of the
+benchmark suite of [design.md](../design.md).
 
 | Program | Measures | Used in the note |
 |---|---|---|
@@ -15,13 +16,16 @@ not part of the benchmark suite of [design.md](../design.md).
 | `attach.c` | an attach and a detach as an atomic increment and decrement of one counter on 1, 4 and 16 threads | 4.6 |
 | `sigbus.c` | the signal a read past the end of a truncated mapping raises, and what its handler can tell | 5.3 |
 | `join_loops.goose` | the hash join's three loops as `checkfree` functions over `const` slices standing in for views | 4.5 and 6 |
+| `colsum.goose` | the 2 GB sum in Goose, as phase 1 built it: through views of one mapping, by `pread` into a reused buffer (`colsum_impl.c`, an `extern fn`, from its sidecar `colsum.build`), and from the whole file read with `read_file` | 2 and 12 |
 
-`run.sh` builds the C programs and runs each three times:
+`run.sh` builds the C programs and `colsum.goose`, and runs each three times:
 
 ```sh
 bench/shared_memory/run.sh /path/to/scratch            # clang; COLD=0 skips the cold-cache rows
 goose check -O2 bench/shared_memory/join_loops.goose  # compiles only if every checkfree loop is check-free
 goose run bench/shared_memory/join_loops.goose        # 5000 matches, payloads summing to 12497500
+goose build -O2 --cc clang -o colsum bench/shared_memory/colsum.goose
+./colsum /path/to/scratch/col.i64 view 16 2           # view, pread or read_file; threads; passes
 ```
 
 The scratch directory should be on the file system whose files are to be
@@ -63,6 +67,34 @@ repeated passes would fault every worker's page tables again.
 Copies also cost memory. A table that every worker probes reaches each worker
 as a copy: for a hash join with a 16M-row build side, about 770 MB of tables,
 16 workers would hold 12 GB.
+
+### The same sum in Goose
+
+`colsum.goose` sums the same file as phase 1 built shared memory (#3):
+workers given the arena's and the mapping's handles attach, take morsels
+of 983,040 bytes from a queue and sum views of them in a `checkfree`
+function; by `pread`, each worker reads its morsels into a buffer it
+reuses (`col_pread`, an `extern fn`); `read_file` reads the whole file
+into main's memory, which one thread sums and 16 threads get copies of
+their parts of, as spawn arguments, since a thread's memory reaches
+another only as a copy. Built with `goose build -O2 --cc clang`, each run
+next to `mapbench`'s of the same method, medians of three:
+
+| Method | 1 thread | 16 threads | `mapbench`, 1 and 16 |
+|---|---:|---:|---:|
+| `pread` into a reused buffer | 9.3 GB/s | 74 GB/s | 9.3, 76 GB/s |
+| `read_file`, then summed | 1.85 GB/s | 0.9 GB/s | 2.24, 2.44 GB/s |
+| views of one mapping, first pass, the mapping made in it | 15.5 GB/s | 137 GB/s | 15.2, 142 GB/s |
+| the same views, later passes | 20.1 GB/s | 157 GB/s | 20.0, 165 GB/s |
+
+On one thread the views are the C mapping, and on 16 within 3 to 5%,
+taking morsels from a locked queue where `mapbench` has an atomic counter.
+They are 1.7x (first pass) to 2.2x faster than `pread`, which copies every
+byte twice. A loop over a view is the C a loop over any slice is, plain
+loads, which the C compiler vectorizes. `read_file` spends 1.05 s of its
+1.16 s reading, through a 64 KB buffer into a data stack (`mapbench`'s
+read is 0.86 s), and on 16 threads the copies to the workers cost more
+than summing in parallel saves.
 
 ### Releasing memory when threads end together
 

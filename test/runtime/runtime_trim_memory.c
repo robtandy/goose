@@ -18,6 +18,7 @@
 #include "../../src/runtime/runtime.h"
 #include "../../src/runtime/runtime_impl.h"
 #include "../../src/runtime/runtime_threads.h"
+#include "../../src/runtime/runtime_shared.h"
 #ifndef _WIN32
 #include <sys/wait.h>
 #endif

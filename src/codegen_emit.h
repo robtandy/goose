@@ -874,7 +874,9 @@ inline void CodeGen::EmitGlobalDecls() {
 }
 
 inline void CodeGen::InitGlobalValue(VarDef *d, Node *init) {
-    if (IsRoot(d->type)) {
+    if (IsAttachment(d->type)) {
+        BindAttachment(gnames[d], init, true);
+    } else if (IsRoot(d->type)) {
         auto sl = Is<StructLit>(init);
         assert(sl && sl->sinst->st->isroot);
         for (auto c : d->components) {
@@ -1079,7 +1081,9 @@ inline string CodeGen::ExportHeader() {
 
 inline void CodeGen::EmitMain() {
     Append(code, "int main(int argc, char **argv) {\n    gs_program_init(argc, argv);\n",
-           MainCall(), "    gs_rt_stats();\n    return 0;\n}\n");
+           MainCall(), "    gs_rt_stats();\n",
+           usesshared ? "#if GS_SHARED_STATS\n    gs_shm_stats();\n#endif\n" : "",
+           "    return 0;\n}\n");
 }
 
 }  // namespace goose
