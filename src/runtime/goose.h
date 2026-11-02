@@ -22,6 +22,15 @@
    made, by value. */
 typedef uint64_t gs_res;
 
+/* Makes e's message pending in its thread's inbox, unless it is, and wakes
+   the thread (spec §11.2): what C calls when what an event stands for, an
+   I/O say, has happened. 1: a copy is pending and can be taken; 0: e's
+   event is closed, by event_close or its thread's end; -1: e never named
+   one. Any thread may call it at any time, before, during or after the
+   owner's waits; it runs no Goose code and allocates nothing. C may keep a
+   resource<event> it was handed, but never makes one. */
+int gs_event_signal(gs_res e);
+
 typedef struct {
     uint8_t *top;
 } gs_stack;

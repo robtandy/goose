@@ -2,7 +2,12 @@
    creation, including workers nobody joins, concurrent/repeated waits and
    contained workers that abort, whose messages the runtime keeps until a
    wait takes them. Small limits make a region registry that leaks
-   entries fail quickly. */
+   entries fail quickly. The runtime keeps thread records, the inboxes and
+   the hint words of events for the next workers (docs/design/
+   inboxes_select.md §5), so live allocations are measured once the first
+   workers have made them, and must stay flat under churn: of workers, of
+   messages to their inboxes that they never take, of events they leave
+   open and of watches, fired or cancelled. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -161,8 +166,30 @@ static void bad_waiting_worker(uint8_t *args) {
 /* Observe exit without calling thread_wait: cleanup must not depend on join. */
 static void wait_quiescent(void) {
     gs_mutex_lock(&gs_threads_mutex);
-    while (gs_threads) gs_cond_wait(&gs_threads_done, &gs_threads_mutex);
+    while (gs_nlive) gs_cond_wait(&gs_threads_done, &gs_threads_mutex);
     gs_mutex_unlock(&gs_threads_mutex);
+}
+
+/* A worker that leaves what its end must release: a message in each of its
+   inboxes, which it never takes, an event left open with a copy pending,
+   and a watch of the worker spawned before it, which its end cancels
+   unless that one ended first. It waits for leave_open, so that the first
+   round's eight are all alive at once and make all of the inboxes. */
+static gs_queue q_job = GS_QUEUE_INIT, q_ended = GS_QUEUE_INIT;
+static int leave_open;
+static void leaving_worker(uint8_t *args) {
+    int64_t prev;
+    memcpy(&prev, args, sizeof(prev));
+    int64_t me = gs_thread_self();
+    check(gs_qput_to(&q_job, me, &me, sizeof(me), __FILE__, __LINE__) &&
+          gs_qput_to(&q_ended, me, &me, sizeof(me), __FILE__, __LINE__),
+          "a put to one's own inbox");
+    gs_res e = gs_event_new(&q_job, &me, sizeof(me), __FILE__, __LINE__);
+    check(gs_event_signal(e) == 1, "a signal of one's own open event");
+    if (prev >= 0) gs_thread_watch(&q_ended, prev, &me, sizeof(me), __FILE__, __LINE__);
+    gs_mutex_lock(&test_mutex);
+    while (!leave_open) gs_cond_wait(&test_cond, &test_mutex);
+    gs_mutex_unlock(&test_mutex);
 }
 
 static void check_baseline(long allocations, long regions) {
@@ -177,6 +204,19 @@ int main(void) {
     gs_rt_init(0, NULL, 1, 1, GS_MAX_STACKS);
     check(gs_hardware_threads() >= 1, "hardware_threads() reports at least one worker");
     GS(0)->top[0] = 99;
+    long initial = counter_add(&live_allocations, 0);
+    /* The records eight workers alive at once take, which later workers
+       reuse: no part below has more alive. */
+    {
+        int64_t ids[8], stamp = 99;
+        for (int i = 0; i < 8; ++i) ids[i] = gs_thread_spawn(gated_worker, &stamp, sizeof(stamp), 0);
+        gs_mutex_lock(&test_mutex);
+        gate_open = 1;
+        gs_cond_broadcast(&test_cond);
+        gs_mutex_unlock(&test_mutex);
+        for (int i = 0; i < 8; ++i) gs_thread_wait(ids[i], NULL, NULL, __FILE__, __LINE__);
+        gate_open = 0;
+    }
     long allocations = counter_add(&live_allocations, 0);
     long regions = counter_add(&live_regions, 0);
 #ifdef _WIN32
@@ -258,6 +298,47 @@ int main(void) {
     check(!gs_thread_wait(bad, NULL, NULL, __FILE__, __LINE__), "a contained worker aborts in thread_wait");
     check(gs_thread_wait(target, NULL, NULL, __FILE__, __LINE__), "a plain worker that returned waits true");
     check_baseline(allocations + 1, regions);
+    allocations++;
+
+    /* Queues, inboxes, events and watches: a first round makes the inboxes
+       and hint words, and main watches every worker. Then rounds of eight
+       must leave allocations as they found them, once main has taken the
+       Ended messages of the watches it made, and the workers' messages,
+       copies and watches are gone with them. */
+    gs_qinit(&q_job);
+    gs_qinit(&q_ended);
+    long queued = 0;
+    for (int round = 0; round < 201; ++round) {
+        int64_t ids[8], prev = -1;
+        for (int i = 0; i < 8; ++i) {
+            ids[i] = gs_thread_spawn(leaving_worker, &prev, sizeof(prev), 0);
+            gs_thread_watch(&q_ended, ids[i], &ids[i], sizeof(ids[i]), __FILE__, __LINE__);
+            prev = ids[i];
+        }
+        if (round == 0) {
+            gs_mutex_lock(&test_mutex);
+            leave_open = 1;
+            gs_cond_broadcast(&test_cond);
+            gs_mutex_unlock(&test_mutex);
+        }
+        if (round % 2) wait_quiescent();
+        else for (int i = 0; i < 8; ++i) gs_thread_wait(ids[i], NULL, NULL, __FILE__, __LINE__);
+        /* Main's own watches, each of which fires once; the workers' watches
+           of one another are cancelled or fire into ended inboxes. */
+        for (int i = 0; i < 8; ++i) {
+            gs_qmsg m;
+            check(gs_qwait(&q_ended, 60000, &m), "every watch of main fires");
+            gs_qdone(&m);
+        }
+        gs_qmsg m;
+        check(!gs_qwait(&q_ended, 0, &m), "a watch fires only once");
+        check(!gs_qwait(&q_job, 0, &m), "nothing reaches main that was not put to it");
+        if (round == 0) queued = counter_add(&live_allocations, 0);
+        else check(counter_add(&live_allocations, 0) == queued,
+                   "inboxes, events and watches are released or reused, not leaked");
+        check(counter_add(&live_regions, 0) == regions, "all worker reservations released");
+    }
+    allocations = queued;
 #ifdef _WIN32
     check(GetProcessHandleCount(GetCurrentProcess(), &handles_after), "read handle count");
     check(handles_after == handles_before, "native thread handles released");
@@ -266,7 +347,10 @@ int main(void) {
        instance (main has none here), then the regions. */
     gs_thread_release();
     gs_release_regions();
-    check(counter_add(&live_allocations, 0) == 1, "test releases its main stack block");
+    /* What is left: the message no wait took, and what the runtime keeps
+       for the next workers. */
+    check(counter_add(&live_allocations, 0) == allocations - initial,
+          "test releases its main stack block");
     check(counter_add(&live_regions, 0) == 0, "test releases its main reservation");
     puts("runtime thread cleanup ok");
     return 0;

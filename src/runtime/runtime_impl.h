@@ -26,6 +26,10 @@ static const char *gs_errmsgs[] = {
     "invalid array length",
     "slice not within this array",
     "slice pool span tree is corrupt",
+    "qput_to or thread_watch of a thread id never issued",
+    "thread_watch of main or of the current thread",
+    "event_close of a handle that names no open event of this thread",
+    "too many open events",
 };
 
 /* Ends the process with `code`, its streams flushed: exit() and every

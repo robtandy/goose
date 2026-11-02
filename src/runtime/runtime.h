@@ -211,6 +211,10 @@ enum {
     GS_E_ARRAYLEN,     /* array element count negative or beyond a data stack */
     GS_E_ARRAYSLICE,   /* a nonempty slice is not wholly inside the array */
     GS_E_SPANTREE,     /* a stdlib slice_pool's nodes and tree are no span tree */
+    GS_E_NOTHREAD,     /* qput_to or thread_watch of a thread id never issued */
+    GS_E_WATCH,        /* thread_watch of main or of the current thread */
+    GS_E_EVENT,        /* event_close of what is no open event of this thread */
+    GS_E_EVENTS,       /* too many open events */
 };
 
 /* A place in the program's source: where a standard library function
@@ -976,27 +980,81 @@ GS_API uint8_t gs_thread_wait(int64_t id, uint8_t **msg, int64_t *len,
                                const char *file, int line);
 GS_API void gs_free_msg(uint8_t *msg);
 
-/* One queue per flat element type the program uses (the compiler emits a
-   gs_queue global per type, which main sets up before anything can use it).
-   Values are contiguous byte images: gs_qget, gs_qwait and gs_qpoll return a
-   malloc'd node the caller copies from and frees, gs_qwait and gs_qpoll NULL
-   when nothing came. gs_qput returns 0, queueing nothing, when the queue is
-   at its limit. */
+/* One global queue per flat element type the program uses (the compiler
+   emits a gs_queue global per type, which main sets up before anything can
+   use it, gs_qinit numbering the types in the order it is called), and
+   beside it each thread's inbox of the type (§11.2). Values are contiguous
+   byte images. A take hands its message over as a view and a token: it
+   copies `size` bytes from `data`, then gives `hold` back with gs_qdone. A
+   take that found nothing leaves no bytes and no token, which gs_qdone
+   ignores. Every take looks at the caller's inbox first, then at the
+   global queue, and waits for either. */
 typedef struct gs_qnode {
     struct gs_qnode *next;
     int64_t size;
     /* Value bytes follow the header. */
 } gs_qnode;
 
+typedef struct gs_qmsg {
+    const uint8_t *data;
+    int64_t size;
+    void *hold;
+} gs_qmsg;
+
 typedef struct gs_qstate *gs_queue;
 #define GS_QUEUE_INIT NULL
 
 GS_API void gs_qinit(gs_queue *q);
+/* 0, queueing nothing, when the queue is at its limit. */
 GS_API uint8_t gs_qput(gs_queue *q, const void *data, int64_t size);
-GS_API gs_qnode *gs_qget(gs_queue *q);
-GS_API gs_qnode *gs_qwait(gs_queue *q, int64_t ms);
-GS_API gs_qnode *gs_qpoll(gs_queue *q);
+/* Blocks until a message comes. */
+GS_API void gs_qget(gs_queue *q, gs_qmsg *m);
+/* qget<T>(ms), and qpoll<T>() with ms 0: whether a message came, waiting
+   at most ms milliseconds, none at zero or less. */
+GS_API uint8_t gs_qwait(gs_queue *q, int64_t ms, gs_qmsg *m);
+/* select (§11.2): the next message of the n queues' types, queue i's being
+   variant i's, whose tag it returns, or -1 at its deadline: ms milliseconds
+   from now, blocking below zero. *at is the site's rotation, the variant
+   after the one it returned last, which it moves on. */
+GS_API int64_t gs_qselect(gs_queue *const *qs, int64_t n, int64_t ms, uint32_t *at,
+                          gs_qmsg *m);
+/* After the copy: frees or returns what the message was held in. */
+GS_API void gs_qdone(gs_qmsg *m);
 GS_API void gs_qlimit(gs_queue *q, int64_t n, const char *file, int line);
+/* qlimit_inbox<T>(n): every thread's inbox of q's type holds at most n
+   messages of its own. */
+GS_API void gs_qlimit_inbox(gs_queue *q, int64_t n, const char *file, int line);
+/* qput_to(id, v): into thread id's inbox of q's type; 0, queueing nothing,
+   when that inbox is full or the thread has ended. An id never issued
+   aborts. */
+GS_API uint8_t gs_qput_to(gs_queue *q, int64_t id, const void *data, int64_t size,
+                          const char *file, int line);
+/* thread_id(): the caller's id, -1 on main. */
+GS_API int64_t gs_thread_self(void);
+/* thread_watch(id, v): a copy of v into the caller's inbox of q's type once
+   worker id has ended, at once if it has. */
+GS_API void gs_thread_watch(gs_queue *q, int64_t id, const void *data, int64_t size,
+                            const char *file, int line);
+
+/* A runtime handle (§3.12) is its serial, bits 63 to 24, never reused, and
+   an index, bits 23 to 0, of the record its serial was given to; serial 0
+   names nothing. */
+#define GS_RES_SERIAL_BITS 40
+#define GS_RES_REGION_BITS 24
+typedef char gs_res_bits_sum[GS_RES_SERIAL_BITS + GS_RES_REGION_BITS == 64 ? 1 : -1];
+
+/* event(v): a new event of the calling thread holding a copy of v, whose
+   signals make that copy pending in the caller's inbox of q's type. */
+GS_API gs_res gs_event_new(gs_queue *q, const void *data, int64_t size, const char *file,
+                           int line);
+/* event_close(e): later signals of e return 0; a copy pending stays. */
+GS_API void gs_event_close(gs_res e, const char *file, int line);
+/* What C calls, from any thread, when what e stands for has happened (spec
+   §7.10, goose.h): e's message is made pending in its thread's inbox,
+   unless it is, and the thread is woken. 1: a copy is pending and can be
+   taken; 0: e's event is closed, by event_close or its thread's end; -1: e
+   never named one. External in every build, for packages' native parts. */
+int gs_event_signal(gs_res e);
 
 #ifndef GS_RUNTIME_OBJECT
 

@@ -1366,6 +1366,11 @@ struct CodeGen {
     unordered_map<string, string> queues;   // Element type mangle -> queue global.
 
     string QueueFor(TypeExpr *t);
+    // A message's image as qput sends it (§11.2): its bytes' address and count.
+    pair<string, string> MessageImage(Node *a, Line ln);
+    // The value of type t that the take into gs_qmsg m handed over, copied
+    // to d0 as qget's result, or t's zero value where `got` says none came.
+    vector<string> EmitTakenMessage(TypeExpr *t, const string &m, const string &got, Dst d0);
     Loc RecvLoc(Node *n);
     string LenCast(const Loc &lv);
     vector<string> EmitBuiltin(Call *c, Dst d0);

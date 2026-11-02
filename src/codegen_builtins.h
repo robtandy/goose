@@ -15,6 +15,110 @@ inline string CodeGen::QueueFor(TypeExpr *t) {
     return queues[m] = name;
 }
 
+// A resizable crosses as its image, [int64 count][fixed fields][tail
+// elements], built on a scratch stack; any other value as its own bytes.
+inline pair<string, string> CodeGen::MessageImage(Node *a, Line ln) {
+    auto t = a->exprtype;
+    if (IsResz(t)) {
+        auto src = GenLoc(a);
+        if (src.t->kind == TY_REF) DerefLoc(src);
+        string stk;
+        auto base = BytesTemp(stk);
+        EmitRzImage(src, t, stk, ln);
+        return { base, cat(Top(stk), " - ", base) };
+    }
+    if (IsBytesT(t)) {
+        auto p = GenPtr(a);
+        return { p, SizeX(t, p) };
+    }
+    auto tv = T();
+    FixedLocal(t, tv, GenX(a));
+    return { cat("&", tv), cat(FixedSize(t)) };
+}
+
+inline vector<string> CodeGen::EmitTakenMessage(TypeExpr *t, const string &m, const string &got,
+                                                Dst d0) {
+    auto poll = !got.empty();
+    if (IsResz(t)) {
+        // The elements go to the destination's top; the count, and a frame
+        // object's fixed fields, to the receiving header or frame object (a
+        // temporary without a receiver).
+        EmitCoreTypes();
+        string stk = d0.k == DK_STACK && !d0.lenlv.empty() ? d0.s : "";
+        string lenlv = d0.k == DK_STACK ? d0.lenlv : "";
+        string hv;
+        if (stk.empty()) {
+            hv = RzTemp(t, stk);
+            lenlv = RzLenLv(t, hv);
+        }
+        auto fo = IsFrameObj(t);
+        auto cnt = fo ? cat(FoTailHdr(t, lenlv), ".len") : lenlv;
+        auto image = cat("(", m, ".data + 8)");
+        auto n = cat("(", m, ".size - 8)");
+        if (fo) {
+            // The zero value until the image is read (a missed poll leaves
+            // it), with the tail header at the top, where the elements land.
+            L("GS_MEMZERO(&", lenlv, ", sizeof(", lenlv, "));");
+            L(FoTailHdr(t, lenlv), ".base = ", Top(stk), ";");
+        } else if (poll) {
+            L(lenlv, " = 0;");
+        }
+        L(poll ? cat("if (", got, ") {") : string("{"));
+        ind++;
+        if (fo) {
+            auto pre = FoPrefixSize(t);
+            L("GS_MEMCPY(&", lenlv, ", ", image, ", ", pre, ");");
+            image = cat(image, " + ", pre);
+            n = cat("(", m, ".size - 8 - ", pre, ")");
+        }
+        L(cnt, " = *(const gs_i64 *)", m, ".data;");
+        L("GS_MEMCPY(", Top(stk), ", ", image, ", (size_t)", n, ");");
+        Bump(stk, n);
+        ind--;
+        L("}");
+        return { hv };
+    }
+    if (IsBytesT(t)) {
+        string stk = d0.k == DK_STACK ? d0.s : "";
+        string base = T();
+        if (stk.empty()) {
+            stk = AllocStk(false);
+            L("uint8_t *", base, " = ", Top(stk), ";");
+            SaveBase(false, stk, base);
+        } else {
+            L("uint8_t *", base, " = ", Top(stk), ";");
+        }
+        L(poll ? cat("if (", got, ") {") : string("{"));
+        ind++;
+        L("GS_MEMCPY(", Top(stk), ", ", m, ".data, (size_t)", m, ".size);");
+        Bump(stk, cat(m, ".size"));
+        ind--;
+        if (poll) {
+            // A missed poll still yields a valid (zero) value.
+            L("} else {");
+            ind++;
+            L("GS_MEMZERO(", Top(stk), ", ", MinBytes(t, true), ");");
+            Bump(stk, cat(MinBytes(t, true)));
+            ind--;
+        }
+        L("}");
+        return { base };
+    }
+    auto tv = T();
+    FixedLocal(t, tv);
+    if (!FixedSize(t)) {
+        // A value of no bytes (§3.4): the message holds none to fill the
+        // object C gives it.
+        L("GS_MEMZERO(&", tv, ", sizeof(", tv, "));");
+    } else if (poll) {
+        L("GS_MEMZERO(&", tv, ", sizeof(", tv, "));");
+        L("if (", got, ") GS_MEMCPY(&", tv, ", ", m, ".data, sizeof(", tv, "));");
+    } else {
+        L("GS_MEMCPY(&", tv, ", ", m, ".data, sizeof(", tv, "));");
+    }
+    return { tv };
+}
+
 // The receiver of a member operation, dereferenced, with its stack. The
 // arguments run after it and may rebind a reference it is reached through
 // (Loc::viaref), so such a receiver is resolved first: a reference is read
@@ -167,26 +271,12 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
         }
         case B_THREAD_SPAWN: case B_THREAD_SPAWN_CONTAINED: return EmitThreadSpawn(c, an);
         case B_QPUT: {
-            auto t = an[0]->exprtype;
-            auto q = QueueFor(t);
+            auto q = QueueFor(an[0]->exprtype);
             // Emitted here, not returned as text: a discarded result would
             // drop the put.
+            auto img = MessageImage(an[0], ln);
             auto ok = T();
-            if (IsResz(t)) {
-                auto src = GenLoc(an[0]);
-                if (src.t->kind == TY_REF) DerefLoc(src);
-                string stk;
-                auto base = BytesTemp(stk);
-                EmitRzImage(src, t, stk, ln);
-                L("uint8_t ", ok, " = gs_qput(&", q, ", ", base, ", ", Top(stk), " - ", base, ");");
-            } else if (IsBytesT(t)) {
-                auto p = GenPtr(an[0]);
-                L("uint8_t ", ok, " = gs_qput(&", q, ", ", p, ", ", SizeX(t, p), ");");
-            } else {
-                auto tv = T();
-                FixedLocal(t, tv, GenX(an[0]));
-                L("uint8_t ", ok, " = gs_qput(&", q, ", &", tv, ", ", FixedSize(t), ");");
-            }
+            L("uint8_t ", ok, " = gs_qput(&", q, ", ", img.first, ", ", img.second, ");");
             return { ok };
         }
         case B_QLIMIT: {
@@ -198,104 +288,23 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
         case B_QGET: case B_QPOLL: {
             auto t = c->rettypes[0];
             auto q = QueueFor(t);
-            auto nn = T();
-            // qpoll<T>() and qget<T>(ms) say whether a value came.
+            auto m = T();
+            // qpoll<T>() and qget<T>(ms) say whether a value came. The take
+            // hands over a view of the message, given back after the copy.
             auto poll = c->rettypes.size() > 1;
-            if (c->builtin == B_QPOLL) L("gs_qnode *", nn, " = gs_qpoll(&", q, ");");
-            else if (poll) L("gs_qnode *", nn, " = gs_qwait(&", q, ", ", GenX(an[0]), ");");
-            else L("gs_qnode *", nn, " = gs_qget(&", q, ");");
+            L("gs_qmsg ", m, ";");
             string got;
             if (poll) {
                 got = T();
-                L("uint8_t ", got, " = ", nn, " != NULL;");
-            }
-            if (IsResz(t)) {
-                // The image is [int64 count][fixed fields][tail elements]
-                // (see qput). The elements go to the destination's top;
-                // the count, and a frame object's fixed fields, to the
-                // receiving header or frame object (a temporary without
-                // a receiver).
-                EmitCoreTypes();
-                string stk = d0.k == DK_STACK && !d0.lenlv.empty() ? d0.s : "";
-                string lenlv = d0.k == DK_STACK ? d0.lenlv : "";
-                string hv;
-                if (stk.empty()) {
-                    hv = RzTemp(t, stk);
-                    lenlv = RzLenLv(t, hv);
-                }
-                auto fo = IsFrameObj(t);
-                auto cnt = fo ? cat(FoTailHdr(t, lenlv), ".len") : lenlv;
-                auto image = cat("(uint8_t *)(", nn, " + 1) + 8");
-                auto n = cat("(", nn, "->size - 8)");
-                if (fo) {
-                    // The zero value until the image is read (a missed poll
-                    // leaves it), with the tail header at the top, where
-                    // the elements land.
-                    L("GS_MEMZERO(&", lenlv, ", sizeof(", lenlv, "));");
-                    L(FoTailHdr(t, lenlv), ".base = ", Top(stk), ";");
-                } else if (poll) {
-                    L(lenlv, " = 0;");
-                }
-                L(poll ? cat("if (", nn, ") {") : string("{"));
-                ind++;
-                if (fo) {
-                    auto pre = FoPrefixSize(t);
-                    L("GS_MEMCPY(&", lenlv, ", ", image, ", ", pre, ");");
-                    image = cat(image, " + ", pre);
-                    n = cat("(", nn, "->size - 8 - ", pre, ")");
-                }
-                L(cnt, " = *(gs_i64 *)(", nn, " + 1);");
-                L("GS_MEMCPY(", Top(stk), ", ", image, ", (size_t)", n, ");");
-                Bump(stk, n);
-                L("free(", nn, ");");
-                ind--;
-                L("}");
-                return poll ? vector<string> { hv, got } : vector<string> { hv };
-            }
-            if (IsBytesT(t)) {
-                string stk = d0.k == DK_STACK ? d0.s : "";
-                string base = T();
-                if (stk.empty()) {
-                    stk = AllocStk(false);
-                    L("uint8_t *", base, " = ", Top(stk), ";");
-                    SaveBase(false, stk, base);
-                } else {
-                    L("uint8_t *", base, " = ", Top(stk), ";");
-                }
-                if (poll) L("if (", nn, ") {");
-                else L("{");
-                ind++;
-                L("GS_MEMCPY(", Top(stk), ", ", nn, " + 1, (size_t)", nn, "->size);");
-                Bump(stk, cat(nn, "->size"));
-                L("free(", nn, ");");
-                ind--;
-                if (poll) {
-                    // A missed poll still yields a valid (zero) value.
-                    L("} else {");
-                    ind++;
-                    L("GS_MEMZERO(", Top(stk), ", ", MinBytes(t, true), ");");
-                    Bump(stk, cat(MinBytes(t, true)));
-                    ind--;
-                }
-                L("}");
-                return poll ? vector<string> { base, got } : vector<string> { base };
-            }
-            auto tv = T();
-            FixedLocal(t, tv);
-            if (!FixedSize(t)) {
-                // A value of no bytes (§3.4): the node holds none to fill the
-                // object C gives it.
-                L("GS_MEMZERO(&", tv, ", sizeof(", tv, "));");
-                L("free(", nn, ");");
-            } else if (poll) {
-                L("GS_MEMZERO(&", tv, ", sizeof(", tv, "));");
-                L("if (", nn, ") { GS_MEMCPY(&", tv, ", ", nn, " + 1, sizeof(", tv,
-                  ")); free(", nn, "); }");
+                L("uint8_t ", got, " = gs_qwait(&", q, ", ",
+                  c->builtin == B_QPOLL ? string("0") : GenX(an[0]), ", &", m, ");");
             } else {
-                L("GS_MEMCPY(&", tv, ", ", nn, " + 1, sizeof(", tv, "));");
-                L("free(", nn, ");");
+                L("gs_qget(&", q, ", &", m, ");");
             }
-            return poll ? vector<string> { tv, got } : vector<string> { tv };
+            auto vals = EmitTakenMessage(t, m, got, d0);
+            L("gs_qdone(&", m, ");");
+            if (poll) vals.push_back(got);
+            return vals;
         }
         case B_PUSH: return EmitPush(an, ln);
         case B_APPEND: EmitAppend(an, ln); return {};
