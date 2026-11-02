@@ -6394,8 +6394,10 @@ temporary, so that a discarded size still checks its handle, and
 runtime hands over appended to `why` (`AppendBytes`) and then let go of
 (`gs_shm_reason_done`). A view is the address `gs_shm_view` returns
 for the offset, the count, `T`'s size, its widest scalar (`ScalarAlign`)
-and its name, made the slice `{ data, count }`. Nothing else differs: a
-loop over a view is a loop over a slice, plain loads. A program that uses
+and its name, made the slice `{ data, count }`, of the type `view<T>`
+returns (`rettypes[0]`), not the call's destination's: an array declared
+or assigned from a view copies from that slice, as from any. Nothing else
+differs: a loop over a view is a loop over a slice, plain loads. A program that uses
 none of this emits none of it, and `GS_SHARED_STATS` reports only where it
 does (`usesshared`, `EmitMain`).
 

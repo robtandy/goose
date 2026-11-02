@@ -230,7 +230,9 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
             auto p = T(), v = T();
             L("const uint8_t *", p, " = gs_shm_view(", att, ", ", m, ", ", off, ", ", count, ", ",
               FixedSize(el), ", ", ScalarAlign(el), ", ", CStr(name), ", ", LocArgs(ln), ");");
-            L(CT(c->exprtype), " ", v, " = { (void *)", p, ", ", count, " };");
+            // The slice view<T> returns, whatever its destination: an array
+            // one copies from it, as from any slice.
+            L(CT(c->rettypes[0]), " ", v, " = { (void *)", p, ", ", count, " };");
             return { v };
         }
         case B_QPUT: {

@@ -3852,7 +3852,10 @@ owner (section 8) with no fields. `sh.map_file(path)` maps a whole file
 and gives its handle, a `resource<mapping>`, and whether it was mapped.
 `view<T>(sh, m, offset, count)` is `count` values of type `T` from byte
 `offset` of the file, as a `const T[:]`: an ordinary slice, read in
-place, nothing copied. `sh.size(m)` is the file's size in bytes.
+place, nothing copied. An array declared or assigned from one copies its
+elements, as from any slice: `let first: u8[] = view<u8>(sh, m, 0, 5);`
+is the program's own, written freely and kept after the attachment ends.
+`sh.size(m)` is the file's size in bytes.
 
 ```goose
 import os;
