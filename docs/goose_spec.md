@@ -76,10 +76,14 @@ A Goose program's memory consists of:
 * **Static data** — string literals and `const` globals with compile-time
   initializers. This read-only storage is shared by all program instances
   (§11.2).
+* **Shared regions** — files mapped read-only into a shared arena, which
+  the arena owns while an attachment to it lasts, in any thread, and which
+  every attached thread reads in place (§11.4).
 
 There is no general-purpose heap and no `malloc`. All dynamic allocation is
 expressed as values living on data stacks, owned by locals (or globals).
-(The runtime itself may allocate internally for thread queues, §11.2.)
+(The runtime itself may allocate internally for thread queues, §11.2, and
+for shared arenas, §11.4.)
 
 Rewinding a data stack makes its storage reusable, while normally keeping
 its pages committed. After a large workload, `trim_memory()` from `os`
@@ -476,6 +480,7 @@ references cannot be copied (§3.9). Empty slices, including defaults, are valid
   another struct (including another root struct), an array or slice (even
   fixed-length or empty), an ADT payload, a parameter, or a result. References
   to root structs follow the usual reference placement and lifetime rules.
+  The attachment `shared` (§11.4) is a builtin root owner.
 * **zero-size** values, although they are fixed: zero-length arrays (`T[0]`,
   and `T[..0]` of capacity 0) and variant types with no fields
   (`Shape.Point`, or a variant with only pads that insert nothing, §3.2),
@@ -1186,6 +1191,10 @@ extern fn buffer_free(b: resource<Buffer>);
 * **C.** It crosses as a `uint64_t` (§7.10). The bits are the binding's.
 * **No ownership.** Copying one copies the name only, and only the
   binding's API releases what it names.
+* **The runtime's kinds.** `resource<shared>` names a shared arena and
+  `resource<mapping>` a file mapped into one (§11.4). `mapping` is written
+  only as `resource`'s argument; it is no value's type. C takes these
+  handles but never makes one (§7.10).
 
 ---
 
@@ -1249,10 +1258,11 @@ value is a call, not one of these constructs: its value is a temporary even
 where its body's value names a variable (§9.2).
 
 There is no ownership transfer beyond the return move, no destructors, no
-`Drop`, no reference counting. The only deallocation is scope exit resetting
-stack pointers. A `defer` (§6.6) runs code the program writes at a block's
-exit; it is tied to the block, not to a value, and releases no memory
-itself. (A `move` operation for resizable arrays, which assigns and leaves
+`Drop`, no reference counting of values. The only deallocation is scope exit
+resetting stack pointers, and the end of a shared arena's last attachment,
+which the runtime counts (§11.4). A `defer` (§6.6) runs code the program
+writes at a block's exit; it is tied to the block, not to a value, and
+releases no memory itself. (A `move` operation for resizable arrays, which assigns and leaves
 the source empty, is anticipated but not in v1.)
 
 Copying a variable or resizable value costs O(size). The explicit `copy`
@@ -3316,7 +3326,9 @@ These values can cross the boundary (with layouts per C.2):
   limited arrays, and fixed-mode ADTs), by value as its packed C type;
 * `T&` to such a `T`, as a pointer;
 * `T[:]` of such a `T`, as the slice struct (`{ data, len }`);
-* a handle, `resource<U>` (§3.12), as a `uint64_t`;
+* a handle, `resource<U>` (§3.12), as a `uint64_t`; one of the runtime's
+  kinds (§11.4) only as a parameter, by value or behind a `const`
+  reference or slice, since C never makes one;
 * `T[>..]&` of such a `T`, as the resizable's header plus its stack
   (`gs_rref`). C sees the elements as blocks of `T`'s packed size: it may
   write the ones there are and append whole ones at the stack top, moving
@@ -3852,13 +3864,18 @@ Rules (scopes ordered by nesting; globals are the outermost scope, §11.1):
   or a reference parameter can bind (§4.1); they bind a construct's
   branches instead. A view of a temporary is read-only (§9.5).
 
+An attachment (§11.4) is a root like any variable. A view of a mapped
+file is rooted at the attachment it is made through, exactly, since its
+storage is every region of its arena, which outlives every attachment to
+it.
+
 Violations are compile errors. There is no escape hatch in v1.
 
 ### 9.3 What the runtime still checks
 
 The runtime aborts (prints a message and exits; an abort cannot be caught)
 on each of the following. In a contained worker (§11.2), each of them except
-the last two ends only that worker:
+the last three ends only that worker:
 
 * array/slice indexing out of bounds (elided wherever the compiler proves it
   cannot fire, §10.5; can be disabled wholesale in a designated unsafe-fast
@@ -3881,6 +3898,12 @@ the last two ends only that worker:
 * division by zero (always);
 * `assert` failures, and the program's own `abort(msg)` (`msg` any `u8`
   array or slice; printed as `goose runtime error: <msg>`);
+* a view of a mapped file out of its bounds or misaligned, a view or size of
+  the zero handle or of another arena's mapping, an `attach` of the zero
+  handle or of a released arena, and the 2^40-th arena or the 2^24-th region
+  of one arena (§11.4);
+* a read of a mapped file that another process truncated (§11.4), which
+  faults, and ends the program with a message naming the file;
 * guard-page hits (stack budget exceeded), which abort safely and never
   corrupt memory;
 * native call stack exhaustion (recursion deeper than a thread's stack
@@ -3937,8 +3960,9 @@ per instantiation, in the same way as roots, with no annotation needed:
   a `const` value, a field of one, or a by-value `for`/`match` binding (§6.5).
   These views have types `const T&` or `const T[:]`. Views into temporaries are
   read-only because a write would change only the temporary (§9.2). So are
-  `bytes_of` views (§12), values read from slots declared `const`, and
-  self-relative references read along a read-only path. A slice loaded through a
+  `bytes_of` views (§12), views of mapped files (§11.4), values read from
+  slots declared `const`, and self-relative references read along a
+  read-only path. A slice loaded through a
   reference-to-slice is the slice in the referenced slot. It is writable only if
   both the reference and the slice are writable. A reference to a variable
   holding a read-only slice is therefore read-only too, whether made with `&s`
@@ -3984,7 +4008,8 @@ storage can hold a `T` by value: an array of `T` in any array kind, a struct
 or ADT payload with a `T` field, a `T` itself, and so on through by-value
 nesting. A variable that only holds *references* to `T` is not a candidate,
 and a reference or slice field ends the search. Static data is a candidate
-for the element types a literal can supply. For a writable reference or
+for the element types a literal can supply, and an attachment (§11.4) for
+every plain-data type, which its arena's regions hold. For a writable reference or
 slice, static data is a candidate only when nothing else is, since a
 writable slot is never given a literal (above) and so holds static data
 only as a null or an empty slice. For a read out of a field, an element or a
@@ -4275,6 +4300,8 @@ Beyond ordinary flow facts (loop headers, conditions and their negations,
   storage is reachable only through a global, a capture, or an explicit `&`
   (§3.8).
 * **Static extents.** `T[k]`'s length and `[..k]`'s capacity are constants.
+* **Views.** A view of a mapped file has its `count` for its length, as its
+  check passed (§11.4).
 * **Total operations.** `%` is Euclidean (§6.2), so a reduction is always in
   range; a completed `pop` proves that the array was non-empty, and a
   completed `pop_n(n)` proves that `0 <= n <= len`, because the other cases
@@ -4466,12 +4493,14 @@ relative of the Linda tuple-space / coordination style.
   ends only that worker, which releases what a return would, and leaves its
   message for `thread_wait` instead of printing it. The program and other
   workers keep running. Resources it opened through `extern fn` stay open.
-  Guard-page hits, native stack exhaustion, `exit(code)`, and the runtime's
-  own failures still end the program, as does any abort on main's thread.
+  Guard-page hits, native stack exhaustion, a read of a truncated mapped
+  file (§11.4), `exit(code)`, and the runtime's own failures still end the
+  program, as does any abort on main's thread.
   A worker it starts with `thread_spawn` is not contained.
 * A worker's return releases its copied arguments, stack block, every reserved
   and committed data-stack region, and active-worker record, whether or not
-  anyone waits for it. The runtime retains no per-completed-worker record or
+  anyone waits for it. Its attachments (§11.4) have ended by then, and a
+  contained worker's abort ends them before the rest is released. The runtime retains no per-completed-worker record or
   native handle, except the id of each contained worker that aborted, so
   that waits can answer, and its message until a wait takes it. Native
   threads are detached. Their final native stack/TLS teardown happens when
@@ -4520,6 +4549,120 @@ element owns its own dynamically created stack and is accessed through fat
 references. It is not in v1. (The thread mechanism of §11.2 already
 introduces the dynamic-stack-block machinery this needs.)
 
+### 11.4 Shared memory
+
+Threads share memory only while no thread can write it (§11.2). A file
+mapped read-only belongs to a **shared arena**, which any thread attached
+to the arena reads in place through views
+(`docs/design/shared_memory.md`).
+
+```goose
+thread_fn worker(h: resource<shared>, m: resource<mapping>) {
+    let sh = attach(h);                       // this worker's attachment
+    let xs = view<i64>(sh, m, 0, sh.size(m) / 8);
+    print(xs.len);
+}
+
+fn main() {
+    let sh = shared {};                       // a new arena, and an attachment to it
+    let m, ok = sh.map_file("col.i64");       // resource<mapping>, bool
+    thread_wait(thread_spawn(worker, sh.handle, m));
+}
+```
+
+* **Names.** `shared` and `mapping` are types, and `attach`, `handle`,
+  `map_file`, `size` and `view` builtins (§12), where the program declares
+  nothing so named; `::name` reaches one past a namespaced declaration
+  (§11.1). None is a keyword. In a member call `sh.f(...)` the
+  attachment's members come before the program's functions, as an
+  array's do (§7.1). A function of the program named like one of them
+  takes the plain calls it matches, and the builtin only a call naming an
+  attachment first (`view`, `size`, `map_file`), or `attach` at an owning
+  declaration.
+* **Attachments.** `shared` is a builtin root owner with no components
+  (§3.4), an **attachment**. It is made only by an owning declaration,
+  local or global: `shared {}` makes a new arena, and `attach(h)` another
+  attachment to the arena that `h`, a `resource<shared>`, names. Every
+  rule of root owners applies: a function takes `sh: shared&`, an
+  unannotated binding borrows it, and no attachment is copied, stored by
+  value, returned or sent. An attachment ends at each exit of its scope,
+  `return ... from` included, in reverse order with the scope's restores
+  and `defer`s, so a `defer` declared after it views through it still
+  (§6.6). A global's lasts the run, and no worker uses one (§11.2): a
+  worker attaches a handle. `sh.handle` is the arena's handle.
+* **Arenas.** An arena lives while an attachment to it does, in any
+  thread. The end of its last attachment releases it, and its files are
+  unmapped. Only attaching declarations and their ends count, never
+  handles or views: a handle is a name (§3.12), which can be copied and
+  sent past its arena's release but not attached. Serials are never
+  reused, so no stale handle names a newer arena.
+* **Mapping a file.** `let m, ok = sh.map_file(path);` maps the whole
+  regular file `path` (UTF-8) read-only into `sh`'s arena: `m` is its
+  `resource<mapping>` and `ok` true, or `ok` is false and `m` the zero
+  handle. `sh.map_file(path, why)` appends a failure's reason to `why`, a
+  growable `u8` array. A missing path, a directory or another file that
+  is not regular, a path holding a NUL byte, a file the program may not
+  read or larger than 2^48 bytes (§10.4), and a mapping the system
+  refuses fail; an empty file maps, with size 0. A regular file the system
+  cannot map is read into memory of the runtime's own, made read-only, and
+  is a mapping as any other. `sh.size(m)` is the file's size in bytes when
+  it was mapped.
+* **Views.** `view<T>(sh, m, offset, count)` is `count` `T`s from byte
+  `offset` of the file `m` maps, read in place: a `const T[:]` (§3.10,
+  §9.5), used as any slice and kept in `const` slots. It is rooted at the
+  attachment, exactly, or through a `shared&` parameter where the
+  caller's is (§9.2), so no view outlives its attachment, leaves its
+  thread or is written through. `T` is **plain data**, every byte pattern
+  of whose size is one of its values: an integer or float type, or a
+  fixed array or struct of plain data, pads allowed. Not `bool`, an enum,
+  a limited array, `varint`, a reference or slice, an index or bound type
+  or a handle, which a file's bytes may not be a value of; any other `T`
+  is a compile error naming the part of `T` at fault. A view is checked
+  once, when it is made, by an abort of its own (§9.3), which `checkfree`
+  does not count (§7.14): `m` is a mapping of `sh`'s arena; `offset` is a
+  multiple of the size of `T`'s widest scalar, as a file's format aligns
+  its arrays; and `0 <= offset`, `0 <= count` and
+  `offset + count * size <= sh.size(m)`, computed without overflow, so an
+  empty view fits anywhere up to the size. A constant `offset` that is
+  not aligned is a compile error. A view's length is its `count` (§10.5).
+* **Read-back.** An attachment's storage is every region of its arena, so
+  it is a read-back candidate for every plain-data pointee (§9.5), as
+  static data is for what a literal supplies: a view read out of a
+  container may point into any attachment in scope that could hold its
+  elements.
+* **Immutability.** A view and what it reaches are read-only by type
+  (§9.5), and a mapping is read-only to the hardware too: a write to one,
+  which only a defect of the compiler or of C code can make, ends the
+  program with a message naming the file. Another process may still write
+  a mapped file in place; a view then may read old bytes and new ones
+  mixed, values all the same, as `T` is plain data. A read past the end
+  of a file that another process truncated while it was mapped ends the
+  program, in a contained worker too, with a message naming the file and
+  the byte (§11.2). Renaming or deleting a mapped file leaves the mapping
+  as it is.
+* **Threads.** Handles cross threads as arguments, messages and copied
+  globals (§3.12); views do not. A worker attaches the handle it is given
+  and makes views of its own. An arena handed on through a queue needs an
+  attachment of the sender's until the receiver has attached; otherwise
+  the receiver's `attach` may abort (§9.3). `thread_wait(id)` returns only
+  after the worker's attachments have ended (§11.2), so a thread that has
+  waited for every worker holds the only attachments left. A handle
+  reaches another thread only by a spawn, a queue or a global copied at a
+  spawn, each of which orders what the sender did before it, so a mapping
+  is complete before any thread views it.
+* **C.** An `extern fn` takes the runtime's handles, `resource<shared>`
+  and `resource<mapping>`, as the `uint64_t` they are, and a view as a
+  `const T[:]` (§7.10). C never makes one: no `extern fn` returns a value
+  holding one or takes a writable reference, slice or builder to storage
+  holding one, and no `export fn` takes one (§7.11). An attachment does
+  not cross.
+
+This is a third kind of memory beside the data stacks and static data
+(§1.2). An arena is runtime memory, as a queue is, owned while its
+attachments' scopes last, in whichever threads those are. The runtime
+counts attachments, which only attaching declarations and their ends
+change (§4.1); no value is counted, and no destructor runs.
+
 ---
 
 ## 12. Builtins, the standard library, and what v1 leaves out
@@ -4543,6 +4686,7 @@ The language's own functions:
 | `from_bytes<T[>..]>(b: u8[:]) -> T[>..], bool` | a *verified* array from an untrusted image; empty and `false` if it is not one. Also builds `T[>..<]` and the `T[]` family |
 | `embed_shader(path)` or `embed_shader(stage, source, …) -> const u8[:]` | compile-time GLSL compilation to a static shader blob; graphics extension, detailed in the implementation notes, section 3.14 |
 | `embed_file(path) -> const u8[:]` | the bytes of a file, read when the program is compiled, as a view of static data; `path` is a string literal (or a `let`/`const` global holding one), relative to the file with the call; each distinct file is read once |
+| `attach(h)`, `sh.handle`, `sh.map_file(path) -> resource<mapping>, bool`, `sh.map_file(path, why) -> resource<mapping>, bool`, `sh.size(m) -> i64`, `view<T>(sh, m, offset, count) -> const T[:]` | shared memory: an attachment to the arena `h` names (at an owning declaration, as `shared {}` makes a new one), the arena's handle, a file mapped read-only into it, its size, and a view of it in place (§11.4) |
 
 And the array members, ordinary functions of their receiver per UFCS
 (`a.push(v)` is `push(a, v)`):
@@ -4783,6 +4927,12 @@ its resolution is described.
     *self-relative* references are currently rejected outright (§3.9; the
     `in pool` form already copies); track the region an offset ranges over so
     whole-region copies (and serialization moves) can be proven safe.
+17. **Shared memory, what remains** (§11.4, `docs/design/shared_memory.md`
+    §13) — dynamic stacks frozen into arenas, the first step of §11.3, are
+    the next phase. A failing `attach` (`let sh, ok = attach(h);`) waits for
+    a program that needs one, and a prefetch hint for one that shows a gain;
+    `sh.view<T>(m, ...)` as a member call is a parser change of its own.
+    Comparing handles stays out, as does sharing between processes.
 ### Resolved
 
 0e. **Per-array index types** — DONE, see §3.11 and §7.14
@@ -4896,6 +5046,9 @@ scope entry. No other runtime state exists.
   that loads or stores such a reference reads it once into a local at entry.
 * Slice: `{ data: T*, len: int64 }` (len = element count).
 * Handle (§3.12): a `u64`, which a bare `pad` aligns to 8.
+* Attachment (§11.4): the runtime's record of it in the owning frame (its
+  arena, and the region its last view looked up), private to the runtime,
+  as a root owner's descriptor is; `shared&` is its address.
 
 **Root structs.** An owner has independent field storage and a private descriptor
 of references to those fields. Each field uses its ordinary representation,

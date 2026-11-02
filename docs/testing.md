@@ -110,9 +110,10 @@ Test fixtures are grouped by category; `run_tests.py` stays at the root of `test
 | `lifetimes/` | Reference roots, byte views, borrowed contents and shrinking while references are live. |
 | `codegen/` | C names, evaluation order, representations, frame/stack layout and aliasing. |
 | `optimizer/` | Inlining, tail recursion and bounds-check elimination. |
-| `runtime/` | Runtime diagnostics, reusable slot and slice pool operations and array size checks, and `runtime_trim_memory.c`, the native test of releasing unused data-stack memory. |
+| `runtime/` | Runtime diagnostics, reusable slot and slice pool operations and array size checks, `runtime_trim_memory.c`, the native test of releasing unused data-stack memory, and `runtime_shared_lifecycle.c`, the native test of shared arenas. |
 | `storage/` | Relative references, pools and serialization. |
 | `threads/` | Workers, queues, shared globals, contained workers' aborts and `runtime_threads_lifecycle.c`, the native runtime lifecycle test. Imported helpers live in `threads/spawn/`. |
+| `shared/` | Shared memory (spec §11.4): views of every plain type of a mapped file, map_file's refusals and a rename while mapped (`shared_views`), `checkfree` loops over views (`shared_checkfree`), handles passed to 1, 2 and 16 workers as arguments and through a queue (`shared_workers`), every exit ending an attachment and a contained worker's abort ending its attachments, counted under `GS_SHARED_STATS` (`shared_release`), each runtime check of a view and an attachment in a contained worker (`shared_aborts`) and one on main's thread (`shared_view_bounds`). Each fixture writes the files it maps under a scratch directory of its own in the working directory and removes it. The rejections are `errors_tc/shared_*`. |
 | `stdlib/` | Standard-library modules. |
 | `goose_in_goose/` | A Goose-written compiler used as one multi-file bootstrap regression: build and run three generations, check a C fixed point and repeated self-checks of the stage-2 compiler, and compare JIT/native self-compilation. |
 | `audio/` | The `audio` module: the offline PCM mixer advanced by exact frame counts; the rejection of bad rates, PCM, parameters and output; voice and sound capacity and stale handles; and the threading rejection. |
@@ -157,7 +158,7 @@ rejects duplicate names.
 | Goose `-O2`, native C `-O2`, `GS_DEBUG=1`, selected fixtures | Exercise checked arithmetic/conversions and critical runtime paths with optimization enabled. Selection is `codegen_exec.goose` plus files with `runtime-debug` on their first line. |
 | Additional Clang C build of `codegen_exec.goose`, native `-O1`, release/debug runtime; Clang builds of `simd_versions.goose`, `stdlib_base64.goose` and `simd_mul_add.goose`, native `-O2`, with `GS_SIMD=2`, `1` and `0`; Clang builds of `vec_elemwise.goose` with `GS_VEC=1` and `0` | Keep a second C-front-end check on the central codegen coverage file without repeating the whole suite for every backend. The `simd` functions' versions (spec §7.12) exist only where clang builds for x86-64: their C must contain every version, and at each level the C may be built for, the program must print what the baseline prints. `mul_add` is the exception. Run with `modes`, `simd_mul_add` reports the rounding of each kind of call: a plain function (once on arm64, twice on x86-64), and in a `simd` function a direct call, an `inline fn` helper, a plain helper and a function value. A direct call and a function value round once in the AVX2 and AVX-512 versions on a CPU with AVX2 and FMA; the helpers do too where Goose inlines them, and at Goose `-O0`, which inlines nothing, they round as the plain function does. The C is generated at both levels. The runner asks the operating system whether the CPU has them, and accepts either rounding where it can't ask. |
 | Goose `-O0` and `-O2` through the in-process TinyCC backend, plus `GS_DEBUG=1` on the same selected fixtures, over every test and every sample | Check the generated C against a third, very different C implementation, and check that a program behaves the same whichever backend builds it. |
-| One Linux Clang ASan/UBSan job | Instrument the C++ compiler, generated C, selected debug-runtime cases, all samples and the direct runtime tests (`runtime_threads_lifecycle.c`, `runtime_trim_memory.c`). |
+| One Linux Clang ASan/UBSan job | Instrument the C++ compiler, generated C, selected debug-runtime cases, all samples and the direct runtime tests (`runtime_threads_lifecycle.c`, `runtime_trim_memory.c`, `runtime_shared_lifecycle.c`). |
 | Goose-in-Goose bootstrap, both profiles | Build stage 1 with the real compiler, stage 2 with stage 1, and stage 3 with stage 2. Build all three executables, compare stage-2/stage-3 C, and run two self-checks in stage 2 while stage 3 is emitted and built (the fixed point makes stage 2 the same compiler as stage 3). The baseline profile requires the same self-compiled C across host/native O0 and O2 and across JIT/native execution; the sanitize profile instruments every native stage. |
 
 Run just the bootstrap with
@@ -196,7 +197,19 @@ Windows and drops them from the resident set on Linux and macOS, while
 keeping live partial pages and other stacks. It also checks that discarded
 pages are zeroed, that Windows growth recommits through the fault handler
 behind a commit mark that each trim moves, and that macOS growth needs no
-runtime-handled faults, before or after a trim. Both run in both
+runtime-handled faults, before or after a trim. The direct
+`test/runtime/runtime_shared_lifecycle.c` test makes, attaches to, maps
+into and releases shared arenas over and over, from main and from
+workers, and checks that every arena, region, path and hold is freed and
+every mapping unmapped, counting allocations and mappings as the threads
+test counts them. It also checks the aborts of a stale and a zero handle
+and of views that do not fit, in contained workers whose attachments the
+runtime then ends; the abort at the 5th region and at the 600th arena,
+with the limits lowered (`GS_SHM_MAX_REGIONS`, `GS_SHM_MAX_SERIAL`); and,
+in a child process on POSIX, the message and exit of a read past the end
+of a file truncated while mapped and of a write to a mapping. On Windows,
+where a mapped file cannot be truncated, it checks that the file cannot
+be opened to write instead. All three run in both
 profiles. The normal suite also checks
 user-visible worker error diagnostics.
 
@@ -289,6 +302,9 @@ that use this:
 * `stack_stats.goose` has its program report its stack use
   (`GS_STACK_STATS`), which is checked through
   `expected/stack_stats.stderr`.
+* `shared_release.goose` has its program report the shared arenas and
+  mappings it made and released (`GS_SHARED_STATS`), which is checked
+  through `expected/shared_release.stderr`.
 
 `cycle_static_stacks.goose` runs the shapes that a call into a recursive
 cycle allows (§7.8); the `errors_tc/cycle_temporary_*`,

@@ -611,8 +611,9 @@ A Goose program has the native call stack, some static data (string
 literals and compile-time constants), and **N data stacks**, where N is a
 number the compiler computes for the program. A data stack is a large
 reservation of address space with a bump pointer. This is the entire
-memory system. There is no `malloc`, free list, garbage collector,
-reference counting or destructor.
+memory system, but for files mapped into shared arenas, which threads read
+in place ([section 22](#shared-memory-mapped-files)). There is no `malloc`,
+free list, garbage collector, reference counting or destructor.
 
 Fixed-size values live on the native stack or in registers. Every variable
 or resizable value lives on a data stack and is owned by the variable that
@@ -3839,6 +3840,137 @@ program. A worker that a contained worker starts with `thread_spawn` is
 not contained. Files and other resources opened through `extern fn` stay
 open. Spec §11.2.
 
+### Shared memory: mapped files
+
+Workers read copies, because no memory is shared, except memory that no
+thread can write. A file mapped read-only is such memory: one thread maps
+it into a **shared arena**, and every thread attached to the arena reads
+it in place, through views.
+
+`shared {}` makes an arena, and an **attachment** to it, which is a root
+owner (section 8) with no fields. `sh.map_file(path)` maps a whole file
+and gives its handle, a `resource<mapping>`, and whether it was mapped.
+`view<T>(sh, m, offset, count)` is `count` values of type `T` from byte
+`offset` of the file, as a `const T[:]`: an ordinary slice, read in
+place, nothing copied. `sh.size(m)` is the file's size in bytes.
+
+```goose
+import os;
+
+fn main() {
+    var col: i64[>..] = [];
+    for i in 8 { col.push(i * i); }
+    write_file("squares.i64", bytes_of(col));
+
+    let sh = shared {};
+    let m, ok = sh.map_file("squares.i64");
+    let xs = view<i64>(sh, m, 0, sh.size(m) / 8);
+    var total = 0;
+    for x in xs { total += x; }
+    print(ok, " ", xs.len, " ", xs[7], " ", total);
+    print(view<i32>(sh, m, 8, 2));             // xs[1] as two halves
+    delete_file("squares.i64");
+}
+```
+
+```
+true 8 49 140
+[1, 0]
+```
+
+`T` must be **plain data**, a type of which every byte pattern is a value,
+since a file can hold any bytes: the integer and float types, and fixed
+arrays and structs of them, pads included. A `bool`, an enum, a reference
+or a handle is a compile error that names the part of `T` at fault.
+`offset` must be a multiple of the size of `T`'s widest scalar, as a
+file's format aligns its arrays (an error where it is a constant), and the
+view must fit the file; both are checked once, when the view is made, and
+a view that does not fit aborts with a message naming the file, the type,
+the offset, the count and the size.
+
+```goose
+struct Row { key: i64, live: bool }
+
+fn main() {
+    let sh = shared {};
+    let m, ok = sh.map_file("rows.bin");
+    let rows = view<Row>(sh, m, 0, 4);         // error: field live of Row is bool
+}
+```
+
+A view is rooted at the attachment it was made through, as a slice of an
+array is rooted at the array (section 12). So it cannot outlive the
+attachment, and being `const`, it cannot be written through. The
+attachment ends with its scope; the arena lives while any attachment to
+it does, in any thread, and the end of its last one unmaps its files. A
+function takes an attachment by reference, and may return its views:
+
+```goose
+fn column(sh: shared&, m: resource<mapping>, row: i64, n: i64) -> const i64[:] {
+    view<i64>(sh, m, row * 8, n)
+}
+
+fn first(m: resource<mapping>) -> i64 {
+    let sh = shared {};
+    let xs = view<i64>(sh, m, 0, 1);
+    xs[0]                                      // fine: an i64, copied out
+}
+
+fn leak(m: resource<mapping>) -> const i64[:] {
+    let sh = shared {};
+    view<i64>(sh, m, 0, 1)                     // error: sh dies with this function
+}
+
+fn main() {
+    let sh = shared {};
+    let m, ok = sh.map_file("col.i64");
+    print(column(sh, m, 2, 4).len, " ", first(m), " ", leak(m).len);
+}
+```
+
+`sh.map_file(path, why)` appends the reason a file was not mapped to
+`why`. A missing file, a directory, and a file larger than 2^48 bytes
+are not mapped; an empty one maps, with size 0. A view through an
+attachment to another arena, or of the zero handle, aborts.
+
+Handles are flat, so they go to workers as arguments and in messages,
+where views cannot. `sh.handle` is the arena's handle, a
+`resource<shared>`, and a worker makes an attachment of its own with
+`attach(h)`, at a declaration, as `shared {}` is made:
+
+<!-- check-only -->
+```goose
+struct Part { first: i64, sum: i64 }
+
+thread_fn summer(h: resource<shared>, m: resource<mapping>, first: i64, n: i64) {
+    let sh = attach(h);                        // this worker's attachment
+    var s = 0;
+    for x in view<i64>(sh, m, first * 8, n) { s += x; }
+    qput(Part { first: first, sum: s });
+}
+
+fn main() {
+    let sh = shared {};
+    let m, ok = sh.map_file("col.i64");
+    let n = sh.size(m) / 8;
+    var ids: i64[>..] = [];
+    for w in 4 { ids.push(thread_spawn(summer, sh.handle, m, w * (n / 4), n / 4)); }
+    var total = 0;
+    for w in 4 { total += qget<Part>().sum; }
+    for id in ids { thread_wait(id); }
+    print(total);
+}
+```
+
+A worker cannot use main's global attachment, since a root global is not
+copied. `thread_wait` returns once the worker's attachments have ended,
+and a contained worker that aborts holding attachments has them ended
+for it. An arena handed to another thread through a queue needs an
+attachment of the sender's until the receiver has attached, or the
+receiver's `attach` aborts, as an `attach` of a released arena does. A
+read past the end of a file that another process truncated while it was
+mapped ends the program, naming the file. Spec §11.4.
+
 ---
 
 ## 23. Serialization
@@ -3993,6 +4125,10 @@ struct Mesh { vertices: resource<Buffer>, count: i64 }
   releases the buffer.
 * A binding's functions in its namespace are its handles' methods:
   `b.size()` calls `gpu::size(b)` for a `resource<gpu::Buffer>`.
+* The runtime's own kinds, `resource<shared>` and `resource<mapping>`
+  ([section 22](#shared-memory-mapped-files)), C takes but never makes: an
+  `extern fn` may not return one, or take a writable reference or slice to
+  storage holding one, and an `export fn` may not take one.
 
 Spec §3.12.
 
@@ -4136,6 +4272,7 @@ standard library, written in Goose under `stdlib/` and documented in
 | `qput(v)`, `qget<T>()`, `qpoll<T>()`, `qlimit<T>(n)` | the typed queues | [22](#22-threads) |
 | `to_bytes(a)`, `to_bytes(a, out)`, `bytes_of(a)`, `from_bytes<T[>..]>(b)` | serialization | [23](#23-serialization) |
 | `embed_file(path)`, `embed_shader(…)` | a file's bytes, or a compiled shader, read at compile time | [21](#embed_file) |
+| `attach(h)`, `sh.handle`, `sh.map_file(path)`, `sh.map_file(path, why)`, `sh.size(m)`, `view<T>(sh, m, offset, count)` | shared memory: an attachment, an arena's handle, a file mapped read-only, its size, and a view of it in place | [22](#shared-memory-mapped-files) |
 
 The array members, `.len`, `.cap`, `.push`, `.append`, `.pop`, `.pop_n`,
 `.resize`, `.clear`, `.index_of`, `.range_index`, `.check_length`, `.move_from` are in
@@ -4182,6 +4319,10 @@ Spec §6.1, Appendix D.
 
 ## Appendix B. Glossary
 
+* **Arena, attachment**: memory several threads read in place, files
+  mapped read-only into it; and the root owner by which a thread reads it,
+  whose views are rooted at it. An arena lives while any attachment to it
+  does. §22.
 * **Balanced call**: a call during which an array is never shorter than
   when the call began, so views taken before it survive it. §13.
 * **Candidate**: a variable whose own storage could hold the target of a
@@ -4212,6 +4353,9 @@ Spec §6.1, Appendix D.
   initializer, used as a literal is. §2.
 * **Narrowing**: the region after an `if`, `while`, `guard` or `assert`
   in which an optional is a plain reference. §10.
+* **Plain data**: a type of which every byte pattern is a value, which a
+  view of a file may have: integers and floats, fixed arrays and structs of
+  them. §22.
 * **Pool**: storage for linked or independently reused data. The stdlib's
   `slot_pool` and `slice_pool` bundle a grow-only array with reuse metadata;
   the language's `reusable` modifiers are deprecated. §11, §14.
@@ -4228,6 +4372,8 @@ Spec §6.1, Appendix D.
   literal, a call's result, a `copy`, a control construct's value. §12.
 * **Transparent**: the property of a reference that it behaves as its
   target in every value context. §10.
+* **View**: a `const` slice of a mapped file, read in place and rooted at
+  the attachment it was made through. §22.
 * **Variable mode, fixed mode**: an enum stored as exactly its variant's
   size (`Shape..`), or as a tag plus room for the largest variant
   (`Shape`). §9.
