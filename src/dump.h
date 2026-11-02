@@ -159,6 +159,11 @@ inline void TypeExpr::Dump(string &s, size_t limit) const {
             s += var->name;
             break;
         case TY_VOID: s += "void"; break;
+        case TY_RESOURCE:
+            s += "resource<";
+            sub->Dump(s, limit);
+            s += ">";
+            break;
     }
 }
 

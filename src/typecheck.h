@@ -556,7 +556,7 @@ struct TypeCheck {
                 for (auto a : t->enu->args) if (NamesGeneric(a, name)) return true;
                 return false;
             case TY_ARRAY:   return NamesGeneric(t->arr->sub, name);
-            case TY_SLICE:   return NamesGeneric(t->sub, name);
+            case TY_SLICE: case TY_RESOURCE: return NamesGeneric(t->sub, name);
             case TY_REF:     return NamesGeneric(t->ref->sub, name);
             case TY_VARIANT: return NamesGeneric(t->var->adt, name);
             default:         return false;
@@ -917,7 +917,7 @@ struct TypeCheck {
                                    t->arr->akind == A_LIMITED ? "array capacity" : "array size", f);
                 SizeNames(t->arr->sub, f);
                 return;
-            case TY_SLICE: SizeNames(t->sub, f); return;
+            case TY_SLICE: case TY_RESOURCE: SizeNames(t->sub, f); return;
             case TY_REF: SizeNames(t->ref->sub, f); return;
             case TY_STRUCT: for (auto a : t->struc->args) SizeNames(a, f); return;
             case TY_ENUM: for (auto a : t->enu->args) SizeNames(a, f); return;
@@ -961,7 +961,8 @@ struct TypeCheck {
                     default: return true;
                 }
             }
-            case TY_SLICE: return TypeEq(a->sub, b->sub);
+            // A handle's kind is its identity: two kinds are two types (§3.12).
+            case TY_SLICE: case TY_RESOURCE: return TypeEq(a->sub, b->sub);
             case TY_REF:
                 // The pool is part of a relative reference's identity: offsets
                 // measured from different bases are different encodings (§3.9).
@@ -1089,6 +1090,13 @@ struct TypeCheck {
                 auto sub = Subst(t->sub);
                 if (sub == t->sub) return t;
                 auto n = ast.SliceOf(sub, t->line);
+                n->cq = t->cq;
+                return n;
+            }
+            case TY_RESOURCE: {
+                auto kind = Subst(t->sub);
+                if (kind == t->sub) return t;
+                auto n = ast.ResourceOf(kind, t->line);
                 n->cq = t->cq;
                 return n;
             }
@@ -1244,6 +1252,33 @@ struct TypeCheck {
     void CheckfreeCallee(Node *at, SFunction *callee);
     bool HoldsPlainRef(TypeExpr *t);
     bool HasDefault(TypeExpr *t, string &why);
+
+    // A handle (§3.12) is stored, copied and passed to the APIs of its kind,
+    // and nothing else: no operator compares one or computes with one, and
+    // nothing converts it or dereferences it.
+    void NameExtents(TypeExpr *t);
+    TypeExpr *ComparedHandle(TypeExpr *t, bool operand = true);
+    void NoHandleOperand(Node *at, string_view op, TypeExpr *t, TypeExpr *u = nullptr);
+    [[noreturn]] void HandleUpdateError(Node *at, string_view op, TypeExpr *t);
+    // ": a handle is never dereferenced" where t is one, for an error
+    // about reaching into a value of type t.
+    static string NoDerefHint(const TypeExpr *t) {
+        return IsResource(t) ? ": a handle is never dereferenced (§3.12)" : "";
+    }
+    // Why a value of type t is no dt, where one of them is a handle; ""
+    // where a reference or slice of handles is what fails to fit.
+    static string HandleFitHint(const TypeExpr *t, const TypeExpr *dt) {
+        if (!t || !dt) return "";
+        auto viewed = dt->kind == TY_REF ? dt->ref->sub : dt->kind == TY_SLICE ? dt->sub : nullptr;
+        if (IsResource(t) && IsResource(dt))
+            return ": a handle of one kind is never one of another (§3.12)";
+        if (IsResource(t) && !viewed) return ": a handle converts to no other type (§3.12)";
+        if (IsResource(t) && !IsResource(viewed))
+            return ": a handle is never dereferenced (§3.12)";
+        if (IsResource(dt) && !IsRefOrSlice(t))
+            return ": only its kind's binding makes a handle (§3.12)";
+        return "";
+    }
 
     // Serialization (docs/design/serialization.md): what to_bytes will write
     // out, and the stricter question of what from_bytes can verify its way
@@ -1912,7 +1947,7 @@ struct TypeCheck {
             case TY_STRUCT: return t->struc->st->unknown || any(t->struc->args);
             case TY_ENUM: return any(t->enu->args);
             case TY_ARRAY: return MentionsUnknown(t->arr->sub);
-            case TY_SLICE: return MentionsUnknown(t->sub);
+            case TY_SLICE: case TY_RESOURCE: return MentionsUnknown(t->sub);
             case TY_REF: return MentionsUnknown(t->ref->sub);
             case TY_VARIANT: return MentionsUnknown(t->var->adt);
             case TY_FN: return any(t->fn->args) || any(t->fn->rets);

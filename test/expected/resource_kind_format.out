@@ -1,0 +1,3 @@
+Both { <const Buffer>, <Buffer> } Indexed { <u32 in xs>, <u32> }
+Box<const Buffer> { <const Buffer> } Box<Buffer> { <Buffer> } <Buffer> <const Buffer>
+[<Buffer>, <Buffer>] <const Buffer>

@@ -1,0 +1,5 @@
+a gpu::Buffer handle: resource<gpu::Buffer> resource<gpu::Buffer>
+local gpu::resource { "local" }
+resource<Texture<f32>> resource<Texture<u8>> resource<i64> Node { 1, resource<Node> }
+3 [resource<Texture<f32>>, resource<Texture<f32>>, resource<Texture<f32>>]
+<a Labeled handle> [<a Labeled handle>, <a Labeled handle>] <a Labeled handle>

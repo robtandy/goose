@@ -269,7 +269,10 @@ struct CodeGen {
     // ClassOf and GetStructInst instantiate a type and validate it, which is
     // the checking half of the same questions and must not happen here.
     // TEq is not TypeEq either: it is equality of C representation, so it
-    // ignores `const`, which no C type carries (§9.5).
+    // ignores `const`, which no C type carries (§9.5). A handle's kind is
+    // the exception: it changes no C type, but is the handle's identity
+    // (§3.12), which queues and format overloads follow, so KindEq compares
+    // it as TypeEq does.
 
     int64_t ArrSize(TypeArray *a) {
         assert(a->size >= 0 || !a->sizeexpr);
@@ -277,6 +280,11 @@ struct CodeGen {
     }
 
     bool TEq(TypeExpr *a, TypeExpr *b);
+    bool KindEq(TypeExpr *a, TypeExpr *b);
+    const void *KnownInst(TypeExpr *t, span<const FieldRun> &runs);
+    bool SameFieldMangles(TypeExpr *a, TypeExpr *b);
+    // The pairs of instances SameFieldMangles is comparing, on the way down.
+    set<pair<const void *, const void *>> fieldscompared;
     StructInst *SI(TypeExpr *t);
     EnumInst *EIOf(TypeExpr *t);
     EnumInst *EIVar(TypeExpr *t);

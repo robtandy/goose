@@ -1,0 +1,13 @@
+resource<GpuBuffer> resource<GpuBuffer> resource<GpuBuffer> resource<GpuBuffer> resource<GpuBuffer> true
+resource<GpuBuffer> [resource<GpuBuffer>, resource<GpuBuffer>] resource<GpuBuffer>
+Slot { 1, resource<GpuBuffer>, 2 } Slot { 3, resource<GpuBuffer>, 0 } Aligned { 4, resource<GpuBuffer> } Defaulted { 1, resource<GpuBuffer> }
+[resource<GpuBuffer>, resource<GpuBuffer>, resource<GpuBuffer>] [resource<GpuBuffer>] [resource<GpuBuffer>] [resource<GpuBuffer>, resource<GpuBuffer>, resource<GpuBuffer>] [resource<GpuBuffer>, resource<GpuBuffer>] [resource<GpuBuffer>, resource<GpuBuffer>]
+Held.Empty
+one resource<GpuBuffer>
+two resource<GpuBuffer> 7
+first resource<GpuBuffer> Called { "first", resource<GpuBuffer> }
+null
+resource<GpuBuffer> resource<GpuBuffer> true false
+captured resource<GpuBuffer>
+3 seen
+resource<GpuBuffer> Slot { 1, resource<GpuBuffer>, 2 }

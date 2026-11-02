@@ -1,13 +1,14 @@
 // Goose compiler — post-parse type name resolution, possible only once every
 // file is in (top-level declarations are order-independent). Every parse-time
 // TY_UNRESOLVED is rewritten in place: struct and enum names become TY_STRUCT /
-// TY_ENUM, alias uses are substituted with the aliased type, and anything else
-// becomes TY_GENERIC — a generic type parameter, or an unknown name, which
-// typecheck decides since it knows scopes. A qualified name (`ns::Name`) can
-// only be a declaration, so an unknown one is an error here, as is a name in
-// a struct's, an enum's or an alias's declaration that is not one of its type
-// parameters. After this pass no TY_UNRESOLVED remains and aliases do not
-// exist as types.
+// TY_ENUM, alias uses are substituted with the aliased type, `resource<U>`
+// where no declaration has the name becomes TY_RESOURCE (§3.12), and
+// anything else becomes TY_GENERIC — a generic type parameter, or an unknown
+// name, which typecheck decides since it knows scopes. A qualified name
+// (`ns::Name`) can only be a declaration, so an unknown one is an error here,
+// as is a name in a struct's, an enum's or an alias's declaration that is not
+// one of its type parameters. After this pass no TY_UNRESOLVED remains and
+// aliases do not exist as types.
 //
 // An error here is reported (Ast::Report) and the pass goes on: the name is
 // given a type that keeps the analysis going. An unknown one, or one this
@@ -78,7 +79,24 @@ inline void ResolveTypeNames(Ast &ast) {
             d->varmode = nm->varmode;
             t->kind = TY_ENUM;
             t->enu = d;
-        } else if (!ast.LookupAlias(nm->name, nm->ns)) {
+        } else if (ast.LookupAlias(nm->name, nm->ns)) {
+            // Alias uses stay TY_UNRESOLVED for the substitution loop below.
+        } else if (GlobalLeaf(nm->name) == "resource") {
+            // A handle (§3.12), found as a builtin is: where no declaration
+            // of the program has the name, `::resource` past a namespaced
+            // one. Its one argument is the kind, resolved on its own.
+            if (nm->args.size() != 1) {
+                ErrorAt(t, nm, "resource takes one type argument, the kind of thing a handle "
+                               "names: resource<U> (§3.12)", nm->name);
+                MakeUnknown(t, nm, nm->name);
+                continue;
+            }
+            if (nm->varmode)
+                ErrorAt(t, nm, "resource<U> has no variable mode (.. applies to enums)");
+            auto kind = nm->args[0];
+            t->kind = TY_RESOURCE;
+            t->sub = kind;
+        } else {
             if (SplitName(nm->name, nm->ns).qualified) {
                 ErrorAt(t, nm, cat("unknown type: ", nm->name), nm->name);
                 MakeUnknown(t, nm, nm->name);
@@ -86,7 +104,6 @@ inline void ResolveTypeNames(Ast &ast) {
                 t->kind = TY_GENERIC;  // Keeps its TypeName detail, varmode included.
             }
         }
-        // Alias uses stay TY_UNRESOLVED for the substitution loop below.
     }
 
     // A declaration's types can name no generic but its own type
@@ -114,7 +131,7 @@ inline void ResolveTypeNames(Ast &ast) {
                 }
                 case TY_ARRAY: unknownin(t->arr->sub, generics); break;
                 case TY_REF: unknownin(t->ref->sub, generics); break;
-                case TY_SLICE: unknownin(t->sub, generics); break;
+                case TY_SLICE: case TY_RESOURCE: unknownin(t->sub, generics); break;
                 case TY_VARIANT: unknownin(t->var->adt, generics); break;
                 case TY_STRUCT: each(t->struc->args); break;
                 case TY_ENUM: each(t->enu->args); break;
@@ -159,7 +176,7 @@ inline void ResolveTypeNames(Ast &ast) {
             }
             case TY_ARRAY: checkaliases(t->arr->sub); break;
             case TY_REF: checkaliases(t->ref->sub); break;
-            case TY_SLICE: checkaliases(t->sub); break;
+            case TY_SLICE: case TY_RESOURCE: checkaliases(t->sub); break;
             case TY_VARIANT: checkaliases(t->var->adt); break;
             case TY_STRUCT: each(t->struc->args); break;
             case TY_ENUM: each(t->enu->args); break;

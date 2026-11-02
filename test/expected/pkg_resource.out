@@ -1,0 +1,13 @@
+a: size 8, slot 0, zero false
+write true, past the end false
+read "hi", past the end "(no read)"
+zero handle: zero true, size -1, kept true
+into true, size 32
+total 56, of two 48
+named 7016 Named { 7, resource<ByteBuffer> }
+release true, again false, size -1, total -1
+d: slot 0, size 4; a: size -1
+gpu: upload true, draw 3.75, as bytes -1.0
+resource<GpuBuffer> resource<ByteBuffer> [resource<ByteBuffer>, resource<ByteBuffer>, resource<ByteBuffer>]
+gpu release true, draw -1.0
+release true true true

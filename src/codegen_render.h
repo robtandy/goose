@@ -268,6 +268,17 @@ inline void CodeGen::RenderLoc(Loc &out, Loc lv, TypeExpr *t, bool nested, Call 
             L("}");
             return;
         }
+        case TY_RESOURCE: {
+            // Its type alone, which shows that a handle is there without
+            // showing its bits, the binding's business (§3.12). A `const`
+            // slot's handle is the same value.
+            auto plain = *t;
+            plain.cq = false;
+            string name;
+            plain.Dump(name);
+            RenderLit(out, name);
+            return;
+        }
         default:
             Fail(ln, cat("cannot render a value of type ", Mangle(t)));
     }

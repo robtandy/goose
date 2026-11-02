@@ -2070,7 +2070,7 @@ inline void TypeCheck::CheckFor(ForLoop *x) {
                 bindtype = LoadType(elem);
             }
         } else {
-            Error(x, cat("cannot iterate a value of type ", TypeStr(t)));
+            Error(x, cat("cannot iterate a value of type ", TypeStr(t), NoDerefHint(t)));
         }
         // An index binder's type holds every index the sequence can have: a
         // fixed-size or static-capacity array's length bounds them, anything
@@ -3172,6 +3172,7 @@ inline void TypeCheck::CompoundAssign(Assign *a, TypeExpr *st, bool writable) {
     auto isbit = a->op == T_ANDEQ || a->op == T_OREQ || a->op == T_XOREQ;
     auto isshift = a->op == T_SHLEQ || a->op == T_SHREQ;
     if (IsIndexT(st)) NoIndexUpdate(a, TName(a->op), st);
+    if (IsResource(LoadType(st))) HandleUpdateError(a, TName(a->op), LoadType(st));
     if (IsOpaque(LoadType(st))) {
         // An exemplar's opaque value (CheckExemplars) takes any operand.
         Operand(a->rhs);
@@ -3224,6 +3225,7 @@ inline void TypeCheck::CheckIncDec(IncDec *x) {
     }
     if (!writable) Error(x, "cannot modify through this path (const, or a read-only "
                             "instantiation, §9.5)");
+    if (IsResource(LoadType(st))) HandleUpdateError(x, TName(x->op), LoadType(st));
     if (!IsIntT(st))
         Error(x, cat(TName(x->op), " requires an integer lvalue, got ", TypeStr(st)));
     if (st->ix) NoIndexUpdate(x, TName(x->op), st);

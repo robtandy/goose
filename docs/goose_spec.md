@@ -1156,6 +1156,37 @@ var edges: NodeId[>..] = [];
   (§11.2). An `extern fn` or `export fn` signature holds none either, since
   C code is not checked against the array.
 
+### 3.12 Handles: `resource<U>`
+
+`resource<U>` is an opaque handle to something a binding owns: one `u64`
+that only the binding reads. `U` is its *kind*. Any type names a kind, and
+only names it: a binding declares a type for each kind it hands out
+(`struct Buffer {}`), and two kinds are two types. `resource` is not a
+keyword. It names the handle where no declaration of the program has the
+name, and `::resource` reaches it past a namespaced one (§11.1).
+
+```goose
+struct Buffer {}
+extern fn buffer_new(size: i64) -> resource<Buffer>;
+extern fn buffer_free(b: resource<Buffer>);
+```
+
+* **Uses.** A handle is a fixed-size, flat value (§1.1). It is stored,
+  copied, passed and returned wherever such a value can be, workers and
+  queues included (§11.2).
+* **Nothing else.** No arithmetic, no comparison (§4.5), no conversion to
+  or from another type (`as` and `as!` included), no field access, indexing
+  or iteration, and no literal. So no code makes a handle its binding did
+  not hand out.
+* **Default.** The zero handle, all bits zero, which names nothing (§4.2).
+  A binding never hands out zero.
+* **Text.** Its type alone: `print` writes `resource<Buffer>` (§3.7).
+* **No image.** `to_bytes`, `bytes_of` and `from_bytes` reject a type
+  holding one (§12).
+* **C.** It crosses as a `uint64_t` (§7.10). The bits are the binding's.
+* **No ownership.** Copying one copies the name only, and only the
+  binding's API releases what it names.
+
 ---
 
 ## 4. Values, copying, and assignment
@@ -1488,7 +1519,8 @@ address, the slice's address+length): recursing through them would turn
 `==` into an unbounded pointer traversal. Optionals compare as nullable
 references (`o == null` is the null test); `.==`/`.!=` compare two references by
 address rather than by pointee (§3.8). Ordering `< <= > >=` exists on the numeric
-types only, with operands unified per §6.1.
+types only, with operands unified per §6.1. A handle has neither, and no
+value holding one has `==` (§3.12).
 
 ---
 
@@ -3284,6 +3316,7 @@ These values can cross the boundary (with layouts per C.2):
   limited arrays, and fixed-mode ADTs), by value as its packed C type;
 * `T&` to such a `T`, as a pointer;
 * `T[:]` of such a `T`, as the slice struct (`{ data, len }`);
+* a handle, `resource<U>` (§3.12), as a `uint64_t`;
 * `T[>..]&` of such a `T`, as the resizable's header plus its stack
   (`gs_rref`). C sees the elements as blocks of `T`'s packed size: it may
   write the ones there are and append whole ones at the stack top, moving
@@ -4332,10 +4365,10 @@ it leaves the caller's own facts about `src` intact.
   namespaced `hash` overload reaches the global integer overloads as
   `::hash(x)`). A generic body resolves names where it is defined. A UFCS
   call `x.f(...)` resolves `f` by the same rule, except that when `x`'s
-  struct or enum type is declared in a named namespace that declares
-  `f`, that namespace's set is the one used, ahead of the calling code's
-  namespace and the global one (a nested function in scope still hides
-  it). So a type's functions are its methods wherever it is used, in a
+  struct or enum type, or a handle's kind (§3.12), is declared in a named
+  namespace that declares `f`, that namespace's set is the one used, ahead
+  of the calling code's namespace and the global one (a nested function in
+  scope still hides it). So a type's functions are its methods wherever it is used, in a
   generic body too, while a plain call `f(x)` looks only where the calling
   code does. The `format` hook is likewise looked up by type (§3.7).
   Namespaces affect only name resolution, type identity and generated C
@@ -4862,6 +4895,7 @@ scope entry. No other runtime state exists.
   fixed when its stack is reserved before any initializer runs; a function
   that loads or stores such a reference reads it once into a local at entry.
 * Slice: `{ data: T*, len: int64 }` (len = element count).
+* Handle (§3.12): a `u64`, which a bare `pad` aligns to 8.
 
 **Root structs.** An owner has independent field storage and a private descriptor
 of references to those fields. Each field uses its ordinary representation,

@@ -1,0 +1,2 @@
+// The sidecar of resource_threads.goose: the tokens' C.
+c_sources = ["resource_threads_impl.c"];

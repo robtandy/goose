@@ -30,6 +30,7 @@ inline bool CodeGen::TEq(TypeExpr *a, TypeExpr *b) {
             }
         }
         case TY_SLICE: return TEq(a->sub, b->sub);
+        case TY_RESOURCE: return KindEq(a->sub, b->sub);
         case TY_REF:
             return TEq(a->ref->sub, b->ref->sub) && a->ref->optional == b->ref->optional &&
                    a->ref->lenstorage == b->ref->lenstorage;
@@ -37,6 +38,108 @@ inline bool CodeGen::TEq(TypeExpr *a, TypeExpr *b) {
             return a->var->variant == b->var->variant && TEq(a->var->adt, b->var->adt);
         default: assert(false); return false;
     }
+}
+
+// A handle's kind, compared as the checker compares types (TypeCheck::TypeEq):
+// `const` at any depth, an index type's array and an `in pool` reference's
+// pool are part of it, though no C type has them (§3.12).
+inline bool CodeGen::KindEq(TypeExpr *a, TypeExpr *b) {
+    if (a == b) return true;
+    if (a->kind != b->kind || a->cq != b->cq) return false;
+    auto args = [&](const vector<TypeExpr *> &x, const vector<TypeExpr *> &y) {
+        if (x.size() != y.size()) return false;
+        for (size_t i = 0; i < x.size(); i++)
+            if (!KindEq(x[i], y[i])) return false;
+        return true;
+    };
+    switch (a->kind) {
+        case TY_INT:
+            return a->intstorage == b->intstorage && !a->ix == !b->ix &&
+                   (!a->ix || (a->ix->arr == b->ix->arr && a->ix->upto == b->ix->upto));
+        case TY_STRUCT:
+            return a->struc->st == b->struc->st && args(a->struc->args, b->struc->args);
+        case TY_ENUM:
+            return a->enu->en == b->enu->en && a->enu->varmode == b->enu->varmode &&
+                   args(a->enu->args, b->enu->args);
+        case TY_VARIANT:
+            return a->var->variant == b->var->variant && KindEq(a->var->adt, b->var->adt);
+        case TY_ARRAY: {
+            auto &x = *a->arr, &y = *b->arr;
+            if (x.akind != y.akind || !KindEq(x.sub, y.sub)) return false;
+            switch (x.akind) {
+                case A_FIXED: case A_LIMITED: return ArrSize(a->arr) == ArrSize(b->arr);
+                case A_VAR:     return LenStore(a->arr) == LenStore(b->arr);
+                default:        return true;
+            }
+        }
+        case TY_SLICE: case TY_RESOURCE: return KindEq(a->sub, b->sub);
+        case TY_REF:
+            return a->ref->optional == b->ref->optional &&
+                   a->ref->lenstorage == b->ref->lenstorage && a->ref->pool == b->ref->pool &&
+                   KindEq(a->ref->sub, b->ref->sub);
+        default: return TEq(a, b);
+    }
+}
+
+// The instance the checker made for a nominal type, with its field runs,
+// found as GetStructInst and GetEnumInst find one, by its arguments'
+// identity (KindEq is TypeEq); null for one it never made, such as an
+// argument that no field uses (`K<i64>` in `P<K<i64>>`, P's fields using
+// no type parameter).
+inline const void *CodeGen::KnownInst(TypeExpr *t, span<const FieldRun> &runs) {
+    auto sameargs = [&](const vector<TypeExpr *> &x, const vector<TypeExpr *> &y) {
+        if (x.size() != y.size()) return false;
+        for (size_t i = 0; i < x.size(); i++)
+            if (!KindEq(x[i], y[i])) return false;
+        return true;
+    };
+    switch (t->kind) {
+        case TY_STRUCT: {
+            auto si = t->struc->inst;
+            if (!si)
+                for (auto i : t->struc->st->insts)
+                    if (sameargs(i->args, t->struc->args)) { si = i; break; }
+            if (si) runs = RunsOf(si);
+            return si;
+        }
+        case TY_ENUM: {
+            auto ei = t->enu->inst;
+            if (!ei)
+                for (auto i : t->enu->en->insts)
+                    if (sameargs(i->args, t->enu->args)) { ei = i; break; }
+            if (ei) runs = RunsOf(ei);
+            return ei;
+        }
+        case TY_VARIANT: {
+            span<const FieldRun> all;
+            auto ei = (const EnumInst *)KnownInst(t->var->adt, all);
+            if (ei) runs = RunsOf(ei, ei->en->VariantIndex(t->var->variant));
+            return ei;
+        }
+        default: return nullptr;
+    }
+}
+
+// Whether two instances of a declaration, whose arguments SameMangle takes
+// for one, have fields it takes for one too, so that one C type serves
+// both. They need not: where an argument becomes a handle's kind (§3.12),
+// a `const` in it tells two types apart that a layout does not, so the
+// fields' mangles and C types differ, through slices and references too.
+// An instance never made has no fields. A pair met again on the way round
+// a type that reaches itself is taken to agree.
+inline bool CodeGen::SameFieldMangles(TypeExpr *a, TypeExpr *b) {
+    span<const FieldRun> ra, rb;
+    auto ia = KnownInst(a, ra), ib = KnownInst(b, rb);
+    if (!ia || !ib || ia == ib) return true;
+    if (!fieldscompared.insert({ ia, ib }).second) return true;
+    auto same = true;
+    for (size_t r = 0; same && r < ra.size() && r < rb.size(); r++) {
+        auto &fa = *ra[r].ftypes, &fb = *rb[r].ftypes;
+        for (size_t i = 0; same && i < fa.size() && i < fb.size(); i++)
+            same = !fa[i] || !fb[i] || SameMangle(fa[i], fb[i]);
+    }
+    fieldscompared.erase({ ia, ib });
+    return same;
 }
 
 // Instantiations: the typechecker filled the per-TypeExpr caches for every
@@ -250,7 +353,7 @@ inline int64_t CodeGen::PadAlign(TypeExpr *t) {
                             (t->ref->lenstorage == IS_VARINT ? 1
                                                              : IntSize((IntStorage)t->ref->lenstorage))
                             : 8;
-        case TY_SLICE: return 8;
+        case TY_SLICE: case TY_RESOURCE: return 8;
         default: return 1;
     }
 }
@@ -308,6 +411,7 @@ inline int64_t CodeGen::FixedSize(TypeExpr *t) {
             }
             return IsResz(t->ref->sub) ? 16 : 8;
         case TY_SLICE: return 16;
+        case TY_RESOURCE: return 8;
         case TY_STRUCT: {
             // An empty struct takes the one byte C gives it.
             auto sz = StructLayout(SI(t)).size;
@@ -406,7 +510,9 @@ inline string CodeGen::Mangle(TypeExpr *t) {
 // Whether two types are made of the parts RawMangle spells: TEq, but for
 // a nominal type its declaration and arguments rather than its instance,
 // so that instances whose arguments differ only in `const`, which shares a
-// layout, keep sharing their C types too.
+// layout, keep sharing their C types too, unless their fields do not
+// (SameFieldMangles): a handle's kind is part of its mangle, which names a
+// queue as well.
 inline bool CodeGen::SameMangle(TypeExpr *a, TypeExpr *b) {
     if (a == b) return true;
     if (a->kind != b->kind) return false;
@@ -421,10 +527,11 @@ inline bool CodeGen::SameMangle(TypeExpr *a, TypeExpr *b) {
             return a->intstorage == b->intstorage && !a->ix == !b->ix &&
                    (!a->ix || (a->ix->arr == b->ix->arr && a->ix->upto == b->ix->upto));
         case TY_STRUCT:
-            return a->struc->st == b->struc->st && sameargs(a->struc->args, b->struc->args);
+            return a->struc->st == b->struc->st && sameargs(a->struc->args, b->struc->args) &&
+                   SameFieldMangles(a, b);
         case TY_ENUM:
             return a->enu->en == b->enu->en && a->enu->varmode == b->enu->varmode &&
-                   sameargs(a->enu->args, b->enu->args);
+                   sameargs(a->enu->args, b->enu->args) && SameFieldMangles(a, b);
         case TY_VARIANT:
             return a->var->variant == b->var->variant && SameMangle(a->var->adt, b->var->adt);
         case TY_ARRAY: {
@@ -437,6 +544,8 @@ inline bool CodeGen::SameMangle(TypeExpr *a, TypeExpr *b) {
             }
         }
         case TY_SLICE: return SameMangle(a->sub, b->sub);
+        // One C type, but a kind is a handle's identity (§3.12).
+        case TY_RESOURCE: return KindEq(a->sub, b->sub);
         case TY_REF:
             return a->ref->optional == b->ref->optional &&
                    a->ref->lenstorage == b->ref->lenstorage &&
@@ -488,6 +597,8 @@ inline string CodeGen::RawMangle(TypeExpr *t) {
             }
         }
         case TY_SLICE: return cat("sl_", Mangle(t->sub));
+        // Every kind is one C type, but a handle's text names its kind.
+        case TY_RESOURCE: return cat("rs_", Mangle(t->sub));
         case TY_REF: {
             auto &r = *t->ref;
             string s = r.optional ? "o" : "r";
@@ -528,6 +639,8 @@ inline string CodeGen::CT(TypeExpr *t, bool unaligned) {
                                                    : (unaligned ? "gs_f64" : "double");
         case TY_BOOL: return "uint8_t";
         case TY_VOID: return "void";
+        // Of every kind (§3.12): gs_res aligned to one byte, as gs_u64 is.
+        case TY_RESOURCE: return unaligned ? "gs_res" : "uint64_t";
         case TY_REF: {
             auto &r = *t->ref;
             if (r.lenstorage >= 0) {
@@ -1259,7 +1372,7 @@ inline bool CodeGen::ZeroDefaultValue(Node *n, TypeExpr *t) {
     function<bool(TypeExpr *)> flat = [&](TypeExpr *ft) {
         if (!IsFix(ft)) return false;
         switch (ft->kind) {
-            case TY_INT: case TY_FLT: case TY_BOOL: return true;
+            case TY_INT: case TY_FLT: case TY_BOOL: case TY_RESOURCE: return true;
             case TY_STRUCT: return SI(ft)->flat;
             case TY_ARRAY: return ft->arr->akind == A_FIXED && flat(ft->arr->sub);
             default: return false;

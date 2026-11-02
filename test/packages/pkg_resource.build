@@ -1,0 +1,2 @@
+// The sidecar of pkg_resource.goose: the binding's C.
+c_sources = ["pkg_resource_impl.c"];

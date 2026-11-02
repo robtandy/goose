@@ -25,7 +25,8 @@ file, or an array that a thread built on a dynamic stack and froze. Such a
 region belongs to a shared arena, and any thread reads it in place through
 `const` views rooted at its attachment. Handles are option C's `resource<U>`
 (owning_dynamic_data.md), step 0, shared with inboxes_select.md. Written against
-`a646a68`. Step 0 is #9, phase 1 #3 and phase 2 #4; not implemented.
+`a646a68`. Step 0 is #9, implemented (spec §3.12); phase 1 is #3 and phase 2
+#4, not implemented.
 
 ## 1. Decisions
 
@@ -453,9 +454,9 @@ runtime's entry points are in section 8.
 
 | Piece | Change |
 |---|---|
-| Resolution (`resolve.h`) | step 0: `resource<U>`, where the program declares no such name, is a new `TY_RESOURCE` whose `sub` is the kind; `shared`, `mapping`, `frozen<T>` and `event` are marked as the runtime's |
+| Resolution (`resolve.h`) | step 0: `resource<U>`, where the program declares no such name, is a new `TY_RESOURCE` whose `sub` is the kind. Phase 1 (or #5, first): `shared`, `mapping`, `frozen<T>` and `event` are the runtime's kinds |
 | Types (`typecheck_types.h`) | step 0: `IsFlat` holds and `ImageSafe` fails ("a handle names something only its binding can read"); the zero default; `as`, `as!` and comparisons refused where `==` refuses a function value (`typecheck_exprs.h`), structural `==` included; printing the type's name (`codegen_render.h`). Then `PlainData(t, why)` and `Freezable(t, why)`, the latter from `HoldsPlainRef`, `HoldsIndexT` and `ImageSafe`'s `in pool` test |
-| The C boundary (`ExternValueOk`, `ExternParamOk`) | step 0: `uint64_t` by value; no result, nor a value returned, of the runtime's kinds |
+| The C boundary (`ExternValueOk`, `ExternParamOk`) | step 0: `uint64_t` by value. With the runtime's kinds: no result, nor a value returned, of one |
 | Owners | `shared` and `dynamic_stack<T>` are builtin struct declarations with the `isroot` mark and a builtin-owner kind, so every root struct rule applies unchanged; their constructors only initialize owning declarations |
 | Builtins (`builtins.h`, `typecheck_builtins.h`) | `attach`, `handle` (`BF_PROPERTY`), `map_file`, `size`, `view` (`BF_TYARGS`, optional) and `freeze`, with an attachment receiver beside `BuiltinRecv`'s array kinds, checked in `CheckBuiltin`; a view's `Val` has the receiver's roots and exactness (`RootedAtReceiver`) and is not writable; `freeze` is a shrink of `ds.items` (`CheckGrowShrink`, `BF_SHRINKS`), logged in the shrink summary for callers |
 | Read-back, bounds checks (`RootCandidates`, `HoldsByValue`, `bce.h`) | an attachment holds every plain-data and freezable type by value, as `StaticCanContain` does; the facts of 4.6; views' own checks are aborts, and `Call::nobc` is not involved |
@@ -484,7 +485,7 @@ only, and each fixture maps files under a scratch directory of its own.
 
 | | Fixtures |
 |---|---|
-| Step 0 | `typing/resource_values` (defaults, storage, queues, workers, `print`); `packages/pkg_resource` (a binding's C); a rejection for each operation 4.1 forbids, and for a variable of a kind |
+| Step 0 | `typing/resource_values` (defaults, storage, `print`), `threads/resource_threads` (queues, workers); `packages/pkg_resource` (a binding's C); a rejection for each operation 4.1 forbids. With the first runtime kind: a variable of a kind, and an `extern fn` returning one |
 | Phase 1 | views of every plain type; empty files and failures; `checkfree`; 1, 2 and 16 workers on a mapping; a rename while mapped; release and contained aborts under `GS_SHARED_STATS`; each check of 4.7; `runtime/runtime_shared_lifecycle.c` (churn, leaks, stale handles, the limits at small values, SIGBUS in a child) |
 | Phase 2 | freezing and links; section 6's join at W = 1, 2, 4 and 16 and P = W and 4W, against a single-threaded run; main's dictionaries; handles in queues; aborts in each phase; slot reuse; the budget and `check_length`; each check of 4.7; and the aliases: a local alias, one in a holder and a caller's each see `ds.items` empty after a freeze and push onto the fresh slot, also under `GS_DEBUG`; a loop that pushes through an alias and freezes reloads the base in its `-O1` C; an alias's slice blocks a freeze |
 
@@ -519,6 +520,11 @@ review should start with them.
 
 #9 lands it before either track's phase 1; the messaging design builds
 `resource<event>` on it. It adds no runtime state and no builtin.
+
+**Built**, with two changes. No runtime kind yet: the first phase that adds one
+declares it, with its rule that an `extern fn` takes but never returns one, and
+the two fixtures that need one. And a UFCS call looks in the kind's namespace,
+so a binding's functions are its handles' methods (§11.1).
 
 ### Phase 1: mapped files, attachments and views (#3)
 

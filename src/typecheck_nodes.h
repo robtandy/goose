@@ -402,7 +402,8 @@ inline Val StructLit::Check(TypeCheck &tc, TypeExpr *expected) {
         tc.HolderFromLit(v, deep);
         return v;
     }
-    tc.Error(this, cat("cannot construct a value of type ", tc.TypeStr(t), " with a literal"));
+    tc.Error(this, cat("cannot construct a value of type ", tc.TypeStr(t), " with a literal",
+                       IsResource(t) ? ": only its kind's binding makes a handle (§3.12)" : ""));
 }
 
 inline Val Unary::Check(TypeCheck &tc, TypeExpr *) {
@@ -425,6 +426,7 @@ inline Val Unary::Check(TypeCheck &tc, TypeExpr *) {
         r.type = t;
         return r;
     }
+    tc.NoHandleOperand(this, TName(op), tc.LoadType(v.type));
     auto r = tc.NumericUnary(this, v, false);
     tc.JudgeUnaryCast(this, child, r);
     return r;
@@ -512,7 +514,8 @@ inline Val SliceExpr::Check(TypeCheck &tc, TypeExpr *) {
             tc.Error(this, "arrays of variable-size elements can only be sliced "
                            "whole ([..])");
     } else {
-        tc.Error(this, cat("cannot slice a value of type ", tc.TypeStr(lv.type)));
+        tc.Error(this, cat("cannot slice a value of type ", tc.TypeStr(lv.type),
+                           TypeCheck::NoDerefHint(lv.type)));
     }
     // A comparison's view reads no link out of what it compares (§4.5).
     if (lv.intemp && !cmpview) tc.NoRelRefTempRead(obj, lv.type, elem);
@@ -547,6 +550,12 @@ inline Val AsCast::Check(TypeCheck &tc, TypeExpr *) {
         totype = ov.type = tc.Subst(type);
         return ov;
     }
+    // A handle's bits are its binding's alone, and only its binding makes one
+    // (§3.12): neither cast converts to or from one.
+    auto as = unchecked ? "as!" : "as";
+    if (IsResource(st))
+        tc.Error(this, cat(as, " cannot convert a ", tc.TypeStr(st),
+                           ": a handle converts to no other type (§3.12)"));
     if (!IsIntT(st) && st->kind != TY_FLT)
         tc.Error(this, cat("as requires a numeric source, got ", tc.TypeStr(st)));
     auto tt = tc.Subst(type);
@@ -554,6 +563,9 @@ inline Val AsCast::Check(TypeCheck &tc, TypeExpr *) {
         totype = ov.type = tt;
         return ov;
     }
+    if (IsResource(tt))
+        tc.Error(this, cat(as, " cannot make a ", tc.TypeStr(tt),
+                           ": only its kind's binding makes a handle (§3.12)"));
     if (tt->kind == TY_INT && tt->intstorage == IS_VARINT)
         tc.Error(this, "cannot cast to varint (varints are written at construction only)");
     if (tt->kind != TY_INT && tt->kind != TY_FLT)

@@ -394,7 +394,7 @@ inline TypeExpr *Ast::CloneExpansionType(TypeExpr *t) {
             n->arr->sizeexpr = CloneOrNull(*this, t->arr->sizeexpr);
             if (n->arr->sizeexpr) n->arr->size = -1;
             break;
-        case TY_SLICE: n->sub = CloneExpansionType(t->sub); break;
+        case TY_SLICE: case TY_RESOURCE: n->sub = CloneExpansionType(t->sub); break;
         case TY_REF:
             n->ref = NewDetail<TypeRef>(); *n->ref = *t->ref;
             n->ref->sub = CloneExpansionType(t->ref->sub); break;

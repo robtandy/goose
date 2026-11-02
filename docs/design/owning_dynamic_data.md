@@ -26,8 +26,8 @@ closes. The difficulty is independent growth and release in arbitrary order,
 not the representation of a list of strings. Stdlib `slice_pool<T>` expresses this with root-owned storage. This note shows that
 representation and what it costs, which earlier workarounds remain useful, and
 two possible future extensions that cover what slice pools leave out: bounded
-independent dynamic stacks and opaque API resources. Neither extension is an
-implemented language feature.
+independent dynamic stacks and opaque API resources. Option C's
+`resource<U>` is now implemented (spec §3.12); option A is not.
 
 ## The ordinary owning representation
 
@@ -247,6 +247,9 @@ checker work only where measurements of slice pools show that copies,
 retained memory or a reservation limit matter.
 
 ## Future option C: opaque API resources
+
+Implemented as written below (spec §3.12, the reference's "Handles"
+section). Cleanup stays open.
 
 Introduce a fixed-size `resource<U>` value, internally a `u64`, for arbitrary
 API pointers and handles such as GPU buffers, native byte buffers and file
