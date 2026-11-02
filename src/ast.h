@@ -65,6 +65,9 @@ enum TypeKind {
     TY_REF,         // T& / T&<w> / T&<w in pool> (relative offset) / optional T?.
     TY_VARIANT,     // T.Name — variant type of an ADT.
     TY_VOID,        // Typecheck-created: the "type" of statements and valueless blocks.
+    // resource<U>, an opaque handle (§3.12): one u64 that only its kind's
+    // binding reads; `sub` is the kind U, a type used as a name only.
+    TY_RESOURCE,
 };
 
 enum ArrayKind {
@@ -317,7 +320,7 @@ struct TypeExpr {
     union {                          // Active member selected by kind:
         IntStorage intstorage;       //   TY_INT
         FltStorage fltstorage;       //   TY_FLT
-        TypeExpr *sub;               //   TY_SLICE (element type)
+        TypeExpr *sub;               //   TY_SLICE (element type), TY_RESOURCE (kind)
         TypeStruct *struc;           //   TY_STRUCT
         TypeEnum *enu;               //   TY_ENUM
         TypeName *named;             //   TY_UNRESOLVED, TY_GENERIC
@@ -367,6 +370,8 @@ inline bool IsU8(const TypeExpr *t) {
 }
 // An index or bound type (`u32 in a`, `u32 upto a`).
 inline bool IsIndexT(const TypeExpr *t) { return t && t->kind == TY_INT && t->ix; }
+// A handle, resource<U> (§3.12).
+inline bool IsResource(const TypeExpr *t) { return t && t->kind == TY_RESOURCE; }
 inline bool IsF32(const TypeExpr *t) { return t && t->kind == TY_FLT && t->fltstorage == FS_F32; }
 // The ADT a variant type is a variant of, and an enum type's own; else null.
 inline TypeExpr *AdtOf(TypeExpr *t) {
@@ -1613,13 +1618,16 @@ struct SAlias {
     TypeExpr *type = nullptr;
 };
 
-// The namespace a nominal type was declared in; "" for every other type.
+// The namespace a nominal type was declared in, and a handle's that its
+// kind was, so that a binding's functions are its handles' methods (§11.1);
+// "" for every other type.
 inline string_view NominalNs(const TypeExpr *t) {
     switch (t->kind) {
-        case TY_STRUCT:  return t->struc->st->ns;
-        case TY_ENUM:    return t->enu->en->ns;
-        case TY_VARIANT: return NominalNs(t->var->adt);
-        default:         return {};
+        case TY_STRUCT:   return t->struc->st->ns;
+        case TY_ENUM:     return t->enu->en->ns;
+        case TY_VARIANT:  return NominalNs(t->var->adt);
+        case TY_RESOURCE: return NominalNs(t->sub);
+        default:          return {};
     }
 }
 
@@ -2708,6 +2716,12 @@ struct Ast {
     TypeExpr *SliceOf(TypeExpr *elem, Line line) {
         auto t = NewType(TY_SLICE, line);
         t->sub = elem;
+        return t;
+    }
+    // A handle of kind `kind`, resource<kind> (§3.12).
+    TypeExpr *ResourceOf(TypeExpr *kind, Line line) {
+        auto t = NewType(TY_RESOURCE, line);
+        t->sub = kind;
         return t;
     }
     // A plain or optional reference; a relative one sets its width and

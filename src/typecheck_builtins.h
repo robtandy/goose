@@ -846,7 +846,9 @@ inline void TypeCheck::CheckRenderable(Call *c, const char *what, TypeExpr *t, N
         CheckRenderable(c, what, ft, at, seen, v, out);
     };
     switch (t->kind) {
-        case TY_INT: case TY_FLT: case TY_BOOL: return;
+        // A handle's text is its type alone, which shows that one is there
+        // without showing its bits (§3.12).
+        case TY_INT: case TY_FLT: case TY_BOOL: case TY_RESOURCE: return;
         case TY_ARRAY: child(t->arr->sub, IsRefOrSlice(t->arr->sub)); return;
         case TY_SLICE: child(t->sub, IsRefOrSlice(t->sub)); return;
         case TY_REF: child(t->ref->sub, false); return;

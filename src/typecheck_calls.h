@@ -810,7 +810,7 @@ inline bool TypeCheck::TryMatch(SFunction *sf, Call *c, vector<Val> &argvals, Ma
                 auto st = SubstOwn(p.type, mi.bindings);
                 auto at = st && st->kind == TY_REF ? StorageType(av) : av.type;
                 why = cat("argument ", (int64_t)i + 1, ": cannot pass ", TypeStr(at), " as ",
-                          TypeStr(p.type));
+                          TypeStr(p.type), HandleFitHint(at, st));
                 string litwhy;
                 auto tofloat = false;
                 if (av.litelems && st && !LitElemsAt(av, st, tofloat, &litwhy) &&
@@ -1005,7 +1005,7 @@ inline bool TypeCheck::HasOpaque(TypeExpr *t) {
         case TY_STRUCT: for (auto a : t->struc->args) if (HasOpaque(a)) return true; return false;
         case TY_ENUM:   for (auto a : t->enu->args) if (HasOpaque(a)) return true; return false;
         case TY_ARRAY:  return HasOpaque(t->arr->sub);
-        case TY_SLICE:  return HasOpaque(t->sub);
+        case TY_SLICE: case TY_RESOURCE: return HasOpaque(t->sub);
         case TY_REF:    return HasOpaque(t->ref->sub);
         case TY_VARIANT: return HasOpaque(t->var->adt);
         default: return false;
@@ -1018,7 +1018,7 @@ inline bool TypeCheck::HasGenerics(TypeExpr *t) {
         case TY_STRUCT: for (auto a : t->struc->args) if (HasGenerics(a)) return true; return false;
         case TY_ENUM:   for (auto a : t->enu->args) if (HasGenerics(a)) return true; return false;
         case TY_ARRAY:  return HasGenerics(t->arr->sub);
-        case TY_SLICE:  return HasGenerics(t->sub);
+        case TY_SLICE: case TY_RESOURCE: return HasGenerics(t->sub);
         case TY_REF:    return HasGenerics(t->ref->sub);
         case TY_VARIANT: return HasGenerics(t->var->adt);
         case TY_FN:
@@ -1064,6 +1064,9 @@ inline bool TypeCheck::BindTypes(TypeExpr *pt, TypeExpr *at,
             return BindTypes(pt->arr->sub, at->arr->sub, b);
         case TY_SLICE:
             if (at->kind != TY_SLICE) return false;
+            return BindTypes(pt->sub, at->sub, b);
+        case TY_RESOURCE:
+            if (at->kind != TY_RESOURCE) return false;
             return BindTypes(pt->sub, at->sub, b);
         case TY_REF:
             if (at->kind != TY_REF) return false;

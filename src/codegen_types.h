@@ -29,7 +29,7 @@ inline bool CodeGen::TEq(TypeExpr *a, TypeExpr *b) {
                 default:        return true;
             }
         }
-        case TY_SLICE: return TEq(a->sub, b->sub);
+        case TY_SLICE: case TY_RESOURCE: return TEq(a->sub, b->sub);
         case TY_REF:
             return TEq(a->ref->sub, b->ref->sub) && a->ref->optional == b->ref->optional &&
                    a->ref->lenstorage == b->ref->lenstorage;
@@ -250,7 +250,7 @@ inline int64_t CodeGen::PadAlign(TypeExpr *t) {
                             (t->ref->lenstorage == IS_VARINT ? 1
                                                              : IntSize((IntStorage)t->ref->lenstorage))
                             : 8;
-        case TY_SLICE: return 8;
+        case TY_SLICE: case TY_RESOURCE: return 8;
         default: return 1;
     }
 }
@@ -308,6 +308,7 @@ inline int64_t CodeGen::FixedSize(TypeExpr *t) {
             }
             return IsResz(t->ref->sub) ? 16 : 8;
         case TY_SLICE: return 16;
+        case TY_RESOURCE: return 8;
         case TY_STRUCT: {
             // An empty struct takes the one byte C gives it.
             auto sz = StructLayout(SI(t)).size;
@@ -488,6 +489,8 @@ inline string CodeGen::RawMangle(TypeExpr *t) {
             }
         }
         case TY_SLICE: return cat("sl_", Mangle(t->sub));
+        // Every kind is one C type, but a handle's text names its kind.
+        case TY_RESOURCE: return cat("rs_", Mangle(t->sub));
         case TY_REF: {
             auto &r = *t->ref;
             string s = r.optional ? "o" : "r";
@@ -528,6 +531,8 @@ inline string CodeGen::CT(TypeExpr *t, bool unaligned) {
                                                    : (unaligned ? "gs_f64" : "double");
         case TY_BOOL: return "uint8_t";
         case TY_VOID: return "void";
+        // Of every kind (§3.12): gs_res aligned to one byte, as gs_u64 is.
+        case TY_RESOURCE: return unaligned ? "gs_res" : "uint64_t";
         case TY_REF: {
             auto &r = *t->ref;
             if (r.lenstorage >= 0) {
@@ -1259,7 +1264,7 @@ inline bool CodeGen::ZeroDefaultValue(Node *n, TypeExpr *t) {
     function<bool(TypeExpr *)> flat = [&](TypeExpr *ft) {
         if (!IsFix(ft)) return false;
         switch (ft->kind) {
-            case TY_INT: case TY_FLT: case TY_BOOL: return true;
+            case TY_INT: case TY_FLT: case TY_BOOL: case TY_RESOURCE: return true;
             case TY_STRUCT: return SI(ft)->flat;
             case TY_ARRAY: return ft->arr->akind == A_FIXED && flat(ft->arr->sub);
             default: return false;

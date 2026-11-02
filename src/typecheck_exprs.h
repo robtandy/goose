@@ -80,7 +80,8 @@ inline TypeCheck::LVal TypeCheck::CheckLValue(Node *n) {
             elem = lv.type->sub;
         } else {
             if (lv.type->kind != TY_ARRAY)
-                Error(n, cat("cannot index a value of type ", TypeStr(lv.type)));
+                Error(n, cat("cannot index a value of type ", TypeStr(lv.type),
+                             NoDerefHint(lv.type)));
             RequireComplete(lv.type, n->line);
             elem = lv.type->arr->sub;
         }
@@ -695,7 +696,7 @@ inline void TypeCheck::ResolveMemberLValue(LVal &lv, Dot *d) {
         lv.isslot = true;
         return;
     }
-    Error(d, cat("no field access on a value of type ", TypeStr(t)));
+    Error(d, cat("no field access on a value of type ", TypeStr(t), NoDerefHint(t)));
 }
 
 // ------------------------------------------------------------------
@@ -1213,6 +1214,13 @@ inline bool TypeCheck::FitsAt(Val &v, TypeExpr *dt) {
     // `const` is added implicitly, and a copy of a const value is a fresh
     // one. A reference's or slice's own qualifier is about its pointee.
     if (IsRefOrSlice(dt) ? TypeEq(t, dt) : TopConstEq(t, dt)) { v.type = dt; return true; }
+    // A handle is only ever one of its own kind: nothing converts to one, and
+    // it converts to nothing (§3.12).
+    if (auto hint = HandleFitHint(t, dt); !hint.empty()) {
+        fitfail = cat("expected a value of type ", TypeStr(dt), ", got ", TypeStr(t),
+                      v.ck == CK_INT || v.litint ? " constant" : "", hint);
+        return false;
+    }
     switch (dt->kind) {
         case TY_INT:
             if (t->kind != TY_INT) return false;
@@ -1883,6 +1891,7 @@ inline Val TypeCheck::CheckBinaryResult(Binary *b, Val &lv, Val &rv) {
                              TypeStr(other)));
             return v;
         }
+        NoHandleOperand(b, TName(b->op), lt, rt);
         if (!numeric(lt) || !numeric(rt)) {
             if (lt->kind == TY_FN || lt->kind == TY_VOID)
                 Error(b, "these values cannot be compared");
@@ -1913,6 +1922,7 @@ inline Val TypeCheck::CheckBinaryResult(Binary *b, Val &lv, Val &rv) {
             return v;
         }
     }
+    NoHandleOperand(b, TName(b->op), lt, rt);
     if ((b->op == T_PLUS || b->op == T_MINUS || b->op == T_MUL || b->op == T_DIV || b->op == T_MOD) &&
         (!numeric(lt) || !numeric(rt))) {
         // Elementwise math on identical struct / fixed array types whose

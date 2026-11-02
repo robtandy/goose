@@ -77,6 +77,10 @@ typedef uint32_t gs_u32 GS_ALIGN1;
 typedef uint64_t gs_u64 GS_ALIGN1;
 typedef float gs_f32 GS_ALIGN1;
 typedef double gs_f64 GS_ALIGN1;
+/* A resource<U> handle (spec §3.12), of every kind: one u64 whose bits only
+   the kind's binding reads, and 0 names no resource. An extern fn passes it
+   as the uint64_t it is. */
+typedef uint64_t gs_res GS_ALIGN1;
 
 /* Every float operation rounds on its own. A C compiler may otherwise
    contract a multiply and an add into one fused rounding wherever the target

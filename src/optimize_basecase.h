@@ -64,7 +64,7 @@ struct BaseCaseInliner {
         switch (t->kind) {
             case TY_INT:  return t->intstorage != IS_VARINT;
             case TY_REF:  return t->ref->lenstorage != IS_VARINT;
-            case TY_FLT: case TY_BOOL: case TY_SLICE: return true;
+            case TY_FLT: case TY_BOOL: case TY_SLICE: case TY_RESOURCE: return true;
             case TY_STRUCT: return t->struc->inst && t->struc->inst->sclass == SC_FIXED;
             case TY_ENUM: return !t->enu->varmode;
             case TY_ARRAY: return t->arr->akind == A_FIXED;

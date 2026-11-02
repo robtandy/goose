@@ -447,8 +447,59 @@ inline bool TypeCheck::ImageSafe(TypeExpr *t, string &why) {
         case TY_FN:
             why = "function values are addresses";
             return false;
+        case TY_RESOURCE:
+            why = cat(TypeStr(t), " is a handle, which only its kind's binding can read, in "
+                      "this process (§3.12)");
+            return false;
         default: return !AnyField(t, [&](TypeExpr *ft) { return !ImageSafe(ft, why); });
     }
+}
+
+// The handle an == of two values of type t would compare (§4.5), or null:
+// the value itself, or one it holds by value, in a field, an element or a
+// payload. A reference or slice operand compares what it views, while an
+// optional one, and one that is a member of a compared value, compares by
+// identity, which reaches no handle.
+inline TypeExpr *TypeCheck::ComparedHandle(TypeExpr *t, bool operand) {
+    switch (t->kind) {
+        case TY_RESOURCE: return t;
+        case TY_REF:
+            return operand && !t->ref->optional ? ComparedHandle(LoadType(t->ref->sub), true)
+                                                : nullptr;
+        case TY_SLICE: return operand ? ComparedHandle(t->sub, false) : nullptr;
+        case TY_ARRAY: return ComparedHandle(t->arr->sub, false);
+        case TY_STRUCT: case TY_ENUM: case TY_VARIANT: {
+            TypeExpr *h = nullptr;
+            EachField(t, [&](TypeExpr *ft) { if (!h) h = ComparedHandle(ft, false); });
+            return h;
+        }
+        default: return nullptr;
+    }
+}
+
+// An operator `op` given t (and u, its other operand): an error where
+// either is a handle, or, for == and !=, holds one (§3.12). A handle has
+// no comparisons, so that nothing learns from its bits, and no arithmetic,
+// so that nothing makes one its kind's binding did not hand out.
+inline void TypeCheck::NoHandleOperand(Node *at, string_view op, TypeExpr *t, TypeExpr *u) {
+    auto compares = op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" ||
+                    op == ">=";
+    for (auto x : { t, u }) {
+        if (!x) continue;
+        auto h = IsResource(x) ? x : op == "==" || op == "!=" ? ComparedHandle(x) : nullptr;
+        if (!h) continue;
+        if (!compares)
+            Error(at, cat(op, " cannot compute with ", TypeStr(h),
+                          ": a handle has no arithmetic (§3.12)"));
+        Error(at, cat(op, " cannot compare ", TypeStr(x),
+                      h == x ? string() : cat(", which holds a ", TypeStr(h)),
+                      ": a handle has no comparisons (§3.12)"));
+    }
+}
+
+// `op`, an update (`+=`, `++`, ...), of a place holding a handle (§3.12).
+inline void TypeCheck::HandleUpdateError(Node *at, string_view op, TypeExpr *t) {
+    Error(at, cat(op, " cannot update a ", TypeStr(t), ": a handle has no arithmetic (§3.12)"));
 }
 
 // The extra thing a *verifier* needs on top of ImageSafe (§3 step 3): every
@@ -490,7 +541,8 @@ inline bool TypeCheck::HasDefault(TypeExpr *t, string &why) {
                 return false;
             }
             return true;
-        case TY_FLT: case TY_BOOL: case TY_SLICE: return true;
+        // A handle's is the zero handle, which names nothing (§3.12).
+        case TY_FLT: case TY_BOOL: case TY_SLICE: case TY_RESOURCE: return true;
         case TY_REF:
             if (t->ref->optional) return true;
             why = cat(TypeStr(t), " is a non-optional reference");
@@ -691,7 +743,10 @@ inline void TypeCheck::ValidateType(TypeExpr *t, Line l, int pos) {
             }
             break;
         }
-        case TY_SLICE: case TY_REF:
+        // A handle's kind is a type it names, never one it holds: checked
+        // as a reference's pointee is, so that a struct may name itself as
+        // a kind (§3.12).
+        case TY_SLICE: case TY_REF: case TY_RESOURCE:
             if (typesbuilding) laterpointees.push_back({ t, l, typechain });
             else ValidatePointee(t, l);
             return;
@@ -702,6 +757,10 @@ inline void TypeCheck::ValidateType(TypeExpr *t, Line l, int pos) {
 inline void TypeCheck::ValidatePointee(TypeExpr *t, Line l) {
     if (t->kind == TY_SLICE) {
         ValidateType(t->sub, l, VT_ELEM);
+        return;
+    }
+    if (t->kind == TY_RESOURCE) {
+        ValidateType(t->sub, l, VT_POINTEE);
         return;
     }
     // A pool's own type is only known once the globals are checked; the
