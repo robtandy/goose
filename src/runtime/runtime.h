@@ -1035,9 +1035,12 @@ GS_API void gs_shm_detach(gs_att *a);
 GS_API gs_res gs_shm_handle(const gs_att *a);
 /* map_file: the whole file read-only as a region of a's arena, *m its handle
    and 1; or 0 and the zero handle, with the reason, where `why` is not
-   NULL, in a buffer the caller frees with gs_free_msg. */
+   NULL, in a buffer the runtime keeps for the calling thread until the
+   caller, having appended it, calls gs_shm_reason_done, or until an abort
+   on the way there ends a contained worker (gs_shm_release_held). */
 GS_API uint8_t gs_shm_map_file(gs_att *a, const uint8_t *path, int64_t pathlen, gs_res *m,
                                uint8_t **why, int64_t *whylen, const char *file, int line);
+GS_API void gs_shm_reason_done(void);
 GS_API int64_t gs_shm_size(gs_att *a, gs_res m, const char *file, int line);
 /* What gs_shm_view does where the region is not the one a's cache holds,
    or where the view does not fit: looks the region up, or aborts. */

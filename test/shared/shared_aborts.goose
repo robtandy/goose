@@ -4,7 +4,9 @@
 // count, or too long to fit even counted without overflow, or at an offset
 // that is not aligned; a view or size of the zero handle, or of another
 // arena's mapping; an attach of the zero handle or of a released arena.
-// Each message names what failed; main goes on, and prints them.
+// Each message names what failed; main goes on, and prints them. A refusal's
+// reason appended to a `why` with no room for it aborts too, and the reason
+// the runtime made goes with the worker's storage, three times over.
 import os;
 
 let DIR = "gs_shared_aborts";
@@ -29,6 +31,11 @@ thread_fn check(kind: i64, h: resource<shared>, m: resource<mapping>, off: i64) 
     if kind == 10 {
         let other = shared {};
         print(other.size(m));
+    }
+    if kind >= 11 {
+        var why: u8[..1] = [];
+        let missing, ok = sh.map_file(str(DIR, "/missing"), why);
+        print(ok);
     }
 }
 
@@ -59,7 +66,7 @@ fn main() {
     write_file(p, bytes_of(col));
     let sh = shared {};
     let m, ok = sh.map_file(p);
-    for kind in 11 { report(str("check ", kind), thread_spawn_contained(check, kind, sh.handle, m, 8)); }
+    for kind in 14 { report(str("check ", kind), thread_spawn_contained(check, kind, sh.handle, m, 8)); }
     report("attach of the zero handle",
            thread_spawn_contained(attacher, default<resource<shared>>()));
     let gone = {

@@ -274,6 +274,22 @@ static void foreign(uint8_t *args) {
     gs_shm_view(&a, h.column, 0, 1, 8, 8, "i64", __FILE__, __LINE__);
 }
 
+/* A refusal's reason, and then an abort before the program is done with it,
+   as an append of it to a `why` with no room aborts: the reason is freed
+   with the rest of what the worker holds. */
+static void refused_then_full(uint8_t *args) {
+    (void)args;
+    gs_att a;
+    gs_shm_new(&a, __FILE__, __LINE__);
+    gs_res m;
+    uint8_t *why;
+    int64_t n;
+    check(!gs_shm_map_file(&a, (const uint8_t *)missing, (int64_t)strlen(missing), &m, &why, &n,
+                           __FILE__, __LINE__) && why,
+          "a refusal with a reason");
+    gs_abort(GS_E_CAPACITY, __FILE__, __LINE__);
+}
+
 static void too_many_regions(uint8_t *args) {
     (void)args;
     gs_att a;
@@ -288,6 +304,55 @@ static void serials(uint8_t *args) {
         gs_shm_new(&a, __FILE__, __LINE__);
         gs_shm_detach(&a);
     }
+}
+
+/* The fault handlers' lookup while another thread reuses an entry for
+   ranges of other places and sizes, as arenas made and released do: the
+   lookup sees an entry whole or not at all, so it finds Y, and never a
+   reused entry's old base with its new, longer length, which would cover
+   Y. The ranges are numbers only, as the lookup only compares them. */
+#define FAKE_Y ((uintptr_t)1 << 40)
+static int reuse_done;
+
+static void reuser(uint8_t *args) {
+    (void)args;
+    for (int i = 0; i < 200000; i++) {
+        gs_shm_lock();
+        gs_shm_clear_fault(gs_shm_add_fault((const uint8_t *)(FAKE_Y - 4096), 4096, "X"));
+        gs_shm_unlock();
+        gs_shm_lock();
+        gs_shm_clear_fault(gs_shm_add_fault((const uint8_t *)(FAKE_Y << 1), 1 << 20, "Z"));
+        gs_shm_unlock();
+    }
+    __atomic_store_n(&reuse_done, 1, __ATOMIC_RELEASE);
+}
+
+static void lookups_during_reuse(void) {
+    /* The reused entry is before Y's, which the lookup then reads first:
+       Y is added after another entry, which is then cleared for the
+       reuser's. */
+    gs_shm_lock();
+    int64_t before = gs_shm_add_fault((const uint8_t *)(FAKE_Y << 2), 4096, "W");
+    int64_t y = gs_shm_add_fault((const uint8_t *)FAKE_Y, 4096, "Y");
+    gs_shm_clear_fault(before);
+    gs_shm_unlock();
+    check(before < y, "the reused entry is looked at first");
+    int64_t id = gs_thread_spawn(reuser, NULL, 0, 0);
+    long looked = 0, wrong = 0;
+    while (!__atomic_load_n(&reuse_done, __ATOMIC_ACQUIRE)) {
+        gs_mapsnap e;
+        if (!gs_mapfault((const void *)(FAKE_Y + 100), &e) || e.base != FAKE_Y ||
+            e.len != 4096 || strcmp(e.path, "Y"))
+            wrong++;
+        looked++;
+    }
+    check(gs_thread_wait(id, NULL, NULL, __FILE__, __LINE__), "the reuser returned");
+    gs_shm_lock();
+    gs_shm_clear_fault(y);
+    gs_shm_unlock();
+    if (wrong) fprintf(stderr, "%ld of %ld lookups found the wrong entry\n", wrong, looked);
+    check(looked > 0 && wrong == 0, "a lookup sees an entry whole");
+    printf("lookups while an entry is reused for other sizes: each found the mapping\n");
 }
 
 /* Runs a contained worker that has to abort, and prints its message. */
@@ -318,7 +383,7 @@ static void refused(const char *path, int64_t pathlen, const char *what) {
     if (reason && !strstr(reason, "regular") && !strstr(reason, "NUL"))
         strcpy(reason, ": <the system's reason>");
     print_normalized(what, (const uint8_t *)text, (int64_t)strlen(text), NULL);
-    gs_free_msg(why);
+    gs_shm_reason_done();
     gs_shm_detach(&a);
 }
 
@@ -547,6 +612,7 @@ int main(void) {
         expect_abort(zero_view, h);
         expect_abort(foreign, h);
         check(a.arena->count == 1, "the aborts ended their attachments");
+        for (int i = 0; i < 3; i++) expect_abort(refused_then_full, h);
         int64_t id = gs_thread_spawn(last_holder, &h, sizeof h, 0);
         gs_mutex_lock(&test_mutex);
         while (!attached) gs_cond_wait(&test_cond, &test_mutex);
@@ -560,12 +626,13 @@ int main(void) {
         check(gs_thread_wait(id, NULL, NULL, __FILE__, __LINE__), "the last holder returned");
         gs_shm_release_held();
         check_baseline(allocations, mappings);
-        printf("workers: 129 viewers and 5 aborts, all released\n");
+        printf("workers: 129 viewers and 8 aborts, all released\n");
         expect_abort(stale, h);
         h.arena = 0;
         expect_abort(stale, h);
     }
 
+    lookups_during_reuse();
     refused(missing, (int64_t)strlen(missing), "refused a missing file: ");
     refused(dir, (int64_t)strlen(dir), "refused a directory: ");
     refused("col\0x", 5, "refused a path holding a NUL byte: ");

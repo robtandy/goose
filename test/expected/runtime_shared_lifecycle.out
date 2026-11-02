@@ -8,9 +8,13 @@ abort: view<i64> of <dir>/col.i64 out of bounds: count 64 at byte offset 8, in a
 abort: view<i64> of <dir>/col.i64 misaligned: byte offset 4 is not a multiple of 8, the size of i64's widest scalar
 abort: view<i64> of the zero handle, which names no mapping
 abort: view<i64> of a mapping of another shared arena than the attachment's
-workers: 129 viewers and 5 aborts, all released
+abort: limited array capacity exceeded
+abort: limited array capacity exceeded
+abort: limited array capacity exceeded
+workers: 129 viewers and 8 aborts, all released
 abort: attach of a released shared arena: it was released when its last attachment ended
 abort: attach of the zero handle, which names no shared arena
+lookups while an entry is reused for other sizes: each found the mapping
 refused a missing file: <dir>/missing: <the system's reason>
 refused a directory: <dir>: a directory, not a regular file
 refused a path holding a NUL byte: col: the path holds a NUL byte

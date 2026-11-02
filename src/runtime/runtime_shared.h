@@ -112,8 +112,7 @@ static void gs_shm_hold(struct gs_arena *a) {
 }
 
 /* The fault handlers' entry for a mapping (runtime_impl.h), under the lock:
-   a cleared one again, else a new one, filled while its base is 0 and
-   published by its base. A path too long for it ends in "...". */
+   a cleared one again, else a new one. */
 static int64_t gs_shm_add_fault(const uint8_t *base, size_t len, const char *path) {
     uintptr_t i = 0, n = gs_word_load(&gs_nmapents);
     for (; i < n; i++) {
@@ -127,26 +126,17 @@ static int64_t gs_shm_add_fault(const uint8_t *base, size_t len, const char *pat
         if (!c) return -1;
         gs_word_store(&gs_mapchunks[i / GS_MAPCHUNK], (uintptr_t)c);
     }
-    gs_mapent *e = &c[i % GS_MAPCHUNK];
-    size_t k = strlen(path);
-    if (k < GS_MAPPATH) {
-        memcpy(e->path, path, k + 1);
-    } else {
-        memcpy(e->path, path, GS_MAPPATH - 4);
-        memcpy(e->path + GS_MAPPATH - 4, "...", 4);
-    }
-    gs_word_store(&e->len, (uintptr_t)len);
-    gs_word_store(&e->base, (uintptr_t)base);
+    gs_mapent_set(&c[i % GS_MAPCHUNK], (uintptr_t)base, (uintptr_t)len, path);
     if (i == n) gs_word_store(&gs_nmapents, n + 1);
     return (int64_t)i;
 }
 
-/* Before the mapping goes: no handler matches the entry once its base is 0. */
+/* Before the mapping goes, under the lock: no lookup takes the entry once
+   it is cleared, nor while it is. */
 static void gs_shm_clear_fault(int64_t i) {
     if (i < 0) return;
     gs_mapent *c = (gs_mapent *)gs_word_load(&gs_mapchunks[i / GS_MAPCHUNK]);
-    gs_word_store(&c[i % GS_MAPCHUNK].base, 0);
-    gs_word_store(&c[i % GS_MAPCHUNK].len, 0);
+    gs_mapent_set(&c[i % GS_MAPCHUNK], 0, 0, NULL);
 }
 
 /* What a region holds of the system's, given back. */
@@ -259,13 +249,25 @@ GS_API void gs_shm_release_held(void) {
     free(gs_shm_held);
     gs_shm_held = NULL;
     gs_shm_capheld = 0;
+    gs_shm_reason_done();
 }
 
 GS_API gs_res gs_shm_handle(const gs_att *att) {
     return (gs_res)(att->arena->serial << GS_RES_REGION_BITS);
 }
 
-/* A failed map_file's reason, for `why`: "<path>: <what>". */
+/* A failed map_file's reason, for `why`: "<path>: <what>", kept as the
+   thread's pending reason, which the program appends and then lets go of
+   (gs_shm_reason_done). An append can abort, a `why` of no room left
+   aborting it, and a contained worker's abort skips the rest: so the
+   runtime, not the frame, holds the reason, and a worker's end frees it. */
+static GS_TLS uint8_t *gs_shm_reason;
+
+GS_API void gs_shm_reason_done(void) {
+    free(gs_shm_reason);
+    gs_shm_reason = NULL;
+}
+
 static uint8_t gs_shm_refuse(uint8_t **why, int64_t *whylen, const char *path,
                              const char *what) {
     if (why) {
@@ -273,6 +275,8 @@ static uint8_t gs_shm_refuse(uint8_t **why, int64_t *whylen, const char *path,
         uint8_t *s = (uint8_t *)malloc(n + 1);
         if (!s) gs_panic("out of memory reporting why a file was not mapped");
         snprintf((char *)s, n + 1, "%s: %s", path, what);
+        gs_shm_reason_done();
+        gs_shm_reason = s;
         *why = s;
         *whylen = (int64_t)n;
     }

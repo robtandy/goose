@@ -192,10 +192,13 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
             L("int64_t ", n, ";");
             L("uint8_t ", ok, " = gs_shm_map_file(", att, ", ", pd, ", ", pl, ", &", m, ", &", w,
               ", &", n, ", ", LocArgs(ln), ");");
+            // The runtime keeps the reason until it is appended, so that a
+            // `why` with no room for it, which aborts the append, leaks
+            // nothing in a contained worker (gs_shm_release_held).
             L("if (", w, ") {");
             ind++;
             AppendBytes(why, w, n, ln);
-            L("gs_free_msg(", w, ");");
+            L("gs_shm_reason_done();");
             ind--;
             L("}");
             return { m, ok };

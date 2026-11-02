@@ -10,6 +10,9 @@ check 7: false view<i64> of the zero handle, which names no mapping
 check 8: false size of the zero handle, which names no mapping
 check 9: false view<i64> of a mapping of another shared arena than the attachment's
 check 10: false size of a mapping of another shared arena than the attachment's
+check 11: false limited array capacity exceeded
+check 12: false limited array capacity exceeded
+check 13: false limited array capacity exceeded
 attach of the zero handle: false attach of the zero handle, which names no shared arena
 attach of a released arena: false attach of a released shared arena: it was released when its last attachment ended
 attached
