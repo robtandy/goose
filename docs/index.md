@@ -104,6 +104,10 @@ and the reference describe what was built; these say why.
   rooted at an attachment, in arenas released when their last attachment
   ends; option C's `resource<U>` handles as the first step, and §11.3's
   dynamic stacks begun; measured against copies; a proposal.
+* [Addressed inboxes, `select` and faster queues](design/inboxes_select.md):
+  a message to one thread by its id, a wait on several message types at
+  once, events that C signals as messages, and queues without a `malloc`
+  or a lock per message; today's queues measured first; a proposal.
 * [Claims the compiler checks and spends](design/llm_frontier.md): where
   the next frontier lies for code written by language models and reviewed
   by people: contracts in the prover's own fact language, `abortfree`,

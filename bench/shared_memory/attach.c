@@ -1,6 +1,6 @@
 /* What an attach and a detach cost when every thread attaches the same
    arena: an atomic increment and decrement of one shared counter, in a
-   loop on each thread (docs/design/shared_memory.md, 11.4).
+   loop on each thread (docs/design/shared_memory.md; results in README.md).
 
        attach THREADS PAIRS_PER_THREAD */
 #include <pthread.h>
