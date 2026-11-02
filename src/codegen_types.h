@@ -81,27 +81,65 @@ inline bool CodeGen::KindEq(TypeExpr *a, TypeExpr *b) {
     }
 }
 
-// Whether two values of a shape SameMangle takes for one hold, by value,
-// handles of one kind wherever they hold one (§3.12). Two instances of a
-// declaration whose arguments differ only in a `const` share a mangle, and
-// so a C type and a queue (QueueFor), unless their handles' kinds differ.
-inline bool CodeGen::SameHeldKinds(TypeExpr *a, TypeExpr *b) {
-    if (a == b || a->kind != b->kind) return true;
-    switch (a->kind) {
-        case TY_RESOURCE: return KindEq(a->sub, b->sub);
-        case TY_ARRAY: return SameHeldKinds(a->arr->sub, b->arr->sub);
-        case TY_STRUCT: case TY_ENUM: case TY_VARIANT: {
-            auto ra = FieldRuns(a), rb = FieldRuns(b);
-            for (size_t r = 0; r < ra.size() && r < rb.size(); r++) {
-                auto &fa = *ra[r].ftypes, &fb = *rb[r].ftypes;
-                if (&fa == &fb) continue;   // One instance.
-                for (size_t i = 0; i < fa.size() && i < fb.size(); i++)
-                    if (fa[i] && fb[i] && !SameHeldKinds(fa[i], fb[i])) return false;
-            }
-            return true;
+// The instance the checker made for a nominal type, with its field runs,
+// found as GetStructInst and GetEnumInst find one, by its arguments'
+// identity (KindEq is TypeEq); null for one it never made, such as an
+// argument that no field uses (`K<i64>` in `P<K<i64>>`, P's fields using
+// no type parameter).
+inline const void *CodeGen::KnownInst(TypeExpr *t, span<const FieldRun> &runs) {
+    auto sameargs = [&](const vector<TypeExpr *> &x, const vector<TypeExpr *> &y) {
+        if (x.size() != y.size()) return false;
+        for (size_t i = 0; i < x.size(); i++)
+            if (!KindEq(x[i], y[i])) return false;
+        return true;
+    };
+    switch (t->kind) {
+        case TY_STRUCT: {
+            auto si = t->struc->inst;
+            if (!si)
+                for (auto i : t->struc->st->insts)
+                    if (sameargs(i->args, t->struc->args)) { si = i; break; }
+            if (si) runs = RunsOf(si);
+            return si;
         }
-        default: return true;
+        case TY_ENUM: {
+            auto ei = t->enu->inst;
+            if (!ei)
+                for (auto i : t->enu->en->insts)
+                    if (sameargs(i->args, t->enu->args)) { ei = i; break; }
+            if (ei) runs = RunsOf(ei);
+            return ei;
+        }
+        case TY_VARIANT: {
+            span<const FieldRun> all;
+            auto ei = (const EnumInst *)KnownInst(t->var->adt, all);
+            if (ei) runs = RunsOf(ei, ei->en->VariantIndex(t->var->variant));
+            return ei;
+        }
+        default: return nullptr;
     }
+}
+
+// Whether two instances of a declaration, whose arguments SameMangle takes
+// for one, have fields it takes for one too, so that one C type serves
+// both. They need not: where an argument becomes a handle's kind (§3.12),
+// a `const` in it tells two types apart that a layout does not, so the
+// fields' mangles and C types differ, through slices and references too.
+// An instance never made has no fields. A pair met again on the way round
+// a type that reaches itself is taken to agree.
+inline bool CodeGen::SameFieldMangles(TypeExpr *a, TypeExpr *b) {
+    span<const FieldRun> ra, rb;
+    auto ia = KnownInst(a, ra), ib = KnownInst(b, rb);
+    if (!ia || !ib || ia == ib) return true;
+    if (!fieldscompared.insert({ ia, ib }).second) return true;
+    auto same = true;
+    for (size_t r = 0; same && r < ra.size() && r < rb.size(); r++) {
+        auto &fa = *ra[r].ftypes, &fb = *rb[r].ftypes;
+        for (size_t i = 0; same && i < fa.size() && i < fb.size(); i++)
+            same = !fa[i] || !fb[i] || SameMangle(fa[i], fb[i]);
+    }
+    fieldscompared.erase({ ia, ib });
+    return same;
 }
 
 // Instantiations: the typechecker filled the per-TypeExpr caches for every
@@ -472,8 +510,9 @@ inline string CodeGen::Mangle(TypeExpr *t) {
 // Whether two types are made of the parts RawMangle spells: TEq, but for
 // a nominal type its declaration and arguments rather than its instance,
 // so that instances whose arguments differ only in `const`, which shares a
-// layout, keep sharing their C types too, unless the handles they hold are
-// of two kinds (SameHeldKinds): a mangle names a queue as well.
+// layout, keep sharing their C types too, unless their fields do not
+// (SameFieldMangles): a handle's kind is part of its mangle, which names a
+// queue as well.
 inline bool CodeGen::SameMangle(TypeExpr *a, TypeExpr *b) {
     if (a == b) return true;
     if (a->kind != b->kind) return false;
@@ -489,10 +528,10 @@ inline bool CodeGen::SameMangle(TypeExpr *a, TypeExpr *b) {
                    (!a->ix || (a->ix->arr == b->ix->arr && a->ix->upto == b->ix->upto));
         case TY_STRUCT:
             return a->struc->st == b->struc->st && sameargs(a->struc->args, b->struc->args) &&
-                   SameHeldKinds(a, b);
+                   SameFieldMangles(a, b);
         case TY_ENUM:
             return a->enu->en == b->enu->en && a->enu->varmode == b->enu->varmode &&
-                   sameargs(a->enu->args, b->enu->args) && SameHeldKinds(a, b);
+                   sameargs(a->enu->args, b->enu->args) && SameFieldMangles(a, b);
         case TY_VARIANT:
             return a->var->variant == b->var->variant && SameMangle(a->var->adt, b->var->adt);
         case TY_ARRAY: {

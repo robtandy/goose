@@ -281,7 +281,10 @@ struct CodeGen {
 
     bool TEq(TypeExpr *a, TypeExpr *b);
     bool KindEq(TypeExpr *a, TypeExpr *b);
-    bool SameHeldKinds(TypeExpr *a, TypeExpr *b);
+    const void *KnownInst(TypeExpr *t, span<const FieldRun> &runs);
+    bool SameFieldMangles(TypeExpr *a, TypeExpr *b);
+    // The pairs of instances SameFieldMangles is comparing, on the way down.
+    set<pair<const void *, const void *>> fieldscompared;
     StructInst *SI(TypeExpr *t);
     EnumInst *EIOf(TypeExpr *t);
     EnumInst *EIVar(TypeExpr *t);
