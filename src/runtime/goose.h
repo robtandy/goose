@@ -18,6 +18,10 @@
 #include <stdint.h>
 #include <string.h>
 
+/* A resource<U> handle (spec §3.12), of any kind: the uint64_t its binding
+   made, by value. */
+typedef uint64_t gs_res;
+
 typedef struct {
     uint8_t *top;
 } gs_stack;
