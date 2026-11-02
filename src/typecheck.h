@@ -1256,6 +1256,7 @@ struct TypeCheck {
     // A handle (§3.12) is stored, copied and passed to the APIs of its kind,
     // and nothing else: no operator compares one or computes with one, and
     // nothing converts it or dereferences it.
+    void NameExtents(TypeExpr *t);
     TypeExpr *ComparedHandle(TypeExpr *t, bool operand = true);
     void NoHandleOperand(Node *at, string_view op, TypeExpr *t, TypeExpr *u = nullptr);
     [[noreturn]] void HandleUpdateError(Node *at, string_view op, TypeExpr *t);

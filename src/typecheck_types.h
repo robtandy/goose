@@ -455,6 +455,26 @@ inline bool TypeCheck::ImageSafe(TypeExpr *t, string &why) {
     }
 }
 
+// Evaluates the extent of every array type t names, at any depth, its type
+// arguments' included. A kind names whole (§3.12), and so does the C a
+// handle's queue is named by (CodeGen::Mangle), even where a field of the
+// kind's declaration uses no argument, which nothing else would evaluate
+// then (`resource<Tag<i64[1 + 1]>>`, with `struct Tag<T> {}`).
+inline void TypeCheck::NameExtents(TypeExpr *t) {
+    switch (t->kind) {
+        case TY_ARRAY:
+            if (t->arr->sizeexpr) ArraySize(t->arr);
+            NameExtents(t->arr->sub);
+            return;
+        case TY_SLICE: case TY_RESOURCE: NameExtents(t->sub); return;
+        case TY_REF: NameExtents(t->ref->sub); return;
+        case TY_STRUCT: for (auto a : t->struc->args) NameExtents(a); return;
+        case TY_ENUM: for (auto a : t->enu->args) NameExtents(a); return;
+        case TY_VARIANT: NameExtents(t->var->adt); return;
+        default: return;
+    }
+}
+
 // The handle an == of two values of type t would compare (§4.5), or null:
 // the value itself, or one it holds by value, in a field, an element or a
 // payload. A reference or slice operand compares what it views, while an
@@ -761,6 +781,7 @@ inline void TypeCheck::ValidatePointee(TypeExpr *t, Line l) {
     }
     if (t->kind == TY_RESOURCE) {
         ValidateType(t->sub, l, VT_POINTEE);
+        NameExtents(t->sub);
         return;
     }
     // A pool's own type is only known once the globals are checked; the

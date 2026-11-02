@@ -826,7 +826,9 @@ alone.
 declaration has the name (`ResolveTypeNames`). Its `sub` is the kind.
 
 * `TypeEq`, `Subst` and `BindTypes` treat the kind as a type argument. It is
-  validated as a pointee (`ValidatePointee`), so a struct may name itself.
+  validated as a pointee (`ValidatePointee`), so a struct may name itself,
+  and every extent in it is evaluated (`NameExtents`), unused type
+  arguments' included, as the mangle names a queue by them.
 * A handle is fixed-size and flat, has a default (`HasDefault`), is not
   image-safe (`ImageSafe`), and passes `ExternValueOk` by value.
 * `NoHandleOperand` rejects every operator on a handle, and `==` on a value
