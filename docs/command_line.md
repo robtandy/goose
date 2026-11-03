@@ -192,6 +192,7 @@ These options have the same meaning for `goose run`, `goose build`,
 | `--debug` | Turn on the overflow checks, the range checks of `as` casts and the tag checks (`GS_DEBUG=1`). Each failure names its source line, and an overflow or a cast names the values involved. A build also gets debug information ([§3](#3-building-an-executable)). |
 | `-D NAME[=VALUE]` | Define a C macro in the generated program, as `-DNAME[=VALUE]` does too. The define is written into the C itself, so a run and a build see the same source. The value is 1 when none is given. |
 | `--stack-reserve size` | The address space reserved for each data stack, from 64K up to 256T with a `K`, `M`, `G` or `T` suffix. The default is 2G. The address space is committed as it is used, so a large reservation costs nothing until it is used. |
+| `--dynamic-budget size` | The address space the dynamic stacks' slots take together (spec §11.4), from 64K up to 256T with a `K`, `M`, `G` or `T` suffix. The default is 16T: 8,188 slots, each a data stack's reservation and its gap. It is reserved as the first dynamic stack is declared, and committed as it is used. |
 | `--stacks` | Report how many data stacks the program and each of its workers use, what that adds up to, and the cap it puts on `hardware_threads()`. |
 | `--bce-lines` | Report, for each source line, how many bounds checks the compiler removed and how many it kept. |
 | `--no-bce` | Keep every bounds check. `checkfree` functions are then not verified, and the compiler warns about that. |
@@ -214,6 +215,8 @@ The `-D` macros that the runtime reads, which configure a program:
 | `GS_STACK_RESERVE` | 2 GB | The address space reserved per data stack, which `--stack-reserve` sets. |
 | `GS_STACK_GAP` | 1 MB | The unmapped gap after each data stack, which makes runaway growth abort. |
 | `GS_STACK_BUDGET` | 32 TB | The address space all thread programs together are meant to take; `hardware_threads()` is capped at what it has room for. |
+| `GS_DYNAMIC_BUDGET` | 16 TB | The address space of the dynamic stacks' slots, which `--dynamic-budget` sets. |
+| `GS_SHARED_STATS` | 0 | 1 makes the main program report the shared arenas, mappings, dynamic stacks, frozen arrays and slots it made and released, on stderr, as it ends. |
 | `GS_MAX_STACKS` | 1024 | The most data stacks one thread program may use. A program that needs more fails to compile. |
 | `GS_SIMD` | 2 | The highest CPU level for `simd` functions' versions under clang on x86-64: 0 or 1 lowers it. |
 

@@ -3974,6 +3974,136 @@ receiver's `attach` aborts, as an `attach` of a released arena does. A
 read past the end of a file that another process truncated while it was
 mapped ends the program, naming the file. Spec §11.4.
 
+### Shared memory: frozen regions
+
+A thread can also build data for other threads to read: it builds an
+array on a **dynamic stack** and freezes it into an arena. A dynamic
+stack, `dynamic_stack<T>`, is a root owner whose one field, `items`, is an
+ordinary grow-only array of a fixed-size `T`, alone on a stack of its own.
+`sh.freeze(ds)` makes the elements a **frozen array** of `sh`'s arena,
+with nothing copied, and gives its handle, a `resource<frozen<T>>`;
+`ds.items` starts over, empty, on memory of its own. `sh.view(r)` is the
+whole frozen array as a `const T[:]`, read in place, as a mapping's view
+is.
+
+```goose
+struct Row { key: i64, payload: i64 }
+
+fn main() {
+    let sh = shared {};
+    var ds = dynamic_stack<Row> {};
+    for i in 4 { ds.items.push(Row { key: i, payload: i * i }); }
+    let r = sh.freeze(ds);                     // resource<frozen<Row>>
+    let rows = sh.view(r);                     // const Row[:], in place
+    print(rows.len, " ", rows[3].payload, " ", ds.items.len);
+    ds.items.push(Row { key: 9, payload: 0 }); // the array starts over
+    print(ds.items.len, " ", sh.view(r).len, " ", view<Row>(sh, r)[1].key);
+}
+```
+
+```
+4 9 0
+1 4 1
+```
+
+A dynamic stack is made only by a local's declaration, `var ds =
+dynamic_stack<T> {};`, and passed as `dynamic_stack<T>&`, or its array as
+any `T[>..]&`, so a function that fills an array fills one. A freeze is
+checked as `ds.items.clear()` is (section 13): no reference or slice into
+the elements may still be used after it. References to the whole array
+survive, and see it empty.
+
+```goose
+fn main() {
+    let sh = shared {};
+    var ds = dynamic_stack<i64> {};
+    ds.items.push(1);
+    let first .= ds.items[0];
+    let r = sh.freeze(ds);                     // error: first is still used
+    print(first);
+}
+```
+
+What a frozen array holds must mean the same in every thread: scalars,
+`bool`, enums, fixed and limited arrays and structs of these, handles, and
+**self-relative references**, which stay inside the array (section 11).
+A plain reference or a slice is an address in the freezing thread's
+memory, and an `in pool` link is measured from a global each thread has a
+copy of, so freezing either is a compile error that names the field.
+
+```goose
+struct Row { key: i64, owner: i64& }
+
+fn main() {
+    let sh = shared {};
+    var ds = dynamic_stack<Row> {};
+    let r = sh.freeze(ds);                     // error: field owner of Row is i64&
+}
+```
+
+So one worker can build a hash table chained by self-relative links, and
+every worker can probe it in place. A link loaded from a view is a
+`const` reference rooted at the attachment, so following one is an
+addition, with no check:
+
+<!-- check-only -->
+```goose
+import std;
+
+struct Entry { key: i64, payload: i64, next: Entry&<u32>? }
+struct Table { arena: resource<shared>, entries: resource<frozen<Entry>>, heads: i64 }
+
+fn find(t: const Entry[:], heads: i64, k: i64) -> i64 {
+    var e = t[((hash(k) >> 1) as! i64) % heads].next;
+    while e {
+        if e.key == k { return e.payload; }
+        e .= e.next;
+    }
+    -1
+}
+
+thread_fn prober(t: Table, k: i64) {
+    let sh = attach(t.arena);
+    qput(find(sh.view(t.entries), t.heads, k));
+}
+
+fn main() {
+    let sh = shared {};
+    var ds = dynamic_stack<Entry> {};
+    let heads = 64;
+    for i in heads { ds.items.push(Entry { key: -1, payload: 0, next: null }); }
+    for k in 1000 {
+        let b = ((hash(k) >> 1) as! i64) % heads;
+        let e .= ds.items.push(Entry { key: k, payload: k * 2, next: ds.items[b].next });
+        ds.items[b].next .= e;
+    }
+    let t = Table { arena: sh.handle, entries: sh.freeze(ds), heads: heads };
+    var ids: i64[>..] = [];
+    for w in 4 { ids.push(thread_spawn(prober, t, w * 100)); }
+    var sum = 0;
+    for w in 4 { sum += qget<i64>(); }
+    for id in ids { thread_wait(id); }
+    print(sum);                                // 1200
+}
+```
+
+A frozen array lives with its arena: the end of the arena's last
+attachment releases it, and the memory goes back to the runtime, which
+gives it to the next dynamic stack rather than to the system, so arenas
+built and dropped over and over cost no new pages. `trim_memory()` gives
+it back to the system. A worker's dynamic stacks end with it, after a
+contained worker's abort too, while what it froze stays in its arena. A
+view through an attachment to another arena aborts, saying so if that
+arena was released.
+
+Dynamic stacks take their memory from a budget of address space, 16 TB
+by default, in slots of a data stack's size: `--dynamic-budget` sets the
+budget, and `--stack-reserve` a slot's size. A dynamic stack declared or
+frozen when every slot is in use aborts with the numbers and the flag,
+and one that grows past its slot ends the program, naming its
+declaration, as a data stack's overrun does; `ds.items.check_length(n)`
+refuses such a length first. Spec §11.4.
+
 ---
 
 ## 23. Serialization

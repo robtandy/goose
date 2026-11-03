@@ -64,8 +64,9 @@ language's type and lifetime rules make this memory model safe to use.
   and needs no unwinder, no `Result` type and no `?` on every call.
 * **Threads with no shared mutable memory.** A worker is compiled as a separate
   program with its own memory, and flat values are passed between threads
-  through typed queues with a `memcpy`. A file mapped read-only is the one
-  memory threads share, read in place through views that cannot outlive it.
+  through typed queues with a `memcpy`. Files mapped read-only and arrays
+  frozen by the thread that built them are the memory threads share, read
+  in place through views that cannot outlive it.
   Data races, locks, atomics and memory orderings do not exist in the
   language.
 * **Generics and higher-order functions with no overhead.** An untyped
@@ -399,6 +400,18 @@ thread_fn summer(h: resource<shared>, m: resource<mapping>, first: i64, n: i64) 
 let sh = shared {};                                 // an arena, and main's attachment
 let m, ok = sh.map_file("column.i64");
 for w in k { ids.push(thread_spawn(summer, sh.handle, m, w * part, part)); }
+```
+
+A thread can build such memory too: an array built in place on a dynamic
+stack and frozen into the arena, with no copy, which every attached thread
+then reads, self-relative links and all, while the builder's array starts
+over:
+
+```goose
+var rows = dynamic_stack<Row> {};                   // a grow-only array of its own
+partition(sh, job, rows.items);                     // any fn taking a Row[>..]&
+qput(sh.freeze(rows));                              // a resource<frozen<Row>>, to anyone
+let mine = sh.view(qget<resource<frozen<Row>>>()); // const Row[:], in place
 ```
 
 ### Compiling to and calling C

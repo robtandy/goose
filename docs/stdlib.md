@@ -912,7 +912,10 @@ views, limited-array capacity and virtual-address reservations; subsequent
 growth works normally. It affects no other worker. Use it after a large
 workload, such as replacing a document, rather than after every temporary
 value. Ordinary scope exit keeps pages available for cheap reuse, while a
-trimmed page causes a page fault when the stack grows into it again.
+trimmed page causes a page fault when the stack grows into it again. It
+also discards the pages of the dynamic stacks' free slots (spec §11.4),
+which the arenas released hand back with their pages for reuse, from
+whichever threads released them.
 
 The pages are released immediately. Windows decommits them, which also
 returns their commit charge, and Linux drops them from the resident set

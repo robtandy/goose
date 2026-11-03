@@ -4150,6 +4150,42 @@ value. `CheckExternSpec` rejects one in a result and in the pointee of a
 writable reference, slice or builder parameter, and `CheckExport` one in
 anything an export's parameter passes in, since C would make it.
 
+**Dynamic stacks.** `dynamic_stack<T>` and `frozen<T>` resolve as `shared`
+does, where the program declares nothing so named, to two more runtime
+declarations (`Ast::RuntimeDecl`): `dynamic_stack` is `root struct
+dynamic_stack<T> { items: T[>..] = [] }` built by hand, in no namespace and
+no declaration list, so every rule of root owners applies unchanged,
+`ds.items` is a component with an identity of its own (`RootComponent`),
+and the literal `dynamic_stack<T> {}` fills `items` from its default.
+`StructLit::Check` refuses a literal with fields, one outside a local's
+owning declaration (`rootinit`) and a global's; `GetStructInst` refuses a
+`T` that is not fixed-size. `frozen<T>`, like `mapping`, is refused
+everywhere but a handle's kind (`ValidateType`, `StructLit::Check`), and a
+dynamic stack as a kind. `IsRuntimeHandle` covers `resource<frozen<T>>`.
+
+**Freezing.** `freeze` is an attachment's member (`BR_SHARED`), checked in
+`CheckFreeze`. The argument is wrapped as written in a `Dot` of `items`,
+marked `synth` and copied by `Clone1`, so that every pass after the
+checker takes it as the array the freeze shrinks; a diagnostic prints it
+as written (`Written`, `Dot::Dump`), and `Dot::Check` refuses a `synth`
+dot whose object is no dynamic stack, with the freeze's message, so a
+`sh.freeze(ds.items)` is refused too. The array's `Val` goes to
+`CheckGrowShrink` as a clear's receiver does, which checks every live
+reference and slice, holder, rendering and loop, notes the shrink for the
+callers' checks (`NoteShrinkEvent`), and so needs nothing of its own;
+references to the whole array are not into it, and survive. `Freezable`
+walks the element type as `PlainData` does, naming the field path and
+why: a plain reference, a slice, an `in pool` or varint-width link, an
+index type, a root owner or a variable-mode enum is refused. The result is
+a `resource<frozen<T>>` (`Call::qtype` the element type), and needs the
+receiver's writability as `clear` does. `sh.view(r)` and `view<T>(sh, r)`
+are `view`'s two-argument form: the element type comes from `r`'s kind,
+which an explicit type argument must equal, and the `Val` is a mapping's
+view's, the attachment's roots, not writable, `const T[:]`. An attachment
+holds freezable types for read-back too (`CanContainWalk`). A link loaded
+from a view needs nothing new: it is a self-relative load from a const
+slice rooted at the attachment, as from any.
+
 ---
 
 ## 4. The optimizer
@@ -4765,7 +4801,13 @@ receiver was resolved before the count ran. A view that returns
 count's term after the last argument), which the declaration, assignment or
 argument binding it takes, as a slice expression's (`slicelen`). So a loop
 to the count indexes the view with no check, in a `checkfree` function too
-(`shared/shared_checkfree.goose`).
+(`shared/shared_checkfree.goose`). A frozen array's view, `sh.view(r)`,
+states no length: it is a slice, whose length no operation changes. A
+freeze (`B_FREEZE`) is a clear of its argument, the `ds.items` the checker
+made of it (`Dot::synth`): a shrink of that place to an exact length of
+zero, which kills the facts of every place that may alias it, so no loop
+that may freeze hoists a view of the array (`LoopViewRefs`), and a call
+that may freeze, through its effect summary, likewise.
 
 A completed check is also a fact (`CheckedFacts`): the program continues
 past `a[i]` only with `0 <= i < len`, and past `a[lo..hi]` only with
@@ -6401,6 +6443,28 @@ differs: a loop over a view is a loop over a slice, plain loads. A program that 
 none of this emits none of it, and `GS_SHARED_STATS` reports only where it
 does (`usesshared`, `EmitMain`).
 
+A dynamic stack's local (`BindDStack`) is a root struct's descriptor, as
+any root owner's is, whose `items` is the `gs_rref` of a `gs_rhdr` in the
+frame and the `stack` of a `gs_dstack` beside it: the runtime opens the
+`gs_dstack` (`gs_dstack_open`, which sets its stack's top to a slot's
+start) and the header starts there, and the dynamic stack's end, a scope
+end as an attachment's is (`RegisterEnd`), closes it. The component's
+stack expression is `(&gs_ds_<name>.stack)`, which no class of
+`PlanTopClasses` caches and no watermark restores, as it is no indexed
+stack and the slot goes back whole; a reference to `ds.items`, through
+`dynamic_stack<T>&` or as a `T[>..]&`, is the `gs_rref` as any
+component's, split as root parameters are (`FindSplitRootParams`). A
+freeze is the one change of a grow-only array's base. It writes every
+cached top and count back (`MarkFlush`), calls `gs_shm_freeze` with the
+attachment, the stack as the `gs_dstack` whose first member it is, the
+count and the element size and `GS_DEBUG`, reads every cache again
+(`MarkReload`), and only then starts the header over at the fresh slot's
+start: a count the body caches is then the local the reload just read,
+which the reset zeroes, where a reset before the reload would have been
+undone by it (`shared/shared_freeze_aliases.goose`, whose `-O1` C the
+runner reads). A frozen view is the address `gs_shm_frozen` gives and the
+length it sets, made the slice `view` returns.
+
 ---
 
 ## 7. The runtime
@@ -6644,9 +6708,54 @@ serial and the region's number, reads the region under the lock into the
 attachment, and checks the bounds and alignment there, where a failure
 formats its message (the type, the file, the count, the offset and the
 size). `GS_SHARED_STATS` makes `main` report, as it ends, the arenas made,
-released and live and the files mapped and unmapped (`gs_shm_stats`).
+released and live and the files mapped and unmapped (`gs_shm_stats`), and,
+once a dynamic stack was declared, the dynamic stacks declared and ended,
+the arrays frozen and released, and the slots opened, reused and free.
 `runtime/runtime_shared_lifecycle.c` builds this file directly, with the
-limits lowered (`GS_SHM_MAX_SERIAL`, `GS_SHM_MAX_REGIONS`).
+limits lowered (`GS_SHM_MAX_SERIAL`, `GS_SHM_MAX_REGIONS`,
+`GS_DYNAMIC_BUDGET`).
+
+**Dynamic stacks and frozen arrays.** The first dynamic stack reserves the
+dynamic budget (`gs_slots_reserve`, `GS_DYNAMIC_BUDGET`, 16 TB by default,
+which the program hands `gs_rt_start` as it does the data stacks' sizes):
+one inaccessible range (`PROT_NONE` and `MAP_NORESERVE`; `MEM_RESERVE`) of N
+slots of R + G, R the data stacks' reservation as configured and G their
+gap, where N is the most for which N * (R + G) plus the slots' records fit
+B, 8,188 by default; a range the platform refuses is retried with half as
+many slots, down to one. A slot is fresh, live, frozen or free. A dynamic
+stack takes a free slot, else the next fresh one, which it opens
+read-write outside the lock (`gs_slot_open`; on Windows its pages are
+committed on touch), its first 2 MB without transparent huge pages, as a
+data stack's, and the rest with them, which made the join's probe 17%
+faster; and where every slot is live or frozen it aborts with B, R, G and
+N and the flags that raise them (`gs_slots_full`). The free list is
+latest first, under the shared lock. Each thread's hold stack
+(`gs_shm_held`) holds its attachments' arenas and its dynamic stacks'
+slots in one order: a declaration pushes, its end pops, a freeze swaps the
+slot in its entry, and `gs_shm_release_held` ends the rest after a
+contained worker's abort, freeing each unfrozen slot. `gs_shm_freeze` takes
+a fresh slot first, so that an abort for want of one changes nothing,
+appends the old one to the arena as a region with its byte length and
+element size (`elemsize`, which tells a frozen region from a mapping),
+protects it read-only where the program says it is a debug build, and
+moves the dynamic stack's stack to the fresh slot; an empty array keeps
+its slot and is the empty region. A frozen view's check is inline
+(`gs_shm_frozen`), against the attachment's cache, as a mapping's is, and
+the rest out of line (`gs_shm_frozen_slow`), which tells an array of a
+released arena from one of a live other arena by the registry. An arena's
+release takes protection off its frozen slots, puts them on the free list
+with their pages, and unmaps its files; nothing is unmapped while the
+program runs, which keeps every slot of the budget for reuse and the
+unmaps that threads ending together serialize on out of the way
+(`bench/shared_memory/release.c`). `gs_trim_memory` gives the free slots'
+pages back (`gs_slots_trim`: `MADV_DONTNEED`, a `MAP_FIXED` mapping on
+macOS, `MEM_DECOMMIT`), as it does stacks'. The fault handlers find a slot
+by arithmetic, from words published before the reservation's base: an
+access in a live slot's gap is the dynamic stack's overrun, reported
+naming the declaration the slot records, a write to a frozen slot one to
+a frozen region, and on Windows a live slot's page is committed;
+`gs_stack_overflow` reports a dynamic stack's growth that cannot fit as
+the overrun.
 
 **Integer semantics** (§6.2): every operation runs at its type through
 `gs_add_i32`-style helpers. Under `GS_DEBUG` these are functions that check
