@@ -12,6 +12,10 @@
 // (polymorphic arguments, explicit type arguments, kind-dependent forms) has
 // "" for that part and gets dedicated code there, dispatched on the enum.
 //
+// The shared-memory builtins (§11.4) take an attachment where the array
+// members take an array: `handle` its property, `map_file`, `size` and
+// `view` its members, which a call names first; `attach` makes one.
+//
 // Signature characters, applying to the arguments after the receiver for
 // members: i int, e construct one element of the receiver's element type, a
 // an array/slice of that element type; an e or an a also gives a pending
@@ -22,7 +26,7 @@
 // `grows` is what the builtin does to the array it grows, as a diagnostic
 // about the growth says it (§1.3(4)) -- "push into" for push -- or "" where
 // it grows none. That array is the receiver, or under BF_OUTARG the `out`
-// array a call may pass as its second argument.
+// array a call may pass as its last argument.
 #pragma once
 
 namespace goose {
@@ -35,13 +39,15 @@ enum BuiltinFlags {
     BF_REUSABLE  = 1 << 4,  // Receiver must be a reusable pool of slots (§5.4).
     BF_SHRINKS   = 1 << 5,  // May shrink its receiver (§5.1, §5.2).
     BF_SLICEPOOL = 1 << 6,  // Receiver must be a reusable[] pool of slices (§5.4).
-    BF_OUTARG    = 1 << 7,  // Grows its second argument, an `out` array.
+    BF_OUTARG    = 1 << 7,  // Grows its last argument, an `out` array.
 };
 
-// Receiver kind masks (members only): which array flavors have the member.
+// Receiver kind masks (members only): which array flavors have the member,
+// and the attachment's own members (§11.4), which no array has.
 enum BuiltinRecv {
     BR_FIXED = 1 << 0, BR_VAR = 1 << 1, BR_LIMITED = 1 << 2,
     BR_GROW = 1 << 3, BR_GROWSHRINK = 1 << 4, BR_SLICE = 1 << 5,
+    BR_SHARED = 1 << 6,
     BR_ANY = BR_FIXED | BR_VAR | BR_LIMITED | BR_GROW | BR_GROWSHRINK | BR_SLICE,
     BR_GROWABLE = BR_LIMITED | BR_GROW | BR_GROWSHRINK,
     // Array kinds `index_of` accepts (§3.3): fixed strides once the element
@@ -52,10 +58,11 @@ enum BuiltinRecv {
     BR_SHRINKABLE = BR_LIMITED | BR_GROWSHRINK | BR_GROW,
 };
 
-// The receiver kind of a (dereferenced) type: one BR_ bit for an array
-// or slice, nothing for any other type.
+// The receiver kind of a (dereferenced) type: one BR_ bit for an array,
+// a slice or an attachment, nothing for any other type.
 inline int RecvKindOf(TypeExpr *t) {
     if (t->kind == TY_SLICE) return BR_SLICE;
+    if (IsAttachment(t)) return BR_SHARED;
     if (t->kind != TY_ARRAY) return 0;
     switch (t->arr->akind) {
         case A_FIXED:      return BR_FIXED;
@@ -98,6 +105,11 @@ inline int RecvKindOf(TypeExpr *t) {
     F(B_FROM_BYTES,       "from_bytes",       1,  1,   "",   "",  0,              "",            BF_TYARGS) \
     F(B_EMBED_SHADER,     "embed_shader",     1, 99,   "",   "",  0,              "",            0) \
     F(B_EMBED_FILE,       "embed_file",       1,  1,   "",   "",  0,              "",            0) \
+    F(B_ATTACH,           "attach",           1,  1,   "",   "",  0,              "",            0) \
+    F(B_HANDLE,           "handle",           1,  1,   "",   "",  BR_SHARED,      "",            BF_MEMBER | BF_PROPERTY) \
+    F(B_MAP_FILE,         "map_file",         2,  3,   "",   "",  BR_SHARED,      "append to",   BF_MEMBER | BF_OUTARG) \
+    F(B_SIZE,             "size",             2,  2,   "",   "i", BR_SHARED,      "",            BF_MEMBER) \
+    F(B_VIEW,             "view",             4,  4,   "",   "",  BR_SHARED,      "",            BF_MEMBER | BF_TYARGS) \
     F(B_LEN,              "len",              1,  1,   "",   "i", BR_ANY,         "",            BF_MEMBER | BF_PROPERTY) \
     F(B_CAP,              "cap",              1,  1,   "",   "i", BR_LIMITED,     "",            BF_MEMBER | BF_PROPERTY) \
     F(B_INDEX_OF,         "index_of",         2,  2,   "",   "i", BR_INDEXABLE,   "",            BF_MEMBER) \

@@ -347,6 +347,75 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
             return { t };
         }
         case B_THREAD_SPAWN: case B_THREAD_SPAWN_CONTAINED: return EmitThreadSpawn(c, an);
+        case B_ATTACH:
+            // Only an owning declaration holds one (BindAttachment).
+            Fail(ln, "internal: attach outside an owning declaration");
+        case B_MAP_FILE: {
+            // The handle and whether the file was mapped; with `why`, the
+            // reason appended to it where it was not (§11.4). Each argument
+            // is taken as it is evaluated, in order, `why` included, whose
+            // expression runs whether or not the file maps.
+            auto att = AttPtr(an[0]);
+            auto path = GenPure(an[1]);
+            auto pd = T(), pl = T();
+            L("const uint8_t *", pd, " = (const uint8_t *)(", path, ").data;");
+            L("int64_t ", pl, " = (", path, ").len;");
+            auto m = T(), ok = T();
+            L("gs_res ", m, ";");
+            if (an.size() == 2) {
+                L("uint8_t ", ok, " = gs_shm_map_file(", att, ", ", pd, ", ", pl, ", &", m,
+                  ", NULL, NULL, ", LocArgs(ln), ");");
+                return { m, ok };
+            }
+            auto why = RecvLoc(an[2]);
+            auto w = T(), n = T();
+            L("uint8_t *", w, ";");
+            L("int64_t ", n, ";");
+            L("uint8_t ", ok, " = gs_shm_map_file(", att, ", ", pd, ", ", pl, ", &", m, ", &", w,
+              ", &", n, ", ", LocArgs(ln), ");");
+            // The runtime keeps the reason until it is appended, so that a
+            // `why` with no room for it, which aborts the append, leaks
+            // nothing in a contained worker (gs_shm_release_held).
+            L("if (", w, ") {");
+            ind++;
+            AppendBytes(why, w, n, ln);
+            L("gs_shm_reason_done();");
+            ind--;
+            L("}");
+            return { m, ok };
+        }
+        case B_SIZE: {
+            // Emitted here, not returned as text: a discarded result would
+            // drop the check of the handle.
+            auto att = AttPtr(an[0]);
+            auto m = PinnedRes(an[1]);
+            auto t = T();
+            L("int64_t ", t, " = gs_shm_size(", att, ", ", m, ", ", LocArgs(ln), ");");
+            return { t };
+        }
+        case B_VIEW: {
+            // count T's from byte offset of the region, in place: the slice
+            // the runtime's check gives the address of (§11.4). The
+            // attachment and the handle are taken before the offset and
+            // the count run, which may assign or rebind what named them.
+            auto el = c->qtype;
+            auto att = AttPtr(an[0]);
+            auto m = PinnedRes(an[1]);
+            auto off = T(), count = T();
+            auto offx = GenX(an[2]);
+            L("int64_t ", off, " = (int64_t)(", offx, ");");
+            auto countx = GenX(an[3]);
+            L("int64_t ", count, " = (int64_t)(", countx, ");");
+            string name;
+            el->Dump(name);
+            auto p = T(), v = T();
+            L("const uint8_t *", p, " = gs_shm_view(", att, ", ", m, ", ", off, ", ", count, ", ",
+              FixedSize(el), ", ", ScalarAlign(el), ", ", CStr(name), ", ", LocArgs(ln), ");");
+            // The slice view<T> returns, whatever its destination: an array
+            // one copies from it, as from any slice.
+            L(CT(c->rettypes[0]), " ", v, " = { (void *)", p, ", ", count, " };");
+            return { v };
+        }
         case B_QPUT: {
             auto q = QueueFor(an[0]->exprtype);
             // Emitted here, not returned as text: a discarded result would

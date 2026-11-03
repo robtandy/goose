@@ -2034,6 +2034,7 @@ def main():
                     r.ok(f"runtime {name}")
         r.show_task(runtime_lifecycle, "runtime_threads_lifecycle", "threads")
         r.show_task(runtime_lifecycle, "runtime_trim_memory", "runtime")
+        r.show_task(runtime_lifecycle, "runtime_shared_lifecycle", "runtime")
         # The races of inboxes, select and events, each played out by the
         # runtime's test hooks; and the limits of event handles, at widths
         # small enough to reach.

@@ -386,11 +386,18 @@ inline Val StructLit::Check(TypeCheck &tc, TypeExpr *expected) {
             }
             t = tc.ast.StructOf(st, std::move(args), line);
         }
+        if (st->rtkind == RK_MAPPING)
+            tc.Error(this, "mapping is the kind of a mapped file's handle, which no value has: "
+                           "sh.map_file(path) maps a file (§11.4)");
         auto inst = tc.GetStructInst(t);
         sinst = inst;
         if (st->isroot) {
             if (tc.rootinit != this || !tc.rootowner)
-                tc.Error(this, "a root owner must be constructed directly at its declaration");
+                tc.Error(this, st->rtkind == RK_SHARED
+                                   ? "an attachment is made only by an owning declaration, "
+                                     "local or global: let sh = shared {}; (§11.4)"
+                                   : "a root owner must be constructed directly at its "
+                                     "declaration");
             tc.rootowner->type = t;
             for (size_t i = 0; i < inst->ftypes.size(); i++)
                 if (inst->ftypes[i]) tc.RootComponent(tc.rootowner, t, (int)i);
@@ -468,11 +475,17 @@ inline Val Dot::Check(TypeCheck &tc, TypeExpr *) {
         ov.reached = tc.LoadType(t);
     }
     tc.CheckAccessorOwner(this, accessorowner, t);
-    // Builtin properties (.len/.cap) from the table.
+    // Builtin properties (.len/.cap, and an attachment's .handle) from the
+    // table.
     if (auto bd = LookupBuiltin(name); bd && (bd->flags & BF_PROPERTY)) {
         if (RecvKindOf(t) & bd->recv) {
             member = bd->kind;
             Val v;
+            // The arena's handle, for other threads to attach to (§11.4).
+            if (bd->kind == B_HANDLE) {
+                v.type = tc.ast.ResourceOf(tc.ast.RuntimeType(RK_SHARED, line), line);
+                return v;
+            }
             assert(bd->rets[0] == 'i');
             v.type = tc.ast.inttypes[IS_I64];
             v.nonneg = true;   // A length or capacity is in [0, 2^48] (§10.4).
@@ -536,6 +549,7 @@ inline Val AsCast::Check(TypeCheck &tc, TypeExpr *) {
     // converts, which its destination or operator converts again
     // (TypeCheck::ToFloat).
     if (implicit) return tc.Operand(child);
+    constint = false;
     tc.ForgetCastAlt(this);
     // The operand as checked, which is also what an argument without the
     // cast would pass (TypeCheck::JudgeCallCasts).
@@ -585,6 +599,16 @@ inline Val AsCast::Check(TypeCheck &tc, TypeExpr *) {
         return v;
     }
     tc.NoteCast(this, raw, cv, v);
+    if (IsIntT(st) && tt->kind == TY_INT) {
+        auto inner = Is<AsCast>(child);
+        if (cv.ck == CK_INT) {
+            constint = true;
+            constbits = WrapStorage(cv.ival, tt->intstorage);
+        } else if (inner && !inner->implicit && inner->constint) {
+            constint = true;
+            constbits = WrapStorage(inner->constbits, tt->intstorage);
+        }
+    }
     return v;
 }
 

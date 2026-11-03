@@ -674,6 +674,11 @@ inline void CodeGen::BindLocal(VarDef *d, Node *init, bool forlocal) {
     }
     auto name = LocalName(d);
     auto t = d->type;
+    if (IsAttachment(t)) {
+        L("gs_att ", name, ";");
+        BindAttachment(name, init, false);
+        return;
+    }
     if (IsRoot(t)) {
         auto sl = Is<StructLit>(init);
         assert(sl && sl->sinst->st->isroot);

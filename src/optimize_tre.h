@@ -444,14 +444,20 @@ struct TailRecursion {
         n->Children([&](Node *ch) { Collect(ch, inner, found); });
     }
 
-    // Whether the tree holds a `defer` (§6.6). Its body runs once the
-    // return it is in scope of has its value, after the self-call there
-    // returns, which the loop cannot do: the rewrite leaves such a body alone.
-    static bool HasDefer(Node *n) {
+    // Whether the tree holds what runs as a return leaves its scope, once
+    // the return has its value, after the self-call there returns, which
+    // the loop cannot do: a `defer`'s body (§6.6), or the end of an
+    // attachment (§11.4), which a loop would bring before the next round,
+    // so that a callee attaching the caller's arena by its handle would
+    // find it released. The rewrite leaves such a body alone.
+    static bool HasScopeEnd(Node *n) {
         if (!n || Is<FnDecl>(n)) return false;
         if (Is<Defer>(n)) return true;
+        if (auto vd = Is<VarDecl>(n))
+            for (auto d : vd->defs)
+                if (d && IsAttachment(d->type)) return true;
         auto found = false;
-        RunChildren(n, [&](Node *ch) { found = found || HasDefer(ch); });
+        RunChildren(n, [&](Node *ch) { found = found || HasScopeEnd(ch); });
         return found;
     }
 
@@ -459,7 +465,7 @@ struct TailRecursion {
         if (sp->rets.size() != 1) return;
         rt = sp->rets[0];
         if (rt->kind != TY_INT || rt->intstorage == IS_VARINT) return;
-        if (HasDefer(sp->body)) return;
+        if (HasScopeEnd(sp->body)) return;
         auto selfcalls = false;
         if (!Applicable(sp->body, selfcalls) || !selfcalls) return;
         CollectBound(sp->body);

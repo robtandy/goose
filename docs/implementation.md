@@ -835,9 +835,10 @@ declaration has the name (`ResolveTypeNames`). Its `sub` is the kind.
   holding one (`ComparedHandle`). `AsCast` and `FitsAt` reject conversions
   (`HandleFitHint`).
 * `NominalNs` gives a handle its kind's namespace, for UFCS and `format`.
-* A kind the runtime provides would be a type the compiler declares. The
-  one rule it adds is that an `extern fn` takes it but never returns it
-  (design/shared_memory.md §4.1).
+* The runtime's kinds are types the compiler declares (§3.17): `shared` and
+  `mapping`. A kind is validated at its own position, `VT_KIND`, the one
+  `mapping` may take. The rule they add is that C takes such a handle but
+  never makes one (`RuntimeHandleIn`, §3.17).
 
 **Root owners and component regions.** Root ownership is valid only at a local
 or global declaration, with an immediate literal initializer (including the
@@ -4098,6 +4099,63 @@ before the `defer` and be reused there, so what such a callee names is read
 from its record of the variables outside its activation
 (`FnSpec::envreads`), which every call site fills, reused or not.
 
+### 3.17 Shared memory
+
+Spec §11.4's names resolve as `resource` does (`ResolveTypeNames`): where
+no declaration of the program has the name, `shared` and `mapping` are the
+runtime's declarations (`Ast::RuntimeDecl`), two `SStruct`s in no
+namespace and no declaration list, marked by `SStruct::rtkind`. `shared`
+is a root struct with no fields, so every root-owner rule of §3.2 applies
+unchanged: placement, no copy or whole assignment, no value operators,
+worker globals (`CheckThreadGlobals`) and the cycle rule, which an owner
+without components never trips (`NeedsCycleStack`). `mapping` is refused
+everywhere but a handle's kind (`ValidateType`, `StructLit::Check`).
+
+**Making an attachment.** Both forms are an owning declaration's initializer:
+`shared {}` is a root struct literal, which `RootInitScope` already confines
+to its declaration, and `attach(h)` a builtin that checks the same scope
+(`CheckBuiltin`, `B_ATTACH`). Its value has the owner's type and a
+temporary's root, as a root literal's has, and the declaration's variable
+is the root of everything viewed through it.
+
+**Members.** `handle` is a property (`Dot::Check`, `BF_PROPERTY`), and
+`map_file`, `size` and `view` are members whose receiver kind is
+`BR_SHARED` (`RecvKindOf`). A member call on an attachment tries them before
+the program's functions, as an array's members are (`CheckUfcsCall`); no
+other receiver takes them there. A plain call `view<T>(sh, ...)` resolves
+against the program's functions of the name first, as every builtin's
+does, and falls back to the builtin only where its first argument, as
+resolution checked it, is an attachment, or a reference to one, or for
+`attach`, where the call is its declaration's initializer
+(`SharedBuiltinHidden`). So a program's own
+`size` or `view` keeps its diagnostics. `CheckSharedMember` checks the rest:
+the path as a `const u8[:]` and `why` as a byte output (`CheckByteOut`);
+the handle of kind `mapping`; and for `view<T>` the type argument, which
+must be plain data (`PlainData`, which names the field path at fault), and
+a constant offset, which must be a multiple of `WidestScalar(T)`: a
+constant above `i64.max` by its bits, and an integer conversion of a
+constant, `12 as u64`, by the value it makes, which the cast records as
+it is checked (`AsCast::constint`, `WrapStorage`) and which is no
+constant for anything else: a conversion keeps the low bits an alignment
+reads, or aborts in a debug build. The
+view's value takes the receiver's roots and exactness (`TakeAlts`, reads
+cleared), as a slice of an array takes the array's, and is not writable;
+its type is `const T[:]`. So §9.2's rules keep it in the attachment's
+scope, out of globals, outer holders and messages, and §9.5's keep writes
+out, with no rule of their own. The element type is `Call::qtype`.
+
+**Read-back.** An attachment's storage holds plain data (`CanContainWalk`),
+so it is a candidate wherever a reference or slice to plain data is read
+out of a container (`RootCandidates`), as static data is for `u8`. Without
+it, a view read out of a global holder in a program with one other array
+of its element type would be taken for an element of that array, exactly,
+and `index_of` would accept it (`errors_tc/shared_view_readback.goose`).
+
+**The C boundary.** `RuntimeHandleIn` finds a runtime handle a type holds by
+value. `CheckExternSpec` rejects one in a result and in the pointee of a
+writable reference, slice or builder parameter, and `CheckExport` one in
+anything an export's parameter passes in, since C would make it.
+
 ---
 
 ## 4. The optimizer
@@ -4364,7 +4422,10 @@ references whose new value points outside the activation). Tails inside
 loops or function-value bodies are skipped, and a callee that can
 `return ... from` the function disables the transform, as does a `defer`
 anywhere in the body, whose run after a tail call's return the loop could
-not reproduce. The recursion keeps
+not reproduce, or the declaration of an attachment (§11.4), whose end
+the loop would bring before the next round: a callee attaching the
+caller's arena by a handle the caller saved would find it released
+(`HasScopeEnd`). The recursion keeps
 each caller's locals and by-value parameters alive and unchanged under its
 call, whereas the loop reinitializes and rebinds them for the next
 iteration. So the loop cannot carry a reference that a tail call passes
@@ -4705,7 +4766,12 @@ more loses its emptiness check (`Call::nobc`), as after
 `resize` states the new length when the count's term survived the
 evaluation of the fill value. Neither `pop_n` nor `resize` states anything
 when evaluating its count moved the receiver (`recvmoved`), since the
-receiver was resolved before the count ran.
+receiver was resolved before the count ran. A view that returns
+(`view<T>`, spec §11.4) has its count for its length (`BCE::viewlen`, the
+count's term after the last argument), which the declaration, assignment or
+argument binding it takes, as a slice expression's (`slicelen`). So a loop
+to the count indexes the view with no check, in a `checkfree` function too
+(`shared/shared_checkfree.goose`).
 
 A completed check is also a fact (`CheckedFacts`): the program continues
 past `a[i]` only with `0 <= i < len`, and past `a[lo..hi]` only with
@@ -5271,7 +5337,10 @@ results: `EnsureEr` compiles a second, `_er` twin of the callee that emits
 raw elements plus a count, so that `v.append(f())` is contiguous. A callee
 without a twin (a builtin, a dispatch, a `return from` target) delivers the
 value form, and the receiver slides the length prefix out with one
-`memmove` (`EmitSlidePrefix`). A `T[]` result that ends up in a slot of
+`memmove` (`EmitSlidePrefix`). A builtin whose result is fixed-size, a
+slice (`view`, `embed_file`, `bytes_of`) or a fixed array, builds no value
+form there, only a C value, and the run is constructed from it as from any
+slice (`ConstructCall`). A `T[]` result that ends up in a slot of
 another length storage is re-prefixed afterwards (`EmitReprefix`). A
 runtime-capacity limited result (`T[..]`) has no run form: `EmitAppend`
 builds its image on the destination stack, then compacts its live elements
@@ -5656,11 +5725,13 @@ field, so it is copied in behind the tag: into the union of a fixed-mode
 zero value (`EmitSelect`). A value of no bytes (spec §3.4) is sent through
 a queue or a thread's arguments as no bytes, and the receiver zeroes the
 object C gives it rather than reading past the image. `event`'s type,
-`resource<event>`, is a handle whose kind is `Ast::eventkind`, a struct
-the resolver gives the name `event` where the program declares no type of
-it, which `ValidateType` refuses anywhere but as resource's argument and
-`Mangle` names `rk_event`, apart from a program's types; `RuntimeHandleIn`
-finds one in a value for the C boundary's rule (spec §7.10).
+`resource<event>`, is a handle of the runtime's kind `RK_EVENT`, a
+declaration the resolver gives the name `event` where the program declares
+no type of it (`Ast::RuntimeDecl`, as for shared memory's kinds), which
+`ValidateType` refuses anywhere but as resource's argument (`VT_KIND`). The
+C boundary's rule for the runtime's handles (spec §7.10) covers it, and
+`Mangle` names every runtime kind `rk_` and its name, apart from a
+program's type of the name.
 
 ### 6.9 Generated walkers
 
@@ -6315,6 +6386,44 @@ costs nothing to check.
   cases are the ones that failed on x86-64 Linux and macOS (above), whose CI
   runs that task.
 
+### 6.15 Shared memory
+
+An attachment (spec §11.4) is a `gs_att` (`CT`, `NameCT`): the runtime's
+record of it in the owning frame, or in the globals' instance for a global
+one, and `shared&` is its address. A local's declaration
+(`BindAttachment`) calls `gs_shm_new`, or `gs_shm_attach` with the handle
+`attach(h)` names, and registers the attachment's end, `gs_shm_detach`, as
+a scope end of the block the local is in (`RegisterEnd`). Scope ends share
+the list of `defer` bodies (`CScope::defers`), each with the number of
+saves before it, so every exit of the block (its end, `break`, `continue`,
+`return`, and a frame a `return … from` passes through, §6.6) emits the
+end where it would emit a `defer` declared there, in reverse order with the
+restores. A global's declaration has no end; it lasts the run. Every use of
+an attachment goes through `AttPtr`, the address of the location `GenLoc`
+gives it, so a captured or aliased one is the same record. That address,
+a handle argument (`PinnedRes`) and `map_file`'s path are each taken into
+a temporary where they are evaluated, and `why` is resolved before the
+call, whether or not the file maps: an argument that assigns the handle an
+earlier one named, or rebinds the reference the receiver is reached
+through, changes nothing the call took, as in any call
+(`shared/shared_argument_order.goose`). A root reference
+parameter's descriptor is taken apart for the callee (`FindSplitRootParams`)
+and may be resolved to a global (`FindKnownRootParams`); an attachment's is
+neither, since the runtime takes the record itself.
+
+`sh.handle` is `gs_shm_handle` (`Dot::CgX`), `sh.size(m)` a call into a
+temporary, so that a discarded size still checks its handle, and
+`sh.map_file(path, why)` the handle and the flag, with the reason the
+runtime hands over appended to `why` (`AppendBytes`) and then let go of
+(`gs_shm_reason_done`). A view is the address `gs_shm_view` returns
+for the offset, the count, `T`'s size, its widest scalar (`ScalarAlign`)
+and its name, made the slice `{ data, count }`, of the type `view<T>`
+returns (`rettypes[0]`), not the call's destination's: an array declared
+or assigned from a view copies from that slice, as from any. Nothing else
+differs: a loop over a view is a loop over a slice, plain loads. A program that uses
+none of this emits none of it, and `GS_SHARED_STATS` reports only where it
+does (`usesshared`, `EmitMain`).
+
 ---
 
 ## 7. The runtime
@@ -6336,8 +6445,9 @@ Where the C compiler has a square root without errno
 (`__builtin_elementwise_sqrt`, detected with `__has_builtin`), the runtime's
 square root is that builtin: the same correctly rounded root, with no test
 or call around it. Elsewhere it is C's. The other half, `runtime_impl.h`,
-`runtime_threads.h` and `runtime_os.h`, defines what the first half
-declares, and is the only part that includes the platform's headers.
+`runtime_threads.h`, `runtime_shared.h` and `runtime_os.h`, defines what
+the first half declares, and is the only part that includes the platform's
+headers.
 
 How the halves meet is the driver's choice (`main.cpp`). The C that `-o`
 writes defines `GS_SEPARATE_RUNTIME` and holds only the first half, with the
@@ -6542,6 +6652,81 @@ or at its end. At most 2^24 events are open (`GS_E_EVENTS`), and 2^40 - 1
 serials are handed out in all. `test/threads/runtime_queue_stalls.c`
 plays each race out through `GS_QTEST_HOOK`, which parks a thread at a
 chosen point and is empty in every program (`docs/testing.md`).
+
+**Shared memory** (spec §11.4, `runtime_shared.h`, after
+`runtime_threads.h`). An arena is runtime memory, as a queue is: a serial,
+a count of attachments and a table of its regions, each a mapped file's
+base, size, path and what to unmap. A registry of the arenas that have
+attachments, by serial, sits under one lock (`gs_shm_mutex`), which also
+guards every arena's table; without threads there is neither the lock nor
+atomics. `gs_shm_new` registers an arena counted once, with a serial below
+2^40 that is never reused (`GS_RES_SERIAL_BITS`); `gs_shm_attach` finds the
+serial under the lock and adds one to a count above zero, and aborts where
+there is no such arena, or where its count reached zero and its release
+has not yet taken it out of the registry. The count is an atomic with
+acquire-release order, so the end that takes it to zero sees every view of
+the arena done; that end takes the arena out of the registry, unmaps its
+files (`munmap`, `UnmapViewOfFile`) and frees it, and an `attach` after it
+finds nothing. A handle is the serial in bits 63..24, with the region's
+number in bits 23..0 for a mapping (`GS_RES_REGION_BITS`), so a handle of
+another arena or of none is told from the record it is checked against.
+
+Each thread keeps its attachments' arenas on a stack of its own
+(`gs_shm_held`), in runtime memory rather than in the frames an abort
+leaves behind: an attachment's declaration pushes, its end pops, and as a
+worker ends, after a contained abort too, `gs_thread_main` ends whatever is
+left (`gs_shm_release_held`), before its storage is released and its
+completion published, so `thread_wait` returns after them (spec §11.2).
+The JIT host does the same for main after a run.
+
+`gs_shm_map_file` opens the file (`open` with `O_CLOEXEC`, `fstat`;
+`CreateFileW` without `FILE_SHARE_WRITE` on Windows, where a mapped file
+can be neither written by another process nor truncated) and maps it
+read-only and shared (`mmap(PROT_READ, MAP_SHARED)`, the descriptor closed
+after; `CreateFileMappingW` and `MapViewOfFile`, the handles kept). A
+regular file the system reports no size for, as `/proc`'s, and one it will
+not map (`ENODEV`, as sysfs's, which report 4096 bytes) are read to their
+end into anonymous memory, grown by doubling and made read-only
+(`gs_shm_copy_in`); a file that is empty that way too maps nothing, and its
+views point at a static byte. The system calls run before the lock is
+taken, which is only held to append the region. A refusal's reason is a
+message the program appends to `why`. The runtime keeps it, as the
+thread's pending reason, until the program has appended it
+(`gs_shm_reason_done`): an append to a `why` with no room for it aborts,
+and a contained worker's abort skips the rest of its code, so the worker's
+end frees the reason with its attachments (`gs_shm_release_held`). The
+mapping is registered for the fault handlers (`gs_mapchunks`,
+`runtime_impl.h`): chunks of entries that are never freed or moved, read
+by a handler without a lock, on any thread, while other threads add,
+clear and reuse entries for mappings of other places and sizes. Every
+word of an entry is loaded with acquire and stored with release
+(`gs_word_load`, `gs_word_store`, lock-free and so safe in a handler), the
+path too, a copy in the entry, so that no free of the region's own can
+race a handler. Each entry is a sequence lock (`gs_mapent_set`): its count
+is odd while it is written, and a lookup (`gs_mapfault`) takes a copy of
+an entry (`gs_mapsnap`) only where the count was even before it read the
+entry and is the same after, so it never puts an old base with a reused
+entry's longer length, which could cover another mapping, nor reads a
+path being rewritten. It skips an entry being written, which is never the
+one its fault lies in: that is a live mapping's, written only before its
+handle exists and after its arena's last attachment ends. On a read past
+the end of a file another process truncated
+(SIGBUS, `EXCEPTION_IN_PAGE_ERROR`), or a write to a mapping (SIGSEGV, an
+access violation), the handler names the file and the byte, without stdio,
+and ends the process, as for a guard gap.
+
+A view's check is inline (`gs_shm_view`, `runtime.h`). An attachment keeps
+the region its last view or size looked up (`gs_att::res`, base and
+length), which only its own thread reads, so a view of that region is a
+compare of the handle and three of the bounds, no lock and no atomic. Any
+other view goes out of line once (`gs_shm_view_slow`): it checks the
+serial and the region's number, reads the region under the lock into the
+attachment, and checks the bounds and alignment there, where a failure
+formats its message (the type, the file, the count, the offset and the
+size). `GS_SHARED_STATS` makes `main` report, as it ends, the arenas made,
+released and live and the files mapped and unmapped (`gs_shm_stats`).
+`runtime/runtime_shared_lifecycle.c` builds this file directly, with the
+limits lowered (`GS_SHM_MAX_SERIAL`, `GS_SHM_MAX_REGIONS`).
 
 **Integer semantics** (§6.2): every operation runs at its type through
 `gs_add_i32`-style helpers. Under `GS_DEBUG` these are functions that check

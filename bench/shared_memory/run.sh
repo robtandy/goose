@@ -5,7 +5,8 @@
 #     bench/shared_memory/run.sh DIR [CC]
 #
 # DIR is a scratch directory on the file system whose files are to be mapped
-# (it needs 2 GB free); CC is the C compiler, clang by default. The cold-cache
+# (it needs 2 GB free); CC is the C compiler, clang by default, and GOOSE the
+# compiler that builds colsum.goose, goose on the PATH by default. The cold-cache
 # rows drop the file's pages first and take about 15 s each on a slow volume;
 # set COLD=0 to skip them. Linux.
 set -e
@@ -17,6 +18,8 @@ mkdir -p "$bin"
 for p in mapbench release mprot attach sigbus colfile; do
     "$cc" -O2 -Wall -Wextra -pthread -o "$bin/$p" "$here/$p.c"
 done
+goose="${GOOSE:-goose}"
+"$goose" build -O2 --cc "$cc" -o "$bin/colsum" "$here/colsum.goose"
 col="$dir/col.i64"
 [ -f "$col" ] || "$bin/colfile" write "$col" 268435456   # 2^28 i64s, 2 GB
 
@@ -30,6 +33,14 @@ for rep in 1 2 3; do
         "$bin/mapbench" "$col" mmap_populate $t
         "$bin/mapbench" "$col" mmap_popread $t
         "$bin/mapbench" "$col" mmap_willneed $t
+    done
+done
+echo "== the same sum in Goose"
+for rep in 1 2 3; do
+    for t in 1 16; do
+        "$bin/colsum" "$col" pread $t
+        "$bin/colsum" "$col" read_file $t
+        "$bin/colsum" "$col" view $t 2
     done
 done
 if [ "${COLD:-1}" != 0 ]; then

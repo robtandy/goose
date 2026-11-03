@@ -78,11 +78,24 @@ inline Val TypeCheck::CheckNamedCall(Call *c, Ident *id, TypeExpr *expected) {
         Node *nopre = nullptr;
         // A user function set sharing a builtin's name (a `format`
         // overload, §3.7) takes the calls it matches; the builtin the rest.
+        // A shared-memory builtin (§11.4) takes only what no function of
+        // a program's can be meant to: a call whose first argument is an
+        // attachment, or attach at its owning declaration. That argument's
+        // type is known once resolution has checked the arguments; where
+        // it is no attachment, resolution runs again to give its own
+        // error, or its last resort, as the builtin was never there.
         auto entryreach = reachable;
         auto nomatch = false;
+        auto byarg = bd && bd->kind != B_ATTACH && bd->recv == BR_SHARED;
+        auto falls = bd && (byarg || !SharedBuiltinHidden(c, *bd));
         auto v = ResolveCall(c, cands, env, id->name, nullptr, nopre,
-                             entryreach, bd ? &nomatch : nullptr, expected);
+                             entryreach, falls ? &nomatch : nullptr, expected);
         if (!nomatch) return v;
+        if (byarg && SharedBuiltinHidden(c, *bd)) {
+            reachable = entryreach;
+            return ResolveCall(c, cands, env, id->name, nullptr, nopre, entryreach, nullptr,
+                               expected);
+        }
         // Without a cast, an argument might have matched a function (JudgeCastAt).
         auto fallback = builtinfallback;
         fallback.insert(c->args.begin(), c->args.end());
@@ -98,6 +111,18 @@ inline Val TypeCheck::CheckNamedCall(Call *c, Ident *id, TypeExpr *expected) {
     if (bd->flags & BF_PROPERTY)
         Error(c, cat(id->name, " is a property (use a.", id->name, "), not a call"));
     return CheckBuiltin(c, *bd, c->args, nullptr);
+}
+
+// Whether a function of the program named like the shared-memory builtin
+// d (§11.4) hides it at c: unless c is attach at its owning declaration, or
+// its first argument, as resolution checked it, is an attachment or a
+// reference to one, however it is reached: a name, a field, a call.
+inline bool TypeCheck::SharedBuiltinHidden(Call *c, const BuiltinDef &d) {
+    if (d.kind == B_ATTACH) return rootinit != c;
+    if (d.recv != BR_SHARED) return false;
+    auto t = c->args.empty() ? nullptr : c->args[0]->exprtype;
+    if (t && t->kind == TY_REF) t = t->ref->sub;
+    return !IsAttachment(t);
 }
 
 // The nested functions a name reaches from the current point, with the
@@ -183,9 +208,11 @@ inline Val TypeCheck::CheckUfcsCall(Call *c, Dot *d, TypeExpr *expected) {
     // remaining builtins (a.f(b) is exactly f(a, b)). Only a member needs
     // an optional receiver narrowed first: the others take it as f(a, b)
     // takes a, so r.assert() is what narrows r (§3.8).
+    // An attachment's members are its own as an array's are (§11.4), and
+    // take no other receiver.
     auto bd = LookupBuiltin(d->name);
     if (bd && (bd->flags & BF_MEMBER) && !(bd->flags & BF_PROPERTY) &&
-        rt->kind == TY_ARRAY) {
+        (bd->recv == BR_SHARED ? IsAttachment(rt) : rt->kind == TY_ARRAY)) {
         if (optional) Error(c, "optional value must be narrowed (if/guard/assert) before use");
         // A member works on the receiver's value, which for a control
         // construct is a copy of the branch taken.
@@ -2563,36 +2590,6 @@ inline bool TypeCheck::ExternValueOk(TypeExpr *t, string &why) {
     return true;
 }
 
-// The handle of a kind the runtime makes (resource<event>, §3.12) that a
-// value of type t holds, at any depth of its fields, elements and payloads,
-// or null. C takes such a handle but never makes one (§7.10).
-inline TypeExpr *TypeCheck::RuntimeHandleIn(TypeExpr *t) {
-    switch (t->kind) {
-        case TY_RESOURCE:
-            return t->sub->kind == TY_STRUCT && t->sub->struc->st->rtkind ? t : nullptr;
-        case TY_ARRAY: return RuntimeHandleIn(t->arr->sub);
-        case TY_STRUCT: case TY_ENUM: case TY_VARIANT: {
-            TypeExpr *h = nullptr;
-            EachField(t, [&](TypeExpr *ft) { if (!h) h = RuntimeHandleIn(ft); });
-            return h;
-        }
-        default: return nullptr;
-    }
-}
-
-// The same of what C would write through a parameter of type t, a reference
-// or slice that is not read-only, or of what it would hand Goose through one
-// of any kind (`all`, an exported function's).
-inline TypeExpr *TypeCheck::RuntimeHandleFromC(TypeExpr *t, bool all) {
-    if (t->kind == TY_REF || t->kind == TY_SLICE) {
-        if (t->cq && !all) return nullptr;
-        auto s = t->kind == TY_REF ? t->ref->sub : t->sub;
-        if (s->kind == TY_ARRAY && s->arr->akind == A_GROW) s = s->arr->sub;
-        return RuntimeHandleIn(s);
-    }
-    return all ? RuntimeHandleIn(t) : nullptr;
-}
-
 inline bool TypeCheck::ExternParamOk(TypeExpr *t, string &why) {
     if (t->kind == TY_REF) {
         if (t->ref->optional || t->ref->lenstorage >= 0) {
@@ -2672,11 +2669,13 @@ inline void TypeCheck::CheckExternSpec(FnSpec *spec) {
         if (!ExternParamOk(pt, why) || !DylibValueOk(sf, pt, why))
             Error(sf->line, cat("extern fn ", sf->name, ": parameter ", p.name, " of type ",
                                 TypeStr(pt), " cannot cross to C: ", why));
-        if (auto h = RuntimeHandleFromC(pt, false))
+        // C takes the runtime's handles but never makes one (§11.4): not
+        // into storage it may write either.
+        auto writes = IsRefOrSlice(pt) && !pt->cq ? PointeeOf(pt) : nullptr;
+        if (auto h = writes ? RuntimeHandleIn(writes) : nullptr)
             Error(sf->line, cat("extern fn ", sf->name, ": parameter ", p.name, " of type ",
-                                TypeStr(pt), " would let C write a ", TypeStr(h),
-                                ", which only the runtime makes; pass it by value or "
-                                "read-only (§7.10)"));
+                                TypeStr(pt), " lets C write a ", TypeStr(h), ", which only the "
+                                "runtime makes (§7.10, §11.4); declare it const"));
         auto vd = ast.NewVarDef();
         vd->name = p.name;
         vd->type = pt;
@@ -2696,9 +2695,10 @@ inline void TypeCheck::CheckExternSpec(FnSpec *spec) {
             Error(sf->line, cat("extern fn ", sf->name, " cannot return ", TypeStr(t), ": ",
                                 why));
         if (auto h = RuntimeHandleIn(t))
-            Error(sf->line, cat("extern fn ", sf->name, " cannot return ", TypeStr(t), ": a ",
-                                TypeStr(h), " comes only from the runtime, and C takes one "
-                                "but never makes one (§7.10)"));
+            Error(sf->line, cat("extern fn ", sf->name, " cannot return ", TypeStr(t), ": ",
+                                h == t ? string() : cat("it holds a ", TypeStr(h), ", and "),
+                                "C takes the runtime's handles, but only the runtime makes one "
+                                "(§7.10, §11.4)"));
         spec->rets.push_back(t);
     }
     spec->retsknown = true;
@@ -2754,13 +2754,14 @@ inline void TypeCheck::CheckExport(SFunction *sf) {
         if (!ExternParamOk(t, why))
             fail(cat("parameter ", sf->params[i].name, " of type ", TypeStr(t),
                      " cannot cross to C: ", why));
+        // What C passes in is C's making, which no runtime handle is (§11.4).
+        auto given = IsRefOrSlice(t) ? PointeeOf(t) : t;
+        if (auto h = given ? RuntimeHandleIn(given) : nullptr)
+            fail(cat("parameter ", sf->params[i].name, " of type ", TypeStr(t), " would take a ",
+                     TypeStr(h), " from C, which only the runtime makes (§7.10, §11.4)"));
         if (CarriesPool(t))
             fail(cat("parameter ", sf->params[i].name,
                      " uses a reusable pool and has no public C representation"));
-        if (auto h = RuntimeHandleFromC(t, true))
-            fail(cat("parameter ", sf->params[i].name, " of type ", TypeStr(t),
-                     " would take a ", TypeStr(h), " from C, which only the runtime "
-                     "makes (§7.10)"));
         if (t->kind == TY_REF && t->ref->sub->kind == TY_ARRAY &&
             t->ref->sub->arr->akind == A_GROW && IsU8(t->ref->sub->arr->sub))
             fail(cat("parameter ", sf->params[i].name,

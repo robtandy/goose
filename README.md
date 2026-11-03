@@ -62,10 +62,12 @@ language's type and lifetime rules make this memory model safe to use.
 * **Returns across multiple calls.** `return err from load` returns from a
   function any number of frames up the call stack. It is checked statically,
   and needs no unwinder, no `Result` type and no `?` on every call.
-* **Threads with no shared memory.** A worker is compiled as a separate program
-  with its own memory, and flat values are passed between threads through
-  typed queues with a `memcpy`. Data races, locks, atomics and memory
-  orderings do not exist in the language.
+* **Threads with no shared mutable memory.** A worker is compiled as a separate
+  program with its own memory, and flat values are passed between threads
+  through typed queues with a `memcpy`. A file mapped read-only is the one
+  memory threads share, read in place through views that cannot outlive it.
+  Data races, locks, atomics and memory orderings do not exist in the
+  language.
 * **Generics and higher-order functions with no overhead.** An untyped
   parameter is generic. Function values are compile-time entities, so
   `xs.filter() { it > 0 }` compiles to what the handwrittend loop would looks like and builds its
@@ -386,6 +388,22 @@ while !thread_wait(thread_spawn_contained(serve, attempt), why) {
 
 The first `thread_wait(id, msg)` for a worker takes the message; a caller
 that doesn't ask for it loses it.
+
+Memory that no thread can write is shared. A file mapped read-only into a
+shared arena is read in place, with no copy, by every thread attached to the
+arena, through `const` views that the compiler keeps from outliving the
+attachment they were made through:
+
+```goose
+thread_fn summer(h: resource<shared>, m: resource<mapping>, first: i64, n: i64) {
+    let sh = attach(h);                             // this worker's attachment
+    qput(sum(view<i64>(sh, m, first * 8, n)));      // the column's i64s, in place
+}
+
+let sh = shared {};                                 // an arena, and main's attachment
+let m, ok = sh.map_file("column.i64");
+for w in k { ids.push(thread_spawn(summer, sh.handle, m, w * part, part)); }
+```
 
 ### Compiling to and calling C
 

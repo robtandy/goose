@@ -47,6 +47,7 @@ static void qt_hook(int point);
 #include "../../src/runtime/runtime.h"
 #include "../../src/runtime/runtime_impl.h"
 #include "../../src/runtime/runtime_threads.h"
+#include "../../src/runtime/runtime_shared.h"
 
 static void check(int ok, const char *what) {
     if (!ok) {

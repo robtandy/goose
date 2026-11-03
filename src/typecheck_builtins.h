@@ -182,6 +182,20 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             v.writable = false;
             return v;
         }
+        case B_ATTACH: {
+            // attach(h): another attachment to the arena h names (§11.4),
+            // which only an owning declaration holds, as `shared {}` is.
+            if (rootinit != c || !rootowner)
+                Error(c, "an attachment is made only by an owning declaration, local or "
+                         "global: let sh = attach(h); (§11.4)");
+            CheckArg(args[0], ast.ResourceOf(ast.RuntimeType(RK_SHARED, c->line), c->line));
+            Val v;
+            v.type = ast.RuntimeType(RK_SHARED, c->line);
+            v.Set(TempRoot(), false);
+            rootowner->type = v.type;
+            c->rettypes.push_back(v.type);
+            return v;
+        }
         case B_COPY: {
             // copy(x): a fresh value from stored one (§4.1), for the
             // destinations that never copy implicitly.
@@ -351,6 +365,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             Error(c, cat(".", d.name, " exists on reusable[] pools only",
                          rv.reusable ? ", not on the slot pools of reusable" : "",
                          notpoolref(RU_SLICES), " (§5.4)"));
+        if (d.recv == BR_SHARED) return CheckSharedMember(c, d, args, rv);
     }
     if (d.kind == B_MOVE_FROM) {
         if (ClassOf(elem) != SC_FIXED)
@@ -672,6 +687,83 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
         default: assert(false);
     }
     return v;
+}
+
+// An attachment's members (§11.4), rv the attachment: map_file, size and
+// view<T>, which name the arena's regions by their handles.
+inline Val TypeCheck::CheckSharedMember(Call *c, const BuiltinDef &d, vector<Node *> &args,
+                                        const Val &rv) {
+    auto mapping = ast.ResourceOf(ast.RuntimeType(RK_MAPPING, c->line), c->line);
+    switch (d.kind) {
+        case B_MAP_FILE: {
+            // The handle and whether the file was mapped, with the reason
+            // appended to `why` where it was not.
+            CheckArg(args[1], cu8slice);
+            if (args.size() == 3) CheckByteOut(c, args[2], "map_file(path, why)");
+            c->rettypes.push_back(mapping);
+            c->rettypes.push_back(ast.booltype);
+            Val m, ok;
+            m.type = mapping;
+            ok.type = ast.booltype;
+            lastcallrets.clear();
+            lastcallrets.push_back(m);
+            lastcallrets.push_back(ok);
+            return m;
+        }
+        case B_SIZE: {
+            CheckArg(args[1], mapping);
+            Val v;
+            v.type = ast.inttypes[IS_I64];
+            v.nonneg = true;   // A file's size, at most 2^48 bytes (§10.4).
+            return v;
+        }
+        case B_VIEW: {
+            // view<T>(sh, m, offset, count): `count` T's from byte `offset`
+            // of the file m maps, read in place as a `const T[:]` rooted at
+            // the attachment, as a slice of an array is rooted at the array
+            // (§9.2). The runtime checks the bounds and the alignment once.
+            if (c->tyargs.size() != 1)
+                Error(c, "view<T>(sh, m, offset, count) needs exactly one explicit type "
+                         "argument, the type it views (§11.4)");
+            auto t = Subst(c->tyargs[0]);
+            ValidateType(t, c->line, VT_LOCAL);
+            if (t->cq) t = ast.PlainOf(t);
+            string why;
+            if (!PlainData(t, why))
+                Error(c, cat("view<", TypeStr(t), "> of a mapped file takes plain data, which "
+                             "every byte pattern is a value of (§11.4), and ", why));
+            CheckArg(args[1], mapping);
+            auto off = CheckIntAny(args[2]);
+            CheckIntAny(args[3]);
+            string part;
+            auto align = WidestScalar(t, part);
+            // A constant offset, unsigned above i64.max too, or an integer
+            // conversion of one (`12 as u64`): a conversion keeps the low
+            // bits an alignment of a scalar's size reads, or aborts in a
+            // debug build, so its view could never be made either.
+            auto conv = Is<AsCast>(args[2]);
+            auto known = off.ck == CK_INT || (conv && !conv->implicit && conv->constint);
+            auto bits = off.ck == CK_INT ? off.ival : known ? conv->constbits : 0;
+            auto uns = off.ck == CK_INT ? off.uns
+                                        : known && bits < 0 && IsUnsigned(conv->totype->intstorage);
+            if (known && (uint64_t)bits % (uint64_t)align)
+                Error(args[2], cat("view<", TypeStr(t), "> at byte offset ",
+                                   uns ? to_string((uint64_t)bits) : to_string(bits),
+                                   ", which is not a multiple of ", align, ", the size of ", part,
+                                   ": a file's format aligns its arrays, so the bytes would not be "
+                                   "the values written (§11.4)"));
+            c->qtype = t;
+            Val v;
+            v.type = ast.SliceOf(t, c->line);
+            v.type->cq = true;
+            v.TakeAlts(rv);
+            v.ClearReads();
+            v.writable = false;
+            c->rettypes.push_back(v.type);
+            return v;
+        }
+        default: assert(false); return VoidVal();
+    }
 }
 
 // The growable u8 array a builtin's `out` argument appends to (BF_OUTARG),

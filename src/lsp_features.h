@@ -489,7 +489,9 @@ inline HoverText HoverIdent(const Located &loc, const Occurrence &occ) {
     }
     auto &fns = ast.LookupFunctions(id->name, id->ns);
     if (!fns.empty()) return OverloadsHover(fns);
-    if (auto b = LookupBuiltin(GlobalLeaf(id->name))) {
+    // A builtin is only ever called: a name elsewhere is a variable's, as
+    // `size` may be, which only its check could say.
+    if (auto b = occ.callee ? LookupBuiltin(GlobalLeaf(id->name)) : nullptr) {
         h.header = cat("builtin ", b->name);
         return h;
     }
@@ -1899,9 +1901,11 @@ inline void MemberCompletions(const Located &loc, size_t dotpos, Completions &ou
             out.Add(fld.name, CK_FIELD, 0, cat(fld.isconst ? "let " : "", fld.name, ": ", TypeText(ft)), fld.doc);
         }
     };
+    // A member taking type arguments (view<T>) is a call naming its
+    // receiver first, which `.` cannot write.
     auto builtins = [&](int recv) {
         for (auto &b : builtindefs)
-            if ((b.flags & (BF_MEMBER | BF_PROPERTY)) && (b.recv & recv))
+            if ((b.flags & (BF_MEMBER | BF_PROPERTY)) && (b.recv & recv) && !(b.flags & BF_TYARGS))
                 out.Add(b.name, b.flags & BF_PROPERTY ? CK_PROPERTY : CK_METHOD, 2, "builtin");
     };
     auto type = object ? an.TypeOf(object->node) : nullptr;

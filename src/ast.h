@@ -372,6 +372,22 @@ inline bool IsU8(const TypeExpr *t) {
 inline bool IsIndexT(const TypeExpr *t) { return t && t->kind == TY_INT && t->ix; }
 // A handle, resource<U> (§3.12).
 inline bool IsResource(const TypeExpr *t) { return t && t->kind == TY_RESOURCE; }
+// The declarations the runtime provides (§11.4), in no namespace and no
+// declaration list (Ast::RuntimeDecl): `shared`, an attachment, a builtin
+// root owner with no components, which is also the kind of an arena's
+// handle; and `mapping`, the kind of a mapped file's handle, which names a
+// kind only (`resource<mapping>`) and is no type of any value.
+enum RuntimeKind { RK_NONE, RK_SHARED, RK_MAPPING, RK_EVENT };
+// The runtime's declaration a type names: RK_NONE for any other.
+RuntimeKind RuntimeKindOf(const TypeExpr *t);
+// An attachment, `shared` (§11.4).
+inline bool IsAttachment(const TypeExpr *t) { return RuntimeKindOf(t) == RK_SHARED; }
+// A handle of a kind the runtime binds, `resource<shared>`,
+// `resource<mapping>` (§11.4) or `resource<event>` (§11.2), which C takes
+// but never makes.
+inline bool IsRuntimeHandle(const TypeExpr *t) {
+    return IsResource(t) && RuntimeKindOf(t->sub) != RK_NONE;
+}
 inline bool IsF32(const TypeExpr *t) { return t && t->kind == TY_FLT && t->fltstorage == FS_F32; }
 // The ADT a variant type is a variant of, and an enum type's own; else null.
 inline TypeExpr *AdtOf(TypeExpr *t) {
@@ -1217,6 +1233,13 @@ NODE(AsCast)
     // can be wider: it is the slot the result lands in (an i8 cast stored
     // into an i64), and the cast still wraps and checks at its own type.
     TypeExpr *totype = nullptr;
+    // Filled by typecheck where the operand is an integer constant, or an
+    // integer conversion of one, and the cast converts to an integer type:
+    // the bits of what the cast makes of it, as a release build wraps it,
+    // which a debug build keeps or aborts on (§6.3). The cast is no
+    // constant for anything else; a view's alignment check reads it (§11.4).
+    bool constint = false;
+    int64_t constbits = 0;
     AsCast(Line l, Node *_child, TypeExpr *_type, bool _unchecked)
         : Node(l, NKind), child(_child), type(_type), unchecked(_unchecked) {}
     // The cast as the source has it, which the checker's clones of it (one
@@ -1540,6 +1563,7 @@ struct SStruct {
     Line end;                   // As SFunction::end.
     string_view doc;            // As SFunction::doc.
     bool isroot = false;       // Explicit owning layout (docs/design/root_structs.md).
+    RuntimeKind rtkind = RK_NONE;
     vector<GenericParam> generics;
     vector<Field> fields;
     vector<StructInst *> insts;  // Instantiations (typecheck), owned by Ast.
@@ -1553,10 +1577,11 @@ struct SStruct {
     // and a value of it, or one expected to be of it, ends the check of the
     // code at hand silently.
     bool unknown = false;
-    // A kind of handle the runtime makes (§3.12): `event`, of event(v),
-    // written only as resource's argument (Ast::eventkind).
-    bool rtkind = false;
 };
+
+inline RuntimeKind RuntimeKindOf(const TypeExpr *t) {
+    return t && t->kind == TY_STRUCT ? t->struc->st->rtkind : RK_NONE;
+}
 
 struct SVariant {
     string_view name;
@@ -2557,10 +2582,29 @@ struct Ast {
     // The structs standing for the type names that name nothing
     // (SStruct::unknown), in no namespace and no declaration list.
     vector<SStruct *> unknowntypes;
-    // The runtime's kind `event` (§11.2), which `event` names where no
-    // declaration of the program has the name (ResolveTypeNames): in no
-    // namespace and no declaration list either.
-    SStruct eventkind;
+    // The runtime's declarations (§11.4, §11.2), made as a use first names
+    // one.
+    SStruct *runtimedecls[RK_EVENT + 1] = {};
+    SStruct *RuntimeDecl(RuntimeKind k) {
+        auto &st = runtimedecls[k];
+        if (!st) {
+            st = new SStruct();
+            st->name = st->qname = k == RK_SHARED    ? "shared"
+                                 : k == RK_MAPPING ? "mapping"
+                                                   : "event";
+            st->isroot = k == RK_SHARED;
+            st->rtkind = k;
+        }
+        return st;
+    }
+    // A type naming one: `shared`, or the kind `mapping` or `event`.
+    TypeExpr *RuntimeType(RuntimeKind k, Line line) {
+        auto t = NewType(TY_STRUCT, line);
+        auto d = NewDetail<TypeStruct>();
+        d->st = RuntimeDecl(k);
+        t->struc = d;
+        return t;
+    }
 
     // Typecheck products (owned here so later phases can rely on them).
     vector<VarDef *> vardefs;
@@ -2610,17 +2654,6 @@ struct Ast {
         }
         booltype = NewType(TY_BOOL, Line {});
         voidtype = NewType(TY_VOID, Line {});
-        eventkind.name = eventkind.qname = "event";
-        eventkind.rtkind = true;
-    }
-
-    // The type `event`, the runtime's kind of resource<event> (§11.2).
-    TypeExpr *EventKind(Line line) {
-        auto t = NewType(TY_STRUCT, line);
-        auto d = NewDetail<TypeStruct>();
-        d->st = &eventkind;
-        t->struc = d;
-        return t;
     }
 
     ~Ast() {
@@ -2630,6 +2663,7 @@ struct Ast {
         for (auto f : functions) delete f;
         for (auto s : structs) delete s;
         for (auto s : unknowntypes) delete s;
+        for (auto s : runtimedecls) delete s;
         for (auto e : enums) delete e;
         for (auto a : aliases) delete a;
         for (auto v : vardefs) delete v;

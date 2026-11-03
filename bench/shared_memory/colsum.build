@@ -1,0 +1,2 @@
+// The sidecar of colsum.goose: its pread shim.
+c_sources = ["colsum_impl.c"];

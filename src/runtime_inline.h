@@ -21,8 +21,8 @@ R"GSRT(/* Goose runtime — the part every compiler-generated C file starts with
 R"GSRT(   This file holds what a program's own translation unit needs: types,
    macros, the configuration, the helpers that must inline (arithmetic,
    checks, varints), the data stack state the emitted code reads, and
-   declarations of the rest. That rest (runtime_impl.h,
-   runtime_threads.h, and runtime_os.h after runtime_ext.h) needs the
+   declarations of the rest. That rest (runtime_impl.h, runtime_threads.h,
+   runtime_shared.h, and runtime_os.h after runtime_ext.h) needs the
    platform's headers, which no program's unit includes, and is built one
    of two ways:
 
@@ -158,6 +158,9 @@ R"GSRT(/* Configuration; all overridable from the compile command line. */
 #endif
 #ifndef GS_STACK_STATS
 #define GS_STACK_STATS 0    /* 1: each thread program reports its stack use as it ends. */
+#endif
+#ifndef GS_SHARED_STATS
+#define GS_SHARED_STATS 0   /* 1: the main program reports its shared arenas as it ends. */
 #endif
 /* §10.4 caps a stack reservation at 2^48 bytes, which is what lets the
    compiler treat every size, count and index as fitting in 48 bits: the
@@ -1134,16 +1137,11 @@ GS_API void gs_thread_watch(gs_queue *q, int64_t id, const void *data, int64_t s
                             const char *file, int line);
 
 )GSRT"
-R"GSRT(/* A runtime handle (§3.12) is its serial, bits 63 to 24, never reused, and
-   an index, bits 23 to 0, of the record its serial was given to; serial 0
-   names nothing. */
-#define GS_RES_SERIAL_BITS 40
-#define GS_RES_REGION_BITS 24
-typedef char gs_res_bits_sum[GS_RES_SERIAL_BITS + GS_RES_REGION_BITS == 64 ? 1 : -1];
-
-)GSRT"
 R"GSRT(/* event(v): a new event of the calling thread holding a copy of v, whose
-   signals make that copy pending in the caller's inbox of q's type. */
+   signals make that copy pending in the caller's inbox of q's type. Its
+   handle is a runtime handle (§3.12), its serial in bits 63 to 24
+   (GS_RES_SERIAL_BITS, below), never reused, and the index of the record
+   it was given in bits 23 to 0; serial 0 names nothing. */
 GS_API gs_res gs_event_new(gs_queue *q, const void *data, int64_t size, const char *file,
                            int line);
 /* event_close(e): later signals of e return 0; a copy pending stays. */
@@ -1154,6 +1152,76 @@ GS_API void gs_event_close(gs_res e, const char *file, int line);
    taken; 0: e's event is closed, by event_close or its thread's end; -1: e
    never named one. External in every build, for packages' native parts. */
 int gs_event_signal(gs_res e);
+
+)GSRT"
+R"GSRT(/* ---------------------------------------------------------------------------
+   Shared memory (§11.4, docs/design/shared_memory.md), runtime_shared.h: an
+   arena of read-only regions, which any thread that attaches to it reads in
+   place through views. A runtime handle (§3.12) names an arena, its serial
+   in bits 63..24, never reused, with 0 below it, or one of its regions,
+   numbered from 1 in bits 23..0; the zero handle names nothing. */
+
+)GSRT"
+R"GSRT(#define GS_RES_SERIAL_BITS 40
+#define GS_RES_REGION_BITS 24
+typedef char gs_res_bits_check[GS_RES_SERIAL_BITS + GS_RES_REGION_BITS == 64 ? 1 : -1];
+
+)GSRT"
+R"GSRT(/* An attachment (`shared {}`, `attach(h)`): a local or global of its owning
+   declaration, which counts once in its arena until the declaration's scope
+   ends (gs_shm_detach) or a contained worker holding it aborts
+   (gs_shm_release_held). It also keeps the region its last view or size
+   looked up, which only its own thread reads: a view of that region is the
+   inline check below, and any other goes to the runtime once. */
+struct gs_arena;
+typedef struct {
+    struct gs_arena *arena;
+    gs_res res;              /* The region the rest describes; 0 for none. */
+    const uint8_t *base;
+    int64_t len;
+} gs_att;
+
+)GSRT"
+R"GSRT(/* A new arena, attached once; another attachment to the arena h names. */
+GS_API void gs_shm_new(gs_att *a, const char *file, int line);
+GS_API void gs_shm_attach(gs_att *a, gs_res h, const char *file, int line);
+/* The end of an attachment: the last one releases its arena, whose files
+   are unmapped. */
+GS_API void gs_shm_detach(gs_att *a);
+GS_API gs_res gs_shm_handle(const gs_att *a);
+/* map_file: the whole file read-only as a region of a's arena, *m its handle
+   and 1; or 0 and the zero handle, with the reason, where `why` is not
+   NULL, in a buffer the runtime keeps for the calling thread until the
+   caller, having appended it, calls gs_shm_reason_done, or until an abort
+   on the way there ends a contained worker (gs_shm_release_held). */
+GS_API uint8_t gs_shm_map_file(gs_att *a, const uint8_t *path, int64_t pathlen, gs_res *m,
+                               uint8_t **why, int64_t *whylen, const char *file, int line);
+GS_API void gs_shm_reason_done(void);
+GS_API int64_t gs_shm_size(gs_att *a, gs_res m, const char *file, int line);
+/* What gs_shm_view does where the region is not the one a's cache holds,
+   or where the view does not fit: looks the region up, or aborts. */
+GS_API const uint8_t *gs_shm_view_slow(gs_att *a, gs_res m, int64_t off, int64_t count,
+                                       int64_t size, int64_t align, const char *type,
+                                       const char *file, int line);
+/* After a contained worker's abort, and as any worker ends: the end of every
+   attachment its thread still holds. */
+GS_API void gs_shm_release_held(void);
+/* The arenas and mappings made and released so far, on stderr
+   (GS_SHARED_STATS). */
+GS_API void gs_shm_stats(void);
+
+)GSRT"
+R"GSRT(/* view<T>(sh, m, offset, count): `count` T's of `size` bytes from byte
+   `offset` of region m, `align` the size of T's widest scalar, a power of
+   two. Checked once, without overflow: within the region, and aligned. */
+static const uint8_t *gs_shm_view(gs_att *a, gs_res m, int64_t off, int64_t count,
+                                  int64_t size, int64_t align, const char *type,
+                                  const char *file, int line) {
+    if (m == a->res && m && (uint64_t)off <= (uint64_t)a->len &&
+        (uint64_t)count <= (uint64_t)(a->len - off) / (uint64_t)size && !(off & (align - 1)))
+        return a->base + off;
+    return gs_shm_view_slow(a, m, off, count, size, align, type, file, line);
+}
 
 )GSRT"
 R"GSRT(#ifndef GS_RUNTIME_OBJECT
@@ -1430,11 +1498,12 @@ GS_API int64_t gs_scan_pair(const uint8_t *p, int64_t n, const void *a, int64_t 
     ) },
     { "runtime_impl.h", string_view(
 R"GSRT(/* Goose runtime — what runtime.h declares and leaves to the runtime: aborts,
-   the data stack regions and the faults that reach them, slice pool
-   freelists, byte search, text forms and printing. Follows runtime.h, in a
-   standalone program's unit or in the runtime object (runtime.h has the
-   two); this, runtime_threads.h and runtime_os.h are the only parts of
-   either that include the platform's headers. */
+   the data stack regions and the faults that reach them (mapped files'
+   included), slice pool freelists, byte search, text forms and printing.
+   Follows runtime.h, in a standalone program's unit or in the runtime
+   object (runtime.h has the two); this, runtime_threads.h,
+   runtime_shared.h and runtime_os.h are the only parts of either that
+   include the platform's headers. */
 
 )GSRT"
 R"GSRT(static const char *gs_errmsgs[] = {
@@ -1731,6 +1800,147 @@ static size_t gs_overflow_text(char *buf, const gs_region *r) {
 }
 
 )GSRT"
+R"GSRT(/* Words that threads share without a lock, read from a fault handler too:
+   loads that acquire and stores that release, lock-free, which a signal
+   handler may use. */
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+static uintptr_t gs_word_load(uintptr_t *p) {
+    return (uintptr_t)_InterlockedCompareExchangePointer((void *volatile *)p, NULL, NULL);
+}
+static void gs_word_store(uintptr_t *p, uintptr_t v) {
+    _InterlockedExchangePointer((void *volatile *)p, (void *)v);
+}
+#else
+#ifndef __ATOMIC_ACQUIRE
+#define __ATOMIC_ACQUIRE 2
+#endif
+#ifndef __ATOMIC_RELEASE
+#define __ATOMIC_RELEASE 3
+#endif
+static uintptr_t gs_word_load(uintptr_t *p) {
+    uintptr_t v;
+    __atomic_load(p, &v, __ATOMIC_ACQUIRE);
+    return v;
+}
+static void gs_word_store(uintptr_t *p, uintptr_t v) { __atomic_store(p, &v, __ATOMIC_RELEASE); }
+#endif
+
+)GSRT"
+R"GSRT(/* The files mapped into shared arenas (runtime_shared.h), for the fault
+   handlers. A read past the end of a file truncated while it is mapped
+   faults (SIGBUS, EXCEPTION_IN_PAGE_ERROR), as one the disk cannot serve
+   does, and nothing recovers from that soundly: the fault can come inside
+   the runtime's own C. So the handler names the file and ends the process,
+   in a contained worker too (§11.4). A write fault in a mapping, which is
+   read-only, is a defect, reported the same way.
+
+)GSRT"
+R"GSRT(   Entries are added, cleared and reused under the shared registry's lock,
+   and read by a handler on any thread without it. They lie in chunks of
+   GS_MAPCHUNK, allocated as needed and never freed or moved, so whatever a
+   handler reads is an entry, and every part of one is a word, loaded with
+   acquire and stored with release (gs_word_load): its path too, a copy, so
+   no free of the region's own can race a handler. An entry is a sequence
+   lock: its count is odd while it is written, and a lookup takes an entry
+   only where the count was even before it read the entry and is the same
+   after (gs_mapfault), so it never puts one mapping's base with another's
+   length or path. It skips an entry being written, which is never the one
+   its fault lies in: that one is a mapping its thread can see, live, whose
+   entry is written only before its handle exists and after its arena's
+   last attachment ends. */
+#define GS_MAPCHUNK 1024
+#define GS_MAPCHUNKS 1024
+#define GS_MAPPATH 1008
+typedef struct {
+    uintptr_t seq;              /* Odd while the entry is written. */
+    uintptr_t base;             /* 0 for a free entry. */
+    uintptr_t len;
+    uintptr_t path[GS_MAPPATH / sizeof(uintptr_t)];   /* The path's bytes, NUL-ended. */
+} gs_mapent;
+static uintptr_t gs_mapchunks[GS_MAPCHUNKS];    /* gs_mapent *, as words. */
+static uintptr_t gs_nmapents;                   /* Entries used or freed, in order. */
+
+)GSRT"
+R"GSRT(/* What a lookup found: an entry as it was, whole. */
+typedef struct {
+    uintptr_t base, len;
+    char path[GS_MAPPATH];
+} gs_mapsnap;
+
+)GSRT"
+R"GSRT(/* Fills or clears e (path NULL), under the shared registry's lock; a path
+   too long for an entry ends in "...". */
+static void gs_mapent_set(gs_mapent *e, uintptr_t base, uintptr_t len, const char *path) {
+    uintptr_t seq = gs_word_load(&e->seq);
+    gs_word_store(&e->seq, seq + 1);
+    if (path) {
+        char text[GS_MAPPATH];
+        size_t k = strlen(path);
+        memset(text, 0, sizeof text);
+        if (k < GS_MAPPATH) {
+            memcpy(text, path, k);
+        } else {
+            memcpy(text, path, GS_MAPPATH - 4);
+            memcpy(text + GS_MAPPATH - 4, "...", 3);
+        }
+        for (size_t i = 0; i < GS_MAPPATH / sizeof(uintptr_t); i++) {
+            uintptr_t w;
+            memcpy(&w, text + i * sizeof w, sizeof w);
+            gs_word_store(&e->path[i], w);
+        }
+    }
+    gs_word_store(&e->len, path ? len : 0);
+    gs_word_store(&e->base, path ? base : 0);
+    gs_word_store(&e->seq, seq + 2);
+}
+
+)GSRT"
+R"GSRT(/* The mapping `at` lies in, whole in *s: 1, or 0 for none. No lock, no
+   call: a fault handler's. */
+static int gs_mapfault(const void *at, gs_mapsnap *s) {
+    uintptr_t n = gs_word_load(&gs_nmapents);
+    if (n > (uintptr_t)GS_MAPCHUNK * GS_MAPCHUNKS) n = (uintptr_t)GS_MAPCHUNK * GS_MAPCHUNKS;
+    for (uintptr_t i = 0; i < n; i++) {
+        gs_mapent *c = (gs_mapent *)gs_word_load(&gs_mapchunks[i / GS_MAPCHUNK]);
+        if (!c) continue;
+        gs_mapent *e = &c[i % GS_MAPCHUNK];
+        uintptr_t seq = gs_word_load(&e->seq);
+        if (seq & 1) continue;
+        uintptr_t base = gs_word_load(&e->base);
+        if (!base) continue;
+        uintptr_t len = gs_word_load(&e->len);
+        if ((uintptr_t)at - base >= len) continue;
+        for (size_t k = 0; k < GS_MAPPATH / sizeof(uintptr_t); k++) {
+            uintptr_t w = gs_word_load(&e->path[k]);
+            const char *b = (const char *)&w;
+            for (size_t j = 0; j < sizeof w; j++) s->path[k * sizeof w + j] = b[j];
+        }
+        if (gs_word_load(&e->seq) != seq) continue;
+        s->path[GS_MAPPATH - 1] = 0;
+        s->base = base;
+        s->len = len;
+        return 1;
+    }
+    return 0;
+}
+
+)GSRT"
+R"GSRT(/* The report of a fault at `at` in the mapping s, for one write from the
+   handler: what was mapped, and at which byte. Fits GS_MAPFAULT_TEXT. */
+#define GS_MAPFAULT_TEXT (GS_MAPPATH + 200)
+static size_t gs_mapfault_text(char *buf, const gs_mapsnap *s, const uint8_t *at, int write) {
+    char *p = gs_text(buf, "goose runtime error: ");
+    if (write) p = gs_text(p, "a write to ");
+    p = gs_text(p, s->path);
+    p = gs_text(p, write ? ", which is mapped read-only, faulted at byte "
+                         : " was truncated or could not be read while mapped: a read at byte ");
+    p = gs_dec(p, (uint64_t)((uintptr_t)at - s->base));
+    p = gs_text(p, write ? ": a defect of the compiler or of C code\n" : " faulted\n");
+    return (size_t)(p - buf);
+}
+
+)GSRT"
 R"GSRT(GS_API GS_NORETURN void gs_stack_overflow(const void *at) {
     for (long i = 0; i < gs_nregions; i++) {
         const gs_region *r = &gs_regions[i];
@@ -1801,6 +2011,20 @@ R"GSRT(static LONG WINAPI gs_fault_filter(EXCEPTION_POINTERS *ep) {
         DWORD written;
         WriteFile(GetStdHandle(STD_ERROR_HANDLE), msg, sizeof(msg) - 1, &written, NULL);
         ExitProcess(1);
+    }
+    /* A read past a mapped file's end, or one the disk could not serve
+       (EXCEPTION_IN_PAGE_ERROR), or a write to the mapping. */
+    if (code == EXCEPTION_IN_PAGE_ERROR || code == STATUS_ACCESS_VIOLATION) {
+        const uint8_t *at = (const uint8_t *)ep->ExceptionRecord->ExceptionInformation[1];
+        gs_mapsnap m;
+        if (gs_mapfault(at, &m)) {
+            char msg[GS_MAPFAULT_TEXT];
+            DWORD written;
+            WriteFile(GetStdHandle(STD_ERROR_HANDLE), msg,
+                      (DWORD)gs_mapfault_text(msg, &m, at, code == STATUS_ACCESS_VIOLATION),
+                      &written, NULL);
+            ExitProcess(1);
+        }
     }
     if (code != STATUS_ACCESS_VIOLATION)
         return EXCEPTION_CONTINUE_SEARCH;
@@ -1944,6 +2168,14 @@ R"GSRT(static void gs_fault_handler(int sig, siginfo_t *info, void *ctx) {
     if ((uintptr_t)hit - gs_native_lo < gs_native_hi - gs_native_lo) {
         static const char msg[] = "goose runtime error: native call stack overflow\n";
         ssize_t w = write(2, msg, sizeof(msg) - 1);
+        (void)w;
+        _exit(1);
+    }
+    /* A read past a mapped file's end (SIGBUS), or a write to the mapping. */
+    gs_mapsnap m;
+    if (gs_mapfault(hit, &m)) {
+        char msg[GS_MAPFAULT_TEXT];
+        ssize_t w = write(2, msg, gs_mapfault_text(msg, &m, hit, sig == SIGSEGV));
         (void)w;
         _exit(1);
     }
@@ -3449,6 +3681,13 @@ R"GSRT(GS_API void gs_stack_stats(int64_t stacks) {
 }
 
 )GSRT"
+R"GSRT(/* A message the runtime allocated for the program: thread_wait's, and a
+   failed map_file's reason (runtime_shared.h), which needs no threads. */
+GS_API void gs_free_msg(uint8_t *msg) {
+    free(msg);
+}
+
+)GSRT"
 R"GSRT(#if GS_NEED_THREADS
 
 )GSRT"
@@ -4750,10 +4989,13 @@ static void *gs_thread_main(void *p)
     gs_contained contain;
     if (t->contained) aborted = gs_run_contained(t, &contain);
     else t->run(t->entry, t->args);
-    /* A worker's end (§11.2): (1) its storage released; (2) its inboxes and
-       events closed and the watches it made cancelled; (3) it is marked
-       ended, for thread_wait, and its record freed for the next worker;
-       (4) the watches on it fire, taken off the record before (3). */
+    /* A worker's end (§11.2): (1) its storage released, the attachments
+       whose ends an abort skipped (§11.4) among it, before any wait
+       returns; (2) its inboxes and events closed and the watches it made
+       cancelled; (3) it is marked ended, for thread_wait, and its record
+       freed for the next worker; (4) the watches on it fire, taken off the
+       record before (3). */
+    gs_shm_release_held();
     t->release();
     free(t->args);
     t->args = NULL;
@@ -4866,11 +5108,6 @@ R"GSRT(GS_API uint8_t gs_thread_wait(int64_t id, uint8_t **msg, int64_t *len,
 }
 
 )GSRT"
-R"GSRT(GS_API void gs_free_msg(uint8_t *msg) {
-    free(msg);
-}
-
-)GSRT"
 R"GSRT(#else  /* !GS_NEED_THREADS */
 
 )GSRT"
@@ -4882,6 +5119,606 @@ int gs_event_signal(gs_res e) {
 
 )GSRT"
 R"GSRT(#endif  /* GS_NEED_THREADS */
+)GSRT"
+    ) },
+    { "runtime_shared.h", string_view(
+R"GSRT(/* Goose runtime — shared memory (§11.4, docs/design/shared_memory.md), as
+   runtime.h declares it: the arenas, the attachments that count them, and
+   the files mapped into them, which every thread attached to an arena reads
+   in place. Follows runtime_threads.h. Like the queues, an arena is runtime
+   memory outside every data stack.
+
+)GSRT"
+R"GSRT(   The registry holds every arena that has an attachment left, by serial,
+   under one lock, which also guards each arena's table of regions: attach
+   looks a serial up under it, and map_file appends a region under it, its
+   system calls made before. A view takes it only for a region its
+   attachment has not looked up yet. The count of attachments is atomic,
+   with acquire-release order, so that whoever ends the last attachment and
+   releases the arena sees every view of it done. Without threads there is
+   one thread, and neither a lock nor atomics. */
+
+)GSRT"
+R"GSRT(#ifndef _WIN32
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#ifndef O_CLOEXEC
+#define O_CLOEXEC 0
+#endif
+#ifndef O_NONBLOCK
+#define O_NONBLOCK 0
+#endif
+#endif
+
+)GSRT"
+R"GSRT(/* The most serials and regions a handle's bits hold: the 2^40-th arena and
+   the 2^24-th region of one arena abort. A test sets them lower. */
+#ifndef GS_SHM_MAX_SERIAL
+#define GS_SHM_MAX_SERIAL ((1ull << GS_RES_SERIAL_BITS) - 1)
+#endif
+#ifndef GS_SHM_MAX_REGIONS
+#define GS_SHM_MAX_REGIONS ((1ll << GS_RES_REGION_BITS) - 1)
+#endif
+/* The size past which no value lies (§10.4). */
+#define GS_SHM_MAX_FILE ((int64_t)1 << 48)
+
+)GSRT"
+R"GSRT(#if GS_NEED_THREADS
+static gs_mutex gs_shm_mutex = GS_MUTEX_INIT;
+#define gs_shm_lock() gs_mutex_lock(&gs_shm_mutex)
+#define gs_shm_unlock() gs_mutex_unlock(&gs_shm_mutex)
+#ifndef __ATOMIC_ACQ_REL
+#define __ATOMIC_ACQ_REL 4
+#endif
+#if defined(_MSC_VER) && !defined(__clang__)
+#define gs_shm_count(p, n) InterlockedExchangeAdd64((volatile LONG64 *)(p), (n))
+#else
+#define gs_shm_count(p, n) __atomic_fetch_add((p), (n), __ATOMIC_ACQ_REL)
+#endif
+#else
+#define gs_shm_lock() ((void)0)
+#define gs_shm_unlock() ((void)0)
+static int64_t gs_shm_count_(int64_t *p, int64_t n) {
+    int64_t old = *p;
+    *p = old + n;
+    return old;
+}
+#define gs_shm_count(p, n) gs_shm_count_((p), (n))
+#endif
+
+)GSRT"
+R"GSRT(/* A region of an arena: a mapped file, or one read into memory of the
+   runtime's own where the system does not map it. An empty file maps no
+   memory, and is a view's base all the same. */
+typedef struct {
+    const uint8_t *base;
+    int64_t len;
+    char *path;                 /* NUL-terminated, as the program gave it. */
+    void *mem;                  /* What to unmap; NULL for an empty file. */
+    size_t memlen;
+    int copied;                 /* Read into anonymous memory, not mapped. */
+    int64_t fault;              /* Its entry for the fault handlers, or -1. */
+#ifdef _WIN32
+    HANDLE file, mapping;
+#endif
+} gs_shm_region;
+
+)GSRT"
+R"GSRT(struct gs_arena {
+    uint64_t serial;
+    int64_t count;              /* Attachments; atomic. */
+    gs_shm_region *regions;     /* 1 .. nregions; under the lock. */
+    int64_t nregions, capregions;
+};
+
+)GSRT"
+R"GSRT(static const uint8_t gs_shm_empty[1];
+
+)GSRT"
+R"GSRT(/* Under the lock: the arenas that have attachments, the next serial, and
+   what GS_SHARED_STATS reports. */
+static struct gs_arena **gs_arenas;
+static int64_t gs_narenas, gs_caparenas;
+static uint64_t gs_shm_next = 1;
+static int64_t gs_shm_made, gs_shm_released, gs_shm_mapped, gs_shm_unmapped;
+
+)GSRT"
+R"GSRT(/* The calling thread's attachments, innermost last: a declaration pushes
+   its arena and its ends pop it (they nest, as scopes do), and after a
+   contained worker's abort, which skips the ends, gs_shm_release_held ends
+   the rest. Runtime memory, not the frames the attachments lie in, which an
+   abort leaves behind. */
+static GS_TLS struct gs_arena **gs_shm_held;
+static GS_TLS int64_t gs_shm_nheld, gs_shm_capheld;
+
+)GSRT"
+R"GSRT(static void gs_shm_hold(struct gs_arena *a) {
+    if (gs_shm_nheld == gs_shm_capheld) {
+        int64_t cap = gs_shm_capheld ? gs_shm_capheld * 2 : 8;
+        struct gs_arena **p =
+            (struct gs_arena **)realloc(gs_shm_held, (size_t)cap * sizeof(*p));
+        if (!p) gs_panic("out of memory attaching to a shared arena");
+        gs_shm_held = p;
+        gs_shm_capheld = cap;
+    }
+    gs_shm_held[gs_shm_nheld++] = a;
+}
+
+)GSRT"
+R"GSRT(/* The fault handlers' entry for a mapping (runtime_impl.h), under the lock:
+   a cleared one again, else a new one. */
+static int64_t gs_shm_add_fault(const uint8_t *base, size_t len, const char *path) {
+    uintptr_t i = 0, n = gs_word_load(&gs_nmapents);
+    for (; i < n; i++) {
+        gs_mapent *c = (gs_mapent *)gs_word_load(&gs_mapchunks[i / GS_MAPCHUNK]);
+        if (!gs_word_load(&c[i % GS_MAPCHUNK].base)) break;
+    }
+    if (i >= (uintptr_t)GS_MAPCHUNK * GS_MAPCHUNKS) return -1;
+    gs_mapent *c = (gs_mapent *)gs_word_load(&gs_mapchunks[i / GS_MAPCHUNK]);
+    if (!c) {
+        c = (gs_mapent *)calloc(GS_MAPCHUNK, sizeof(gs_mapent));
+        if (!c) return -1;
+        gs_word_store(&gs_mapchunks[i / GS_MAPCHUNK], (uintptr_t)c);
+    }
+    gs_mapent_set(&c[i % GS_MAPCHUNK], (uintptr_t)base, (uintptr_t)len, path);
+    if (i == n) gs_word_store(&gs_nmapents, n + 1);
+    return (int64_t)i;
+}
+
+)GSRT"
+R"GSRT(/* Before the mapping goes, under the lock: no lookup takes the entry once
+   it is cleared, nor while it is. */
+static void gs_shm_clear_fault(int64_t i) {
+    if (i < 0) return;
+    gs_mapent *c = (gs_mapent *)gs_word_load(&gs_mapchunks[i / GS_MAPCHUNK]);
+    gs_mapent_set(&c[i % GS_MAPCHUNK], 0, 0, NULL);
+}
+
+)GSRT"
+R"GSRT(/* What a region holds of the system's, given back. */
+static void gs_shm_unmap(gs_shm_region *r) {
+#ifdef _WIN32
+    if (r->mem && !r->copied) UnmapViewOfFile(r->mem);
+    else if (r->mem) VirtualFree(r->mem, 0, MEM_RELEASE);
+    if (r->mapping) CloseHandle(r->mapping);
+    if (r->file && r->file != INVALID_HANDLE_VALUE) CloseHandle(r->file);
+#else
+    if (r->mem) munmap(r->mem, r->memlen);
+#endif
+    free(r->path);
+}
+
+)GSRT"
+R"GSRT(/* The arena whose last attachment just ended: out of the registry, so that
+   no attach finds it, its files unmapped, then gone. */
+static void gs_shm_release(struct gs_arena *a) {
+    gs_shm_lock();
+    for (int64_t i = 0; i < gs_narenas; i++)
+        if (gs_arenas[i] == a) {
+            gs_arenas[i] = gs_arenas[--gs_narenas];
+            break;
+        }
+    for (int64_t i = 1; i <= a->nregions; i++) gs_shm_clear_fault(a->regions[i].fault);
+    gs_shm_released++;
+    gs_shm_unmapped += a->nregions;
+    gs_shm_unlock();
+    for (int64_t i = 1; i <= a->nregions; i++) gs_shm_unmap(&a->regions[i]);
+    free(a->regions);
+    free(a);
+}
+
+)GSRT"
+R"GSRT(/* One attachment of a fewer: the arena's release at the last. */
+static void gs_shm_end(struct gs_arena *a) {
+    if (gs_shm_count(&a->count, -1) == 1) gs_shm_release(a);
+}
+
+)GSRT"
+R"GSRT(GS_API void gs_shm_new(gs_att *att, const char *file, int line) {
+    struct gs_arena *a = (struct gs_arena *)calloc(1, sizeof(struct gs_arena));
+    if (!a) gs_panic("out of memory making a shared arena");
+    a->count = 1;
+    gs_shm_lock();
+    if (gs_shm_next > GS_SHM_MAX_SERIAL) {
+        gs_shm_unlock();
+        free(a);
+        gs_failf(file, line, "shared arena serials are used up: %llu arenas were made",
+                 (unsigned long long)GS_SHM_MAX_SERIAL);
+    }
+    if (gs_narenas == gs_caparenas) {
+        int64_t cap = gs_caparenas ? gs_caparenas * 2 : 16;
+        struct gs_arena **p =
+            (struct gs_arena **)realloc(gs_arenas, (size_t)cap * sizeof(*p));
+        if (!p) gs_panic("out of memory making a shared arena");
+        gs_arenas = p;
+        gs_caparenas = cap;
+    }
+    a->serial = gs_shm_next++;
+    gs_arenas[gs_narenas++] = a;
+    gs_shm_made++;
+    gs_shm_unlock();
+    gs_shm_hold(a);
+    att->arena = a;
+    att->res = 0;
+    att->base = NULL;
+    att->len = 0;
+}
+
+)GSRT"
+R"GSRT(GS_API void gs_shm_attach(gs_att *att, gs_res h, const char *file, int line) {
+    if (!h) gs_failf(file, line, "attach of the zero handle, which names no shared arena");
+    if (h & (((uint64_t)1 << GS_RES_REGION_BITS) - 1))
+        gs_panic("attach of a handle that names a region, not an arena");
+    uint64_t serial = h >> GS_RES_REGION_BITS;
+    struct gs_arena *a = NULL;
+    gs_shm_lock();
+    for (int64_t i = 0; i < gs_narenas; i++)
+        if (gs_arenas[i]->serial == serial) {
+            a = gs_arenas[i];
+            /* An arena whose last attachment ended and which is not out of
+               the registry yet is released all the same. */
+            if (gs_shm_count(&a->count, 1) == 0) {
+                gs_shm_count(&a->count, -1);
+                a = NULL;
+            }
+            break;
+        }
+    gs_shm_unlock();
+    if (!a)
+        gs_failf(file, line, "attach of a released shared arena: it was released when its "
+                             "last attachment ended");
+    gs_shm_hold(a);
+    att->arena = a;
+    att->res = 0;
+    att->base = NULL;
+    att->len = 0;
+}
+
+)GSRT"
+R"GSRT(GS_API void gs_shm_detach(gs_att *att) {
+    struct gs_arena *a = att->arena;
+    if (!gs_shm_nheld || gs_shm_held[gs_shm_nheld - 1] != a)
+        gs_panic("shared arena attachments ended out of order");
+    gs_shm_nheld--;
+    att->arena = NULL;
+    att->res = 0;
+    gs_shm_end(a);
+}
+
+)GSRT"
+R"GSRT(GS_API void gs_shm_release_held(void) {
+    while (gs_shm_nheld) gs_shm_end(gs_shm_held[--gs_shm_nheld]);
+    free(gs_shm_held);
+    gs_shm_held = NULL;
+    gs_shm_capheld = 0;
+    gs_shm_reason_done();
+}
+
+)GSRT"
+R"GSRT(GS_API gs_res gs_shm_handle(const gs_att *att) {
+    return (gs_res)(att->arena->serial << GS_RES_REGION_BITS);
+}
+
+)GSRT"
+R"GSRT(/* A failed map_file's reason, for `why`: "<path>: <what>", kept as the
+   thread's pending reason, which the program appends and then lets go of
+   (gs_shm_reason_done). An append can abort, a `why` of no room left
+   aborting it, and a contained worker's abort skips the rest: so the
+   runtime, not the frame, holds the reason, and a worker's end frees it. */
+static GS_TLS uint8_t *gs_shm_reason;
+
+)GSRT"
+R"GSRT(GS_API void gs_shm_reason_done(void) {
+    free(gs_shm_reason);
+    gs_shm_reason = NULL;
+}
+
+)GSRT"
+R"GSRT(static uint8_t gs_shm_refuse(uint8_t **why, int64_t *whylen, const char *path,
+                             const char *what) {
+    if (why) {
+        size_t n = strlen(path) + strlen(what) + 2;
+        uint8_t *s = (uint8_t *)malloc(n + 1);
+        if (!s) gs_panic("out of memory reporting why a file was not mapped");
+        snprintf((char *)s, n + 1, "%s: %s", path, what);
+        gs_shm_reason_done();
+        gs_shm_reason = s;
+        *why = s;
+        *whylen = (int64_t)n;
+    }
+    return 0;
+}
+
+)GSRT"
+R"GSRT(#ifdef _WIN32
+/* The text of a Windows error code, as UTF-8, in buf. */
+static const char *gs_shm_winerror(DWORD e, char *buf, size_t n) {
+    wchar_t w[512];
+    DWORD k = FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL,
+                             e, 0, w, 512, NULL);
+    while (k && (w[k - 1] == L'\n' || w[k - 1] == L'\r' || w[k - 1] == L'.')) k--;
+    int m = k ? WideCharToMultiByte(CP_UTF8, 0, w, (int)k, buf, (int)n - 1, NULL, NULL) : 0;
+    if (m <= 0) snprintf(buf, n, "Windows error %lu", (unsigned long)e);
+    else buf[m] = 0;
+    return buf;
+}
+#endif
+
+)GSRT"
+R"GSRT(/* Reads a file to its end into memory of the runtime's own, made read-only
+   (§11.4), where the system will not map it, or reports no size for it
+   though it has bytes, as /proc's and sysfs's files do: its region, or 0
+   with errno set. A size the system reports (`hint`) is where the memory
+   starts, and the end of the file is where the bytes do: a sysfs file says
+   4096 and holds what it holds. A file that is empty is the empty region,
+   and takes no memory. */
+#ifndef _WIN32
+static int gs_shm_copy_in(int fd, int64_t hint, gs_shm_region *r) {
+    uint8_t first[4096];
+    ssize_t k;
+    while ((k = read(fd, first, sizeof first)) < 0 && errno == EINTR) {}
+    if (k < 0) return 0;
+    if (k == 0) {
+        r->base = gs_shm_empty;
+        r->len = 0;
+        return 1;
+    }
+    size_t page = gs_page_size ? gs_page_size : 4096;
+    size_t cap = (size_t)(hint > k ? hint : k);
+    cap = (cap + page - 1) / page * page;
+    uint8_t *p = (uint8_t *)mmap(NULL, cap, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS,
+                                 -1, 0);
+    if (p == (uint8_t *)MAP_FAILED) return 0;
+    memcpy(p, first, (size_t)k);
+    int64_t got = k;
+    for (;;) {
+        if ((size_t)got == cap) {
+            if (got >= GS_SHM_MAX_FILE) {
+                munmap(p, cap);
+                errno = EFBIG;
+                return 0;
+            }
+            uint8_t *q = (uint8_t *)mmap(NULL, cap * 2, PROT_READ | PROT_WRITE,
+                                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            if (q == (uint8_t *)MAP_FAILED) {
+                munmap(p, cap);
+                return 0;
+            }
+            memcpy(q, p, cap);
+            munmap(p, cap);
+            p = q;
+            cap *= 2;
+        }
+        k = read(fd, p + got, cap - (size_t)got);
+        if (k < 0 && errno == EINTR) continue;
+        if (k < 0) {
+            int e = errno;
+            munmap(p, cap);
+            errno = e;
+            return 0;
+        }
+        if (k == 0) break;
+        got += k;
+    }
+    mprotect(p, cap, PROT_READ);
+    r->mem = p;
+    r->memlen = cap;
+    r->base = p;
+    r->len = got;
+    r->copied = 1;
+    return 1;
+}
+#endif
+
+)GSRT"
+R"GSRT(/* n in decimal, its digits in groups of three, in buf. */
+static void gs_shm_thousands(char *buf, int64_t n) {
+    char d[32];
+    int k = snprintf(d, sizeof d, "%lld", (long long)n), j = 0;
+    for (int i = 0; i < k; i++) {
+        if (i && (k - i) % 3 == 0) buf[j++] = ',';
+        buf[j++] = d[i];
+    }
+    buf[j] = 0;
+}
+
+)GSRT"
+R"GSRT(GS_API uint8_t gs_shm_map_file(gs_att *att, const uint8_t *path, int64_t pathlen, gs_res *m,
+                               uint8_t **why, int64_t *whylen, const char *file, int line) {
+    *m = 0;
+    if (why) {
+        *why = NULL;
+        *whylen = 0;
+    }
+    if (!gs_is_le()) gs_abort(GS_E_ENDIAN, file, line);
+    gs_shm_region r;
+    memset(&r, 0, sizeof r);
+    r.fault = -1;
+    r.path = (char *)malloc((size_t)pathlen + 1);
+    if (!r.path) gs_panic("out of memory mapping a file");
+    if (pathlen) memcpy(r.path, path, (size_t)pathlen);
+    r.path[pathlen] = 0;
+    uint8_t refused;
+    if (pathlen && memchr(path, 0, (size_t)pathlen)) {
+        refused = gs_shm_refuse(why, whylen, r.path, "the path holds a NUL byte");
+        free(r.path);
+        return refused;
+    }
+#ifdef _WIN32
+    char err[600];
+    int wn = pathlen ? MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, r.path, (int)pathlen,
+                                           NULL, 0) : 0;
+    wchar_t *w = (wchar_t *)malloc(((size_t)wn + 1) * sizeof(wchar_t));
+    if (!w) gs_panic("out of memory mapping a file");
+    if ((pathlen && !wn) ||
+        (wn && MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, r.path, (int)pathlen, w, wn) != wn)) {
+        free(w);
+        refused = gs_shm_refuse(why, whylen, r.path, "the path is not UTF-8");
+        free(r.path);
+        return refused;
+    }
+    w[wn] = 0;
+    /* Without FILE_SHARE_WRITE no other process opens the file to write
+       while it is mapped, and a mapped file cannot be truncated; renames and
+       deletes still work. */
+    r.file = CreateFileW(w, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, NULL,
+                         OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    LARGE_INTEGER size;
+    const char *what = NULL;
+    if (r.file == INVALID_HANDLE_VALUE) {
+        DWORD e = GetLastError(), attrs = GetFileAttributesW(w);
+        r.file = NULL;
+        what = attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)
+                   ? "a directory, not a regular file"
+                   : gs_shm_winerror(e, err, sizeof err);
+    } else if (GetFileType(r.file) != FILE_TYPE_DISK) {
+        what = "not a regular file";
+    } else if (!GetFileSizeEx(r.file, &size)) {
+        what = gs_shm_winerror(GetLastError(), err, sizeof err);
+    } else if (size.QuadPart > GS_SHM_MAX_FILE) {
+        what = "larger than 2^48 bytes, the most any value holds";
+    } else if (size.QuadPart == 0) {
+        CloseHandle(r.file);
+        r.file = NULL;
+        r.base = gs_shm_empty;
+    } else {
+        r.mapping = CreateFileMappingW(r.file, NULL, PAGE_READONLY, 0, 0, NULL);
+        r.mem = r.mapping ? MapViewOfFile(r.mapping, FILE_MAP_READ, 0, 0, 0) : NULL;
+        if (!r.mem) what = gs_shm_winerror(GetLastError(), err, sizeof err);
+        r.base = (const uint8_t *)r.mem;
+        r.len = size.QuadPart;
+        r.memlen = (size_t)size.QuadPart;
+    }
+    free(w);
+    if (what) {
+        refused = gs_shm_refuse(why, whylen, r.path, what);
+        gs_shm_unmap(&r);
+        return refused;
+    }
+#else
+    /* Not blocking where the path is a FIFO, which is refused below, as
+       an open of one would wait for a writer. */
+    const char *what = NULL;
+    int fd = open(r.path, O_RDONLY | O_CLOEXEC | O_NONBLOCK);
+    struct stat st;
+    if (fd < 0) {
+        what = strerror(errno);
+    } else if (fstat(fd, &st)) {
+        what = strerror(errno);
+    } else if (S_ISDIR(st.st_mode)) {
+        what = "a directory, not a regular file";
+    } else if (!S_ISREG(st.st_mode)) {
+        what = "not a regular file";
+    } else if ((int64_t)st.st_size > GS_SHM_MAX_FILE) {
+        what = "larger than 2^48 bytes, the most any value holds";
+    } else if (st.st_size == 0) {
+        /* Empty, or a file the system makes up as it is read (/proc). */
+        if (!gs_shm_copy_in(fd, 0, &r)) what = strerror(errno);
+    } else {
+        void *p = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_SHARED, fd, 0);
+        if (p != MAP_FAILED) {
+            r.mem = p;
+            r.memlen = (size_t)st.st_size;
+            r.base = (const uint8_t *)p;
+            r.len = (int64_t)st.st_size;
+        } else if (errno == ENODEV || errno == EINVAL) {
+            /* A file system without mmap (sysfs, some network ones). */
+            if (!gs_shm_copy_in(fd, (int64_t)st.st_size, &r)) what = strerror(errno);
+        } else {
+            what = strerror(errno);
+        }
+    }
+    if (fd >= 0) close(fd);
+    if (what) {
+        refused = gs_shm_refuse(why, whylen, r.path, what);
+        free(r.path);
+        return refused;
+    }
+#endif
+    struct gs_arena *a = att->arena;
+    gs_shm_lock();
+    if (a->nregions >= GS_SHM_MAX_REGIONS) {
+        gs_shm_unlock();
+        gs_shm_unmap(&r);
+        char most[32];
+        gs_shm_thousands(most, GS_SHM_MAX_REGIONS);
+        gs_failf(file, line, "a shared arena holds at most %s regions", most);
+    }
+    if (a->nregions + 1 >= a->capregions) {
+        int64_t cap = a->capregions ? a->capregions * 2 : 8;
+        gs_shm_region *p = (gs_shm_region *)realloc(a->regions, (size_t)cap * sizeof(*p));
+        if (!p) gs_panic("out of memory mapping a file");
+        a->regions = p;
+        a->capregions = cap;
+    }
+    /* A copy cannot be truncated, but a write to it faults as to a mapping. */
+    if (r.mem) r.fault = gs_shm_add_fault(r.base, (size_t)r.len, r.path);
+    a->regions[++a->nregions] = r;
+    *m = (gs_res)(a->serial << GS_RES_REGION_BITS | (uint64_t)a->nregions);
+    gs_shm_mapped++;
+    gs_shm_unlock();
+    return 1;
+}
+
+)GSRT"
+R"GSRT(/* The region m names, which att's cache then holds, and its path; or an
+   abort, where m names none of att's arena's. `op` is what asks. */
+static const char *gs_shm_lookup(gs_att *att, gs_res m, const char *op, const char *file,
+                                 int line) {
+    struct gs_arena *a = att->arena;
+    if (!m) gs_failf(file, line, "%s of the zero handle, which names no mapping", op);
+    if (m >> GS_RES_REGION_BITS != a->serial)
+        gs_failf(file, line, "%s of a mapping of another shared arena than the attachment's",
+                 op);
+    int64_t i = (int64_t)(m & (((uint64_t)1 << GS_RES_REGION_BITS) - 1));
+    gs_shm_lock();
+    if (i < 1 || i > a->nregions) {
+        gs_shm_unlock();
+        gs_panic("a handle names a region past its shared arena's count");
+    }
+    gs_shm_region *r = &a->regions[i];
+    att->res = m;
+    att->base = r->base;
+    att->len = r->len;
+    const char *path = r->path;
+    gs_shm_unlock();
+    return path;
+}
+
+)GSRT"
+R"GSRT(GS_API int64_t gs_shm_size(gs_att *att, gs_res m, const char *file, int line) {
+    if (m != att->res || !m) gs_shm_lookup(att, m, "size", file, line);
+    return att->len;
+}
+
+)GSRT"
+R"GSRT(GS_API const uint8_t *gs_shm_view_slow(gs_att *att, gs_res m, int64_t off, int64_t count,
+                                       int64_t size, int64_t align, const char *type,
+                                       const char *file, int line) {
+    char op[256];
+    snprintf(op, sizeof op, "view<%s>", type);
+    const char *path = gs_shm_lookup(att, m, op, file, line);
+    int64_t len = att->len;
+    if (off < 0 || count < 0 || off > len || (uint64_t)count > (uint64_t)(len - off) / (uint64_t)size)
+        gs_failf(file, line, "%s of %s out of bounds: count %lld at byte offset %lld, in a "
+                 "file of %lld bytes", op, path, (long long)count, (long long)off,
+                 (long long)len);
+    if (off & (align - 1))
+        gs_failf(file, line, "%s of %s misaligned: byte offset %lld is not a multiple of %lld, "
+                 "the size of %s's widest scalar", op, path, (long long)off, (long long)align,
+                 type);
+    return att->base + off;
+}
+
+)GSRT"
+R"GSRT(GS_API void gs_shm_stats(void) {
+    gs_shm_lock();
+    fprintf(stderr, "goose shared stats: %lld arenas made, %lld released, %lld live; %lld files "
+            "mapped, %lld unmapped\n", (long long)gs_shm_made, (long long)gs_shm_released,
+            (long long)gs_narenas, (long long)gs_shm_mapped, (long long)gs_shm_unmapped);
+    gs_shm_unlock();
+}
 )GSRT"
     ) },
     { "runtime_ext.h", string_view(
