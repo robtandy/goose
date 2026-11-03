@@ -1,0 +1,3 @@
+400 rounds of eight putters, limits 4 and 64: 0 wrong
+a [true, true, true, false, false], b [true, true, true, false, false], main [true, true, true, false, false], global [true, true, true, true, true]
+main takes 8: its inbox's 3, then the global queue's 5

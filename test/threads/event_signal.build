@@ -1,0 +1,2 @@
+// The sidecar of event_signal.goose: an I/O layer's C, whose threads signal.
+c_sources = ["event_signal_impl.c"];

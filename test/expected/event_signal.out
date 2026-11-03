@@ -1,0 +1,9 @@
+resource<event>: 1 1 3
+two signals, one copy: true
+the zero handle: -1
+woken by C: done 3
+1000 signals in a burst: between 1 and 1000 copies: true
+ticks 20, copies of both events: true
+closed: 0
+its thread ended: 0
+8 C threads x 4000 signals: wake-ups lost 0, takes true

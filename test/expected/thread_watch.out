@@ -1,0 +1,11 @@
+ended before the watch: true
+while it runs: false
+when it ends: true, thread_wait true
+its tags: 3 true, once each: true
+what it put, queued before its end's message: 100
+a put while two more wait: false
+three watches past a limit of one: 3
+and once they are taken: true
+watchers of one worker: 4
+10000 workers watched: 10000 fired once, 0 wrong, more: false
+a chain of 10000: nothing for main: true

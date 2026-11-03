@@ -1,0 +1,15 @@
+job 1; control false; signal Signal.Sleep; 
+job 3, then job 2
+job 10; control false; job 11; control false; job 12; control true; 
+a control among a flood of jobs, within three selects: true
+and among a full inbox: true
+job 0 false, job 0 false
+job 0 false after waiting: true
+control true true
+job 7 true
+data 5
+done true
+line hello
+count 42
+missed: line '' false
+2

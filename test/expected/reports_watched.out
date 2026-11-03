@@ -1,0 +1,6 @@
+worker true aborted: true
+a put to it: false
+replies, all queued by their workers' ends: 17
+its peer's reply: 1, its peer returned: false, it returned: true
+served 1, then ended: true, returned: false, a put to it: false
+true
