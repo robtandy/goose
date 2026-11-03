@@ -679,6 +679,10 @@ inline void CodeGen::BindLocal(VarDef *d, Node *init, bool forlocal) {
         BindAttachment(name, init, false);
         return;
     }
+    if (IsDStack(t)) {
+        BindDStack(d, init);
+        return;
+    }
     if (IsRoot(t)) {
         auto sl = Is<StructLit>(init);
         assert(sl && sl->sinst->st->isroot);

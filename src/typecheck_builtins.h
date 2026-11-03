@@ -673,11 +673,45 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
     return v;
 }
 
-// An attachment's members (§11.4), rv the attachment: map_file, size and
-// view<T>, which name the arena's regions by their handles.
+// An attachment's members (§11.4), rv the attachment: map_file, size, view
+// and freeze, which name the arena's regions by their handles.
 inline Val TypeCheck::CheckSharedMember(Call *c, const BuiltinDef &d, vector<Node *> &args,
                                         const Val &rv) {
     auto mapping = ast.ResourceOf(ast.RuntimeType(RK_MAPPING, c->line), c->line);
+    if (d.kind == B_FREEZE) return CheckFreeze(c, args, rv);
+    if (d.kind == B_VIEW && args.size() == 2) {
+        // sh.view(r): the whole frozen array r names, read in place as a
+        // `const T[:]` rooted at the attachment, as a mapping's view is.
+        auto hv = CheckArg(args[1], nullptr);
+        auto ht = LoadType(hv.type);
+        if (ht->kind == TY_REF) ht = LoadType(ht->ref->sub);
+        if (!IsResource(ht) || RuntimeKindOf(ht->sub) != RK_FROZEN)
+            Error(c, cat("sh.view(r) views a frozen array, r a resource<frozen<T>>, not a ",
+                         TypeStr(hv.type), "; a mapped file's view is view<T>(sh, m, offset, "
+                         "count) (§11.4)"));
+        auto t = ht->sub->struc->args[0];
+        if (c->tyargs.size() > 1)
+            Error(c, "view<T>(sh, r) takes at most one type argument, the frozen array's "
+                     "element type (§11.4)");
+        if (c->tyargs.size() == 1) {
+            auto named = Subst(c->tyargs[0]);
+            ValidateType(named, c->line, VT_LOCAL);
+            if (named->cq) named = ast.PlainOf(named);
+            if (!TypeEq(named, t))
+                Error(c, cat("view<", TypeStr(named), ">(sh, r) of a frozen array of ",
+                             TypeStr(t), ": the type argument names the elements r's "
+                             "handle, ", TypeStr(ht), ", says it holds (§11.4)"));
+        }
+        c->qtype = t;
+        Val v;
+        v.type = ast.SliceOf(t, c->line);
+        v.type->cq = true;
+        v.TakeAlts(rv);
+        v.ClearReads();
+        v.writable = false;
+        c->rettypes.push_back(v.type);
+        return v;
+    }
     switch (d.kind) {
         case B_MAP_FILE: {
             // The handle and whether the file was mapped, with the reason
@@ -706,6 +740,10 @@ inline Val TypeCheck::CheckSharedMember(Call *c, const BuiltinDef &d, vector<Nod
             // of the file m maps, read in place as a `const T[:]` rooted at
             // the attachment, as a slice of an array is rooted at the array
             // (§9.2). The runtime checks the bounds and the alignment once.
+            if (args.size() != 4)
+                Error(c, cat("view takes (sh, r), a frozen array's handle, or (sh, m, offset, "
+                             "count), a mapped file's and where in it, not ",
+                             (int64_t)args.size(), " arguments (§11.4)"));
             if (c->tyargs.size() != 1)
                 Error(c, "view<T>(sh, m, offset, count) needs exactly one explicit type "
                          "argument, the type it views (§11.4)");
@@ -738,6 +776,46 @@ inline Val TypeCheck::CheckSharedMember(Call *c, const BuiltinDef &d, vector<Nod
         }
         default: assert(false); return VoidVal();
     }
+}
+
+// sh.freeze(ds) (§11.4): the elements of ds.items, a frozen array of sh's
+// arena from now on, and its handle, a resource<frozen<T>>; ds.items starts
+// over, empty, on memory of its own. The argument becomes that array
+// (Dot::synth), which the freeze shrinks as ds.items.clear() would, and is
+// checked so (§5.1): no reference or slice into its elements may stay live,
+// in a holder or through calls, while references to the whole array
+// survive. Every pass after takes the argument as that array.
+inline Val TypeCheck::CheckFreeze(Call *c, vector<Node *> &args, const Val &rv) {
+    (void)rv;
+    auto d = Is<Dot>(args[1]);
+    if (!d || !d->synth) {
+        d = ast.New<Dot>(args[1]->line, args[1], "items");
+        d->end = args[1]->end;
+        d->synth = true;
+        args[1] = d;
+    }
+    auto iv = CheckV(d, nullptr);
+    d->exprtype = iv.type;
+    auto at = iv.type->kind == TY_REF ? iv.type->ref->sub : iv.type;
+    assert(at->kind == TY_ARRAY && at->arr->akind == A_GROW);
+    auto elem = at->arr->sub;
+    if (!iv.writable)
+        Error(c, cat("cannot freeze ", ExprStr(d->obj), " through a non-writable value (let, "
+                     "const, or a read-only instantiation, §9.5): a freeze empties its items"));
+    string why;
+    if (!Freezable(elem, why))
+        Error(c, cat("sh.freeze(", ExprStr(d->obj), ") of a dynamic_stack<", TypeStr(elem),
+                     ">: a frozen array's elements are read by any thread in place, so they "
+                     "hold nothing whose meaning depends on the thread that made them (§11.4), "
+                     "and ", why));
+    CheckGrowShrink(c, "freeze", d, iv);
+    auto frozen = ast.RuntimeType(RK_FROZEN, c->line);
+    frozen->struc->args.push_back(elem);
+    Val v;
+    v.type = ast.ResourceOf(frozen, c->line);
+    c->qtype = elem;
+    c->rettypes.push_back(v.type);
+    return v;
 }
 
 // The growable u8 array a builtin's `out` argument appends to (BF_OUTARG),

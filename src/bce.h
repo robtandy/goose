@@ -2639,7 +2639,8 @@ struct BCE {
     // the declaration or assignment that binds it.
     Term slicelen;
     // The same for the last view<T>(sh, m, offset, count) walked: its count
-    // (§10.5, §11.4), which a view that returns has as its length.
+    // (§10.5, §11.4), which a view that returns has as its length; nothing
+    // for a frozen array's view.
     Term viewlen;
     static bool IsView(Node *n) {
         auto c = Is<Call>(n);
@@ -3687,10 +3688,21 @@ inline bool Call::BceWalk(BCE &b) {
                 break;
             }
             case B_VIEW: {
-                // A view that returns has its count for its length (§11.4).
-                // The count is the last argument, after which nothing ran.
-                auto count = recv ? args.back() : args.size() == 4 ? args[3] : nullptr;
+                // A mapping's view that returns has its count for its length
+                // (§11.4). The count is the last argument, after which
+                // nothing ran. A frozen array's view, sh.view(r), has the
+                // length its freeze gave it, fixed, as any slice's is.
+                auto count = recv ? (args.size() == 3 ? args[2] : nullptr)
+                                  : (args.size() == 4 ? args[3] : nullptr);
                 b.viewlen = b.mode == BCE::M_KILLS || !count ? BCE::Term {} : b.TermOf(count);
+                break;
+            }
+            case B_FREEZE: {
+                // sh.freeze(ds) empties ds.items, the argument the checker made
+                // it (Dot::synth), on memory of its own, as a clear does
+                // (§11.4): the facts of its length go, and of its aliases'.
+                auto pid = arg0 ? b.GrowShrinkKill(arg0, -1) : -1;
+                if (pid >= 0) b.ExactLenIs(pid, BCE::Term { true, BCE::Zero(), 0 });
                 break;
             }
             case B_POP: {

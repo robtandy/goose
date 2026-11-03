@@ -217,9 +217,18 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
             // the runtime's check gives the address of (§11.4). The
             // attachment and the handle are taken before the offset and
             // the count run, which may assign or rebind what named them.
+            // A frozen array's view, sh.view(r), is the whole array.
             auto el = c->qtype;
             auto att = AttPtr(an[0]);
             auto m = PinnedRes(an[1]);
+            if (an.size() == 2) {
+                auto p = T(), n = T(), v = T();
+                L("int64_t ", n, ";");
+                L("const uint8_t *", p, " = gs_shm_frozen(", att, ", ", m, ", ", FixedSize(el),
+                  ", &", n, ", ", LocArgs(ln), ");");
+                L(CT(c->rettypes[0]), " ", v, " = { (void *)", p, ", ", n, " };");
+                return { v };
+            }
             auto off = T(), count = T();
             auto offx = GenX(an[2]);
             L("int64_t ", off, " = (int64_t)(", offx, ");");
@@ -234,6 +243,29 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
             // one copies from it, as from any slice.
             L(CT(c->rettypes[0]), " ", v, " = { (void *)", p, ", ", count, " };");
             return { v };
+        }
+        case B_FREEZE: {
+            // sh.freeze(ds): ds.items' elements, which the argument is
+            // (Dot::synth), a frozen region of the attachment's arena, and
+            // the array again empty on the fresh slot the runtime gives its
+            // stack (§11.4). The one change of a grow-only array's base:
+            // every cached top and count is written back before and read
+            // again after, and no hoisted view crosses it (bce.h), so no
+            // stale base writes the frozen slot. The header starts over
+            // past the reload, where a count the body caches is the local
+            // the reload just read (§6.10's counts). The stack is the
+            // descriptor's first member (gs_dstack).
+            auto att = AttPtr(an[0]);
+            auto lv = RecvLoc(an[1]);
+            auto v = ArrayView(lv);
+            auto r = T();
+            MarkFlush();
+            L("gs_res ", r, " = gs_shm_freeze(", att, ", (gs_dstack *)(", lv.stk, "), ", v.lenlv,
+              ", ", FixedSize(c->qtype), ", GS_DEBUG, ", LocArgs(ln), ");");
+            MarkReload();
+            L(lv.hdr, ".base = (", lv.stk, ")->top;");
+            L(v.lenlv, " = 0;");
+            return { r };
         }
         case B_QPUT: {
             auto t = an[0]->exprtype;

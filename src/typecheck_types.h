@@ -87,6 +87,12 @@ inline StructInst *TypeCheck::GetStructInst(TypeExpr *t) {
         for (auto &f : st->fields)
             inst->ftypes.push_back(f.ispad ? nullptr : Subst(f.type));
     });
+    // A dynamic stack's items is a run of whole elements on its slot
+    // (§11.4), which a freeze hands on as they lie.
+    if (st->rtkind == RK_DSTACK && !IsOpaque(inst->args[0]) &&
+        ClassOf(inst->args[0]) != SC_FIXED)
+        Error(t->line, cat("dynamic_stack<T> holds fixed-size elements (§11.4), and ",
+                           TypeStr(inst->args[0]), " is not fixed-size"));
     // Ordinary structs have one packed region and at most one resizable
     // tail. Root fields have independent storage, so neither their order
     // nor their size classes change the owner's SC_ROOT classification.
@@ -555,6 +561,84 @@ inline int64_t TypeCheck::WidestScalar(TypeExpr *t, string &part) {
     }
 }
 
+// Freezable (§11.4): what a frozen array's elements may be, which any thread
+// reads in place where another made them. What may cross threads by copy
+// qualifies, a fixed-size flat value holding nothing whose meaning depends
+// on the thread that made it, and so do self-relative references, which
+// stay in the region; not a plain reference or slice, an address in the
+// freezer's stacks, nor an `in pool` one, measured from a global each thread
+// copies, nor an index or bound type, proven against one thread's copy of
+// its array, nor what is not fixed-size. `why` names the field path at
+// fault and the reason.
+inline bool TypeCheck::Freezable(TypeExpr *t, string &why) {
+    if (IsOpaque(t)) return true;
+    auto no = [&](const string &what) {
+        why = cat(TypeStr(t), what);
+        return false;
+    };
+    switch (t->kind) {
+        case TY_INT:
+            if (t->ix) return no(", an index or bound type, which is proven against one "
+                                 "thread's copy of its array (§3.11)");
+            if (t->intstorage == IS_VARINT) return no(", which is variable-size (§3.6)");
+            return true;
+        case TY_FLT: case TY_BOOL: case TY_RESOURCE: return true;
+        case TY_SLICE: return no(", a slice, whose address is one in the freezing thread's "
+                                 "stacks");
+        case TY_REF:
+            if (t->ref->lenstorage < 0)
+                return no(cat(t->ref->optional ? ", an optional reference" : ", a reference",
+                              ", whose address is one in the freezing thread's stacks; a "
+                              "self-relative link, ", TypeStr(t->ref->sub), "&<u32>",
+                              t->ref->optional ? "?" : "", ", stays in the region"));
+            if (t->ref->pool)
+                return no(cat(", measured from ", t->ref->pool->name, ", a global of which "
+                              "each thread has its own copy"));
+            if (t->ref->lenstorage == IS_VARINT)
+                return no(", whose offset is a varint, which is variable-size (§3.6)");
+            return true;
+        case TY_ARRAY:
+            if (t->arr->akind != A_FIXED && t->arr->akind != A_LIMITED)
+                return no(", which is not fixed-size");
+            if (!Freezable(t->arr->sub, why)) {
+                why = cat("the elements of ", TypeStr(t), " are ", why);
+                return false;
+            }
+            return true;
+        case TY_STRUCT: {
+            if (t->struc->st->isroot) return no(", a root owner, which no value holds");
+            auto inst = GetStructInst(t);
+            for (size_t i = 0; i < inst->ftypes.size(); i++) {
+                auto ft = inst->ftypes[i];
+                if (!ft || Freezable(ft, why)) continue;
+                why = cat("field ", inst->st->fields[i].name, " of ", TypeStr(t), " is ", why);
+                return false;
+            }
+            return true;
+        }
+        case TY_ENUM: case TY_VARIANT: {
+            auto adt = AdtOf(t);
+            if (!adt) return no(", which cannot be frozen");
+            if (adt->enu->varmode) return no(", an enum in variable mode, which is variable-size");
+            auto ei = GetEnumInst(adt);
+            for (size_t vi = 0; vi < ei->vftypes.size(); vi++) {
+                auto &v = ei->en->variants[vi];
+                if (t->kind == TY_VARIANT && v.name != t->var->name) continue;
+                for (size_t k = 0; k < ei->vftypes[vi].size(); k++) {
+                    auto ft = ei->vftypes[vi][k];
+                    if (!ft || Freezable(ft, why)) continue;
+                    why = cat("field ", v.fields[k].name, " of variant ", ei->en->name, ".",
+                              v.name, " is ", why);
+                    return false;
+                }
+            }
+            return true;
+        }
+        case TY_FN: return no(", a function value, which is compile-time only");
+        default: return no(", which cannot be frozen");
+    }
+}
+
 // A runtime handle (§11.4) a value of type t holds at any depth by value, in
 // a field, an element or a payload, or null.
 inline TypeExpr *TypeCheck::RuntimeHandleIn(TypeExpr *t) {
@@ -787,10 +871,18 @@ inline void TypeCheck::ValidateType(TypeExpr *t, Line l, int pos) {
             // Check placement before instantiation: nested root ownership is
             // unsupported even if the nested type is empty, fixed-only,
             // generic, or the enclosing declaration is itself a root.
-            // The kind of a mapped file's handle is no value's type (§11.4).
+            // The kind of a mapped file's handle is no value's type, nor
+            // that of a frozen array's (§11.4); a dynamic stack is no kind.
             if (t->struc->st->rtkind == RK_MAPPING && pos != VT_KIND)
                 Error(l, "mapping is the kind of a mapped file's handle, written only as "
                          "resource's argument: resource<mapping> (§11.4)");
+            if (t->struc->st->rtkind == RK_FROZEN && pos != VT_KIND)
+                Error(l, cat(TypeStr(t), " is the kind of a frozen array's handle, written "
+                             "only as resource's argument: resource<", TypeStr(t),
+                             "> (§11.4)"));
+            if (t->struc->st->rtkind == RK_DSTACK && pos == VT_KIND)
+                Error(l, cat(TypeStr(t), " is a dynamic stack, which no handle names: "
+                             "sh.freeze(ds) gives a resource<frozen<T>> (§11.4)"));
             if (t->struc->st->isroot && pos != VT_LOCAL && pos != VT_GLOBAL &&
                 pos != VT_POINTEE && pos != VT_KIND)
                 Error(l, cat("root struct ", TypeStr(t),
@@ -1367,10 +1459,11 @@ inline bool TypeCheck::CanContainWalk(TypeExpr *t, TypeExpr *of) {
     assert(loaded == TypeEq(LoadType(t), of));
     if (loaded) return true;
     // An attachment's storage is every region of its arena (§11.4), which
-    // hold plain data, as static data holds what a literal can supply.
+    // hold plain data and frozen arrays, as static data holds what a literal
+    // can supply.
     if (IsAttachment(t)) {
         string why;
-        return PlainData(of, why);
+        return PlainData(of, why) || Freezable(of, why);
     }
     // A root's component variables enumerate their own regions; the owner
     // itself names only the control record, never all their storage at once.

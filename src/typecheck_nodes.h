@@ -391,13 +391,27 @@ inline Val StructLit::Check(TypeCheck &tc, TypeExpr *expected) {
                            "sh.map_file(path) maps a file (§11.4)");
         auto inst = tc.GetStructInst(t);
         sinst = inst;
+        if (st->rtkind == RK_FROZEN)
+            tc.Error(this, cat(tc.TypeStr(t), " is the kind of a frozen array's handle, which "
+                               "no value has: sh.freeze(ds) freezes a dynamic stack's items "
+                               "(§11.4)"));
+        if (st->rtkind == RK_DSTACK && !inits.empty())
+            tc.Error(this, cat("a dynamic stack's literal takes no fields: var ds = ",
+                               tc.TypeStr(t), " {}; (§11.4)"));
         if (st->isroot) {
             if (tc.rootinit != this || !tc.rootowner)
                 tc.Error(this, st->rtkind == RK_SHARED
                                    ? "an attachment is made only by an owning declaration, "
                                      "local or global: let sh = shared {}; (§11.4)"
+                               : st->rtkind == RK_DSTACK
+                                   ? cat("a dynamic stack is made only by a local's owning "
+                                         "declaration: var ds = ", tc.TypeStr(t), " {}; (§11.4)")
                                    : "a root owner must be constructed directly at its "
                                      "declaration");
+            if (st->rtkind == RK_DSTACK && tc.rootowner->isglobal)
+                tc.Error(this, cat("a dynamic stack is a local's, whose scope hands its slot "
+                                   "back, not a global's: declare var ds = ", tc.TypeStr(t),
+                                   " {}; in a function (§11.4)"));
             tc.rootowner->type = t;
             for (size_t i = 0; i < inst->ftypes.size(); i++)
                 if (inst->ftypes[i]) tc.RootComponent(tc.rootowner, t, (int)i);
@@ -474,6 +488,13 @@ inline Val Dot::Check(TypeCheck &tc, TypeExpr *) {
         ov.ClearReads();
         ov.reached = tc.LoadType(t);
     }
+    // The dynamic stack sh.freeze(ds) names, whose items it takes
+    // (TypeCheck::CheckFreeze).
+    if (synth && !IsDStack(t))
+        tc.Error(this, cat("sh.freeze(ds) takes a dynamic stack, dynamic_stack<T>, whose items "
+                           "it makes a frozen array, and ", tc.ExprStr(obj), " is a ",
+                           tc.TypeStr(ov.type), ": an ordinary array is frozen by appending "
+                           "it to a dynamic stack's items (§11.4)"));
     tc.CheckAccessorOwner(this, accessorowner, t);
     // Builtin properties (.len/.cap, and an attachment's .handle) from the
     // table.

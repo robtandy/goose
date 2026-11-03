@@ -375,17 +375,25 @@ inline bool IsResource(const TypeExpr *t) { return t && t->kind == TY_RESOURCE; 
 // The declarations the runtime provides (§11.4), in no namespace and no
 // declaration list (Ast::RuntimeDecl): `shared`, an attachment, a builtin
 // root owner with no components, which is also the kind of an arena's
-// handle; and `mapping`, the kind of a mapped file's handle, which names a
-// kind only (`resource<mapping>`) and is no type of any value.
-enum RuntimeKind { RK_NONE, RK_SHARED, RK_MAPPING };
+// handle; `mapping`, the kind of a mapped file's handle, which names a kind
+// only (`resource<mapping>`) and is no type of any value;
+// `dynamic_stack<T>`, a builtin root owner whose one component, `items:
+// T[>..]`, lies alone on a stack of its own; and `frozen<T>`, the kind of a
+// frozen array's handle, a kind only, as `mapping` is.
+enum RuntimeKind { RK_NONE, RK_SHARED, RK_MAPPING, RK_DSTACK, RK_FROZEN };
 // The runtime's declaration a type names: RK_NONE for any other.
 RuntimeKind RuntimeKindOf(const TypeExpr *t);
 // An attachment, `shared` (§11.4).
 inline bool IsAttachment(const TypeExpr *t) { return RuntimeKindOf(t) == RK_SHARED; }
-// A handle of a kind the runtime binds, `resource<shared>` or
-// `resource<mapping>` (§11.4), which C takes but never makes.
+// A dynamic stack, `dynamic_stack<T>` (§11.4).
+inline bool IsDStack(const TypeExpr *t) { return RuntimeKindOf(t) == RK_DSTACK; }
+// A handle of a kind the runtime binds, `resource<shared>`,
+// `resource<mapping>` or `resource<frozen<T>>` (§11.4), which C takes but
+// never makes.
 inline bool IsRuntimeHandle(const TypeExpr *t) {
-    return IsResource(t) && RuntimeKindOf(t->sub) != RK_NONE;
+    if (!IsResource(t)) return false;
+    auto k = RuntimeKindOf(t->sub);
+    return k == RK_SHARED || k == RK_MAPPING || k == RK_FROZEN;
 }
 inline bool IsF32(const TypeExpr *t) { return t && t->kind == TY_FLT && t->fltstorage == FS_F32; }
 // The ADT a variant type is a variant of, and an enum type's own; else null.
@@ -1099,6 +1107,11 @@ NODE(Dot)
     // an empty name: a completion asks for its object's type, which the
     // checker records before it stops the body here (Abandoned).
     bool incomplete = false;
+    // The `ds.items` the checker made of sh.freeze(ds)'s dynamic stack
+    // (TypeCheck::CheckFreeze): its array, which the freeze shrinks to
+    // nothing as a clear would, and which every pass after takes as such. A
+    // diagnostic prints it as written, `ds`.
+    bool synth = false;
     Dot(Line l, Node *_obj, string_view _name, string_view _ns = {})
         : Node(l, NKind), obj(_obj), name(_name), ns(_ns) {}
     // A field, which lies in its object's storage: a path, as codegen
@@ -2574,15 +2587,39 @@ struct Ast {
     // The structs standing for the type names that name nothing
     // (SStruct::unknown), in no namespace and no declaration list.
     vector<SStruct *> unknowntypes;
-    // The runtime's declarations (§11.4), made as a use first names one.
-    SStruct *runtimedecls[RK_MAPPING + 1] = {};
+    // The runtime's declarations (§11.4), made as a use first names one:
+    // dynamic_stack<T> as `root struct dynamic_stack<T> { items: T[>..] =
+    // [] }` would be, and frozen<T> as `struct frozen<T> {}`.
+    SStruct *runtimedecls[RK_FROZEN + 1] = {};
     SStruct *RuntimeDecl(RuntimeKind k) {
         auto &st = runtimedecls[k];
         if (!st) {
             st = new SStruct();
-            st->name = st->qname = k == RK_SHARED ? "shared" : "mapping";
-            st->isroot = k == RK_SHARED;
+            st->name = st->qname = k == RK_SHARED    ? "shared"
+                                   : k == RK_MAPPING ? "mapping"
+                                   : k == RK_DSTACK  ? "dynamic_stack"
+                                                     : "frozen";
+            st->isroot = k == RK_SHARED || k == RK_DSTACK;
             st->rtkind = k;
+            if (k == RK_DSTACK || k == RK_FROZEN) {
+                GenericParam g;
+                g.name = "T";
+                st->generics.push_back(g);
+            }
+            if (k == RK_DSTACK) {
+                auto elem = NewType(TY_GENERIC, Line {});
+                elem->named = NewDetail<TypeName>();
+                elem->named->name = "T";
+                auto items = NewType(TY_ARRAY, Line {});
+                items->arr = NewDetail<TypeArray>();
+                items->arr->sub = elem;
+                items->arr->akind = A_GROW;
+                Field f;
+                f.name = "items";
+                f.type = items;
+                f.defaultval = New<ArrayLit>(Line {});
+                st->fields.push_back(f);
+            }
         }
         return st;
     }

@@ -206,6 +206,7 @@ inline thread_local bool dumpwritten = false;
 inline const Node *Written(const Node *n) {
     if (!dumpwritten) return n;
     if (auto a = Is<AsCast>(n); a && a->implicit) return Written(a->child);
+    if (auto d = Is<Dot>(n); d && d->synth) return Written(d->obj);
     auto u = Is<Unary>(n);
     return u && u->synth ? u->child : n;
 }
@@ -367,6 +368,11 @@ inline void Binary::Dump(string &s, int ind) const {
 }
 
 inline void Dot::Dump(string &s, int ind) const {
+    // freeze's dynamic stack, as written (Dot::synth).
+    if (synth && dumpwritten) {
+        Written(obj)->Dump(s, ind);
+        return;
+    }
     DumpOperand(s, obj, ind, true);
     Append(s, ".", name);
 }

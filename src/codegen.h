@@ -826,6 +826,7 @@ struct CodeGen {
     string AttPtr(Node *n);
     string PinnedRes(Node *n);
     void BindAttachment(const string &name, Node *init, bool global);
+    void BindDStack(VarDef *d, Node *init);
     int64_t ScalarAlign(TypeExpr *t);
     void EmitDeferBody(Defer *d);
     string AllocStk(bool forlocal);

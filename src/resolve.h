@@ -2,8 +2,9 @@
 // file is in (top-level declarations are order-independent). Every parse-time
 // TY_UNRESOLVED is rewritten in place: struct and enum names become TY_STRUCT /
 // TY_ENUM, alias uses are substituted with the aliased type, `resource<U>`
-// where no declaration has the name becomes TY_RESOURCE (§3.12), `shared`
-// and `mapping` the runtime's declarations (§11.4), and
+// where no declaration has the name becomes TY_RESOURCE (§3.12), `shared`,
+// `mapping`, `dynamic_stack<T>` and `frozen<T>` the runtime's declarations
+// (§11.4), and
 // anything else becomes TY_GENERIC — a generic type parameter, or an unknown
 // name, which typecheck decides since it knows scopes. A qualified name
 // (`ns::Name`) can only be a declaration, so an unknown one is an error here,
@@ -60,8 +61,11 @@ inline void ResolveTypeNames(Ast &ast) {
 
     // Classify every parsed name that is not an alias use. A name's detail
     // may be shared with a `const` copy of its node (Ast::ConstOf), which is
-    // classified on its own, so the arguments are copied out of it.
-    for (auto t : ast.alltypes) {
+    // classified on its own, so the arguments are copied out of it. A
+    // runtime declaration made on the way (dynamic_stack's field) adds
+    // types, which need nothing done.
+    for (size_t ti = 0; ti < ast.alltypes.size(); ti++) {
+        auto t = ast.alltypes[ti];
         if (t->kind != TY_UNRESOLVED) continue;
         auto nm = t->named;
         if (auto s = ast.LookupStruct(nm->name, nm->ns)) {
@@ -82,19 +86,34 @@ inline void ResolveTypeNames(Ast &ast) {
             t->enu = d;
         } else if (ast.LookupAlias(nm->name, nm->ns)) {
             // Alias uses stay TY_UNRESOLVED for the substitution loop below.
-        } else if (auto rk = GlobalLeaf(nm->name) == "shared"    ? RK_SHARED
-                             : GlobalLeaf(nm->name) == "mapping" ? RK_MAPPING
-                                                                 : RK_NONE) {
+        } else if (auto rk = GlobalLeaf(nm->name) == "shared"          ? RK_SHARED
+                             : GlobalLeaf(nm->name) == "mapping"       ? RK_MAPPING
+                             : GlobalLeaf(nm->name) == "dynamic_stack" ? RK_DSTACK
+                             : GlobalLeaf(nm->name) == "frozen"        ? RK_FROZEN
+                                                                       : RK_NONE) {
             // The runtime's declarations (§11.4), found as resource is: an
-            // attachment, and the kind of a mapped file's handle.
-            if (!nm->args.empty())
+            // attachment, the kind of a mapped file's handle, a dynamic
+            // stack of T's, and the kind of a frozen array of T's handle.
+            auto generic = rk == RK_DSTACK || rk == RK_FROZEN;
+            if (!generic && !nm->args.empty())
                 ErrorAt(t, nm, cat(GlobalLeaf(nm->name), " takes no type arguments (§11.4)"),
                         nm->name);
+            if (generic && nm->args.size() != 1) {
+                ErrorAt(t, nm, cat(GlobalLeaf(nm->name), " takes one type argument, the type ",
+                                   rk == RK_DSTACK ? "of its elements: dynamic_stack<T>"
+                                                   : "of the frozen array's elements: "
+                                                     "resource<frozen<T>>",
+                                   " (§11.4)"),
+                        nm->name);
+                MakeUnknown(t, nm, nm->name);
+                continue;
+            }
             if (nm->varmode)
                 ErrorAt(t, nm, cat(GlobalLeaf(nm->name),
                                    " has no variable mode (.. applies to enums)"));
             auto d = ast.NewDetail<TypeStruct>();
             d->st = ast.RuntimeDecl(rk);
+            if (generic) d->args = nm->args;
             t->kind = TY_STRUCT;
             t->struc = d;
         } else if (GlobalLeaf(nm->name) == "resource") {

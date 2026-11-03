@@ -13,8 +13,8 @@
 // "" for that part and gets dedicated code there, dispatched on the enum.
 //
 // The shared-memory builtins (§11.4) take an attachment where the array
-// members take an array: `handle` its property, `map_file`, `size` and
-// `view` its members, which a call names first; `attach` makes one.
+// members take an array: `handle` its property, `map_file`, `size`, `view`
+// and `freeze` its members, which a call names first; `attach` makes one.
 //
 // Signature characters, applying to the arguments after the receiver for
 // members: i int, e construct one element of the receiver's element type, a
@@ -102,7 +102,8 @@ inline int RecvKindOf(TypeExpr *t) {
     F(B_HANDLE,           "handle",           1,  1,   "",   "",  BR_SHARED,      "",            BF_MEMBER | BF_PROPERTY) \
     F(B_MAP_FILE,         "map_file",         2,  3,   "",   "",  BR_SHARED,      "append to",   BF_MEMBER | BF_OUTARG) \
     F(B_SIZE,             "size",             2,  2,   "",   "i", BR_SHARED,      "",            BF_MEMBER) \
-    F(B_VIEW,             "view",             4,  4,   "",   "",  BR_SHARED,      "",            BF_MEMBER | BF_TYARGS) \
+    F(B_VIEW,             "view",             2,  4,   "",   "",  BR_SHARED,      "",            BF_MEMBER | BF_TYARGS) \
+    F(B_FREEZE,           "freeze",           2,  2,   "",   "",  BR_SHARED,      "",            BF_MEMBER) \
     F(B_LEN,              "len",              1,  1,   "",   "i", BR_ANY,         "",            BF_MEMBER | BF_PROPERTY) \
     F(B_CAP,              "cap",              1,  1,   "",   "i", BR_LIMITED,     "",            BF_MEMBER | BF_PROPERTY) \
     F(B_INDEX_OF,         "index_of",         2,  2,   "",   "i", BR_INDEXABLE,   "",            BF_MEMBER) \

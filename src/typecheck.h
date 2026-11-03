@@ -1285,12 +1285,15 @@ struct TypeCheck {
     // Shared memory (§11.4). Plain data, which every byte pattern of its
     // size is a value of, is what a view of a mapped file may have; `why`
     // names the part of t at fault. Its widest scalar is what a view's
-    // offset is a multiple of, `part` naming it. A runtime handle in a value
-    // C makes is one C forged (§7.10).
+    // offset is a multiple of, `part` naming it. A freezable type is what a
+    // frozen array's elements may be. A runtime handle in a value C makes is
+    // one C forged (§7.10).
     bool PlainData(TypeExpr *t, string &why);
     int64_t WidestScalar(TypeExpr *t, string &part);
+    bool Freezable(TypeExpr *t, string &why);
     TypeExpr *RuntimeHandleIn(TypeExpr *t);
     Val CheckSharedMember(Call *c, const BuiltinDef &d, vector<Node *> &args, const Val &rv);
+    Val CheckFreeze(Call *c, vector<Node *> &args, const Val &rv);
     bool SharedBuiltinHidden(Call *c, const BuiltinDef &d);
 
     // Serialization (docs/design/serialization.md): what to_bytes will write

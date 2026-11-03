@@ -673,6 +673,10 @@ R"(  --stats               Print what the compile did: the declarations parsed,
                         never fetched again).
   --stack-reserve size  Address space reserved per data stack, from 64K, with a
                         K, M, G or T suffix (default 2G).
+  --dynamic-budget size
+                        Address space for the dynamic stacks' slots, a data
+                        stack's reservation and gap each, from 64K, with a K,
+                        M, G or T suffix (default 16T).
   --stacks              Report the data stacks the program and each worker can
                         take, and the cap that puts on hardware_threads().
   --no-bce              Keep every bounds check.
@@ -950,7 +954,8 @@ string DiagnosticsJson(const vector<Diagnostic> &diags, const Ast *ast) {
     return s;
 }
 
-// A size with an optional K, M, G or T suffix (--stack-reserve).
+// A size with an optional K, M, G or T suffix (--stack-reserve,
+// --dynamic-budget).
 bool ParseSize(string s, uint64_t &out) {
     if (!s.empty() && toupper((unsigned char)s.back()) == 'B') s.pop_back();
     if (s.empty()) return false;
@@ -1381,6 +1386,15 @@ int Main(int argc, char **argv) {
                 return 1;
             }
             cdefines.push_back(cat("GS_STACK_RESERVE=", size, "ull"));
+        }
+        else if (arg == "--dynamic-budget" && i + 1 < argc) {
+            uint64_t size;
+            if (!ParseSize(argv[++i], size) || size < (64ull << 10) || size > (1ull << 48)) {
+                fprintf(stderr, "--dynamic-budget takes a size from 64 KB to 256 TB, with an "
+                                "optional K, M, G or T suffix: %s\n", argv[i]);
+                return 1;
+            }
+            cdefines.push_back(cat("GS_DYNAMIC_BUDGET=", size, "ull"));
         }
         else if (arg == "--check") nocgen = true;
         else if (arg == "--diagnostics" && i + 1 < argc) {

@@ -1089,6 +1089,32 @@ inline void CodeGen::BindAttachment(const string &name, Node *init, bool global)
     if (!global) RegisterEnd(cat("gs_shm_detach(&", name, ");"));
 }
 
+// A dynamic stack's declaration (§11.4): its items' stack is a gs_dstack in
+// the frame, on a slot the runtime hands it (gs_dstack_open) and takes back
+// at each exit of the block (gs_dstack_close), where an attachment's ends;
+// its header sits beside it as any component's does, and the owner is a
+// root struct's descriptor whose items is the gs_rref of the two, which no
+// freeze changes. The stack is no indexed one, so no watermark restores
+// it, and no class caches its top.
+inline void CodeGen::BindDStack(VarDef *d, Node *init) {
+    usesshared = true;
+    auto name = LocalName(d);
+    auto t = d->type;
+    assert(Is<StructLit>(init) && d->components.size() == 1 && d->components[0]);
+    auto c = d->components[0];
+    EmitCoreTypes();
+    auto ds = Unique2(cat("gs_ds_", name));
+    L("gs_dstack ", ds, ";");
+    L("gs_dstack_open(&", ds, ", ", LocArgs(init->line), ");");
+    vstk[c] = cat("(&", ds, ".stack)");
+    auto hdr = LocalName(c);
+    L("gs_rhdr ", hdr, " = { ", ds, ".stack.top, 0 };");
+    L(CT(t), " ", name, " = { 0 };");
+    L(name, ".", Sanitize(SI(t)->st->fields[0].name), " = (gs_rref){ &", hdr, ", ", vstk[c],
+      " };");
+    RegisterEnd(cat("gs_dstack_close(&", ds, ");"));
+}
+
 // A local's or a global's address, or the value of a shared& parameter:
 // taken into a temporary where it is evaluated, so that a later argument
 // rebinding a reference it is reached through changes nothing the call took.

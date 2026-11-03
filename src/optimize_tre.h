@@ -447,15 +447,15 @@ struct TailRecursion {
     // Whether the tree holds what runs as a return leaves its scope, once
     // the return has its value, after the self-call there returns, which
     // the loop cannot do: a `defer`'s body (§6.6), or the end of an
-    // attachment (§11.4), which a loop would bring before the next round,
-    // so that a callee attaching the caller's arena by its handle would
-    // find it released. The rewrite leaves such a body alone.
+    // attachment or a dynamic stack (§11.4), which a loop would bring before
+    // the next round, so that a callee attaching the caller's arena by its
+    // handle would find it released. The rewrite leaves such a body alone.
     static bool HasScopeEnd(Node *n) {
         if (!n || Is<FnDecl>(n)) return false;
         if (Is<Defer>(n)) return true;
         if (auto vd = Is<VarDecl>(n))
             for (auto d : vd->defs)
-                if (d && IsAttachment(d->type)) return true;
+                if (d && (IsAttachment(d->type) || IsDStack(d->type))) return true;
         auto found = false;
         RunChildren(n, [&](Node *ch) { found = found || HasScopeEnd(ch); });
         return found;

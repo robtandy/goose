@@ -142,6 +142,7 @@ inline Node *Dot::Clone1(Ast &ast) const {
     auto d = ast.New<Dot>(line, obj->Clone(ast), name, ns);
     d->accessorowner = accessorowner;
     d->incomplete = incomplete;
+    d->synth = synth;
     return d;
 }
 
