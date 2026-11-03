@@ -26,6 +26,9 @@ static const char *gs_errmsgs[] = {
     "invalid array length",
     "slice not within this array",
     "slice pool span tree is corrupt",
+    "thread_pool count of zero or less",
+    "chunk size of zero or less",
+    "chunk offsets out of bounds or not monotonically increasing",
 };
 
 /* Ends the process with `code`, its streams flushed: exit() and every
@@ -211,6 +214,7 @@ typedef struct {
 } gs_region;
 static GS_TLS gs_region *gs_regions;
 static GS_TLS volatile long gs_nregions;
+static GS_TLS long gs_regions_mapped;
 /* The registry's size: the thread program's region count, as the compiler
    worked it out, so a reservation past it is a compiler bug. */
 static GS_TLS long gs_regions_cap;
@@ -288,6 +292,7 @@ static void gs_regions_begin(int64_t capacity) {
     gs_regions = (gs_region *)calloc((size_t)(capacity > 0 ? capacity : 1), sizeof(gs_region));
     if (!gs_regions) gs_panic("out of memory allocating the data stack registry");
     gs_nregions = 0;
+    gs_regions_mapped = 0;
 }
 
 static void gs_release_region(const gs_region *r);
@@ -295,6 +300,7 @@ static void gs_native_stack_free(void);
 
 /* Unregister before unmapping, then drop the registry. */
 GS_API void gs_release_regions(void) {
+    if (gs_regions_mapped > gs_nregions) gs_nregions = gs_regions_mapped;
     while (gs_nregions) {
         long i = gs_nregions - 1;
         gs_region r = gs_regions[i];
@@ -302,6 +308,7 @@ GS_API void gs_release_regions(void) {
         gs_regions[i].base = NULL;
         gs_release_region(&r);
     }
+    gs_regions_mapped = 0;
     free(gs_regions);
     gs_regions = NULL;
     gs_native_stack_free();
@@ -642,6 +649,12 @@ static GS_NORETURN void gs_end(int code) {
 GS_API uint8_t *gs_reserve_region(gs_stack *stack) {
     if (gs_nregions >= gs_regions_cap)
         gs_panic("too many data stack regions");
+    long i = gs_nregions;
+    if (i < gs_regions_mapped) {
+        gs_regions[i].stack = stack;
+        gs_nregions = i + 1;
+        return gs_regions[i].base;
+    }
     size_t usable = gs_region_usable;
     uint8_t *p;
     for (;;) {
@@ -652,13 +665,13 @@ GS_API uint8_t *gs_reserve_region(gs_stack *stack) {
         usable -= usable % gs_region_page;
         gs_region_usable = usable;
     }
-    long i = gs_nregions;
     gs_regions[i].base = p;
     gs_regions[i].usable = usable;
     gs_regions[i].size = usable + gs_region_gap;
     gs_regions[i].stack = stack;
     gs_regions[i].committed = p;
     gs_nregions = i + 1;  /* Publish only the initialized entry. */
+    gs_regions_mapped = i + 1;
     return p;
 }
 

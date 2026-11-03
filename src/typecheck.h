@@ -935,7 +935,7 @@ struct TypeCheck {
         switch (a->kind) {
             case TY_INT:  return a->intstorage == b->intstorage && SameIndex(a, b);
             case TY_FLT:  return a->fltstorage == b->fltstorage;
-            case TY_BOOL: case TY_VOID: case TY_FN: return true;
+            case TY_BOOL: case TY_POOL: case TY_VOID: case TY_FN: return true;
             case TY_STRUCT: {
                 if (a->struc->st != b->struc->st) return false;
                 return TypeArgsEq(a->struc->args, b->struc->args);
@@ -1961,6 +1961,8 @@ struct TypeCheck {
     void RequireCopyable(const Val &v, Node *n, TypeExpr *dt) {
         if (ClassOf(dt) == SC_ROOT && (v.lvalue || IsPlainRef(v.type)))
             Error(n, "root owners cannot be copied; bind a reference instead");
+        if (dt && dt->kind == TY_POOL && (v.lvalue || IsPlainRef(v.type)))
+            Error(n, "thread_pool cannot be copied; pass it by reference (thread_pool&) instead");
         if (ImplicitCopy(v, n, dt)) ImplicitCopyError(n);
     }
     void CheckBranchCopy(const Val &v, Node *n, TypeExpr *dt, Val &out);
@@ -2397,6 +2399,8 @@ struct TypeCheck {
     void ReturnThroughCalls(Val &v, int tf, Return *r);
     void CheckReturn(Return *r);
     FnSpec *EnsureThreadSpec(SFunction *sf, Line l);
+    FnSpec *EnsurePoolSpec(SFunction *sf, TypeExpr *chunktype, bool &has_idx,
+                           size_t nextra, Line l);
 
     // ------------------------------------------------------------------
     // Struct and variant literals (§4.2). The per-node entry is
@@ -3101,6 +3105,9 @@ struct TypeCheck {
         for (auto sf : ast.functions)
             if (sf->isthread && !sf->specs.empty() && !sf->specs[0]->failed)
                 CheckRoot([&] { CheckThreadGlobals(sf->specs[0]); });
+        for (auto sp : ast.fnspecs)
+            if (sp->poolentry && !sp->failed)
+                CheckRoot([&] { CheckThreadGlobals(sp); });
         // NOTE: in this compilation model, code no call reaches would never be
         // typechecked at all. That is right for generic functions (they need a
         // caller's types), but silently skipping plain dead code makes for a

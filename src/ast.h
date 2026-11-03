@@ -64,6 +64,7 @@ enum TypeKind {
     TY_SLICE,       // T[:] — a reference + count; kin of TY_REF, not TY_ARRAY.
     TY_REF,         // T& / T&<w> / T&<w in pool> (relative offset) / optional T?.
     TY_VARIANT,     // T.Name — variant type of an ADT.
+    TY_POOL,        // thread_pool — scoped parallel thread pool handle.
     TY_VOID,        // Typecheck-created: the "type" of statements and valueless blocks.
 };
 
@@ -1128,6 +1129,8 @@ NODE(Call)
     // pop: the array is provably non-empty here (bce.h); codegen omits the
     // emptiness check.
     bool nobc = false;
+    // apply: the worker fn takes `(chunk, idx, ...)` rather than `(chunk, ...)`.
+    bool pool_has_idx = false;
     TypeExpr *qtype = nullptr;  // qlimit<T>: T, which names the queue (§11.2).
     const string *shaderblob = nullptr;  // embed_shader's compiled blob or embed_file's bytes, in Ast::shaders.
     Call(Line l, Node *_callee) : Node(l, NKind), callee(_callee) {}
@@ -2362,10 +2365,8 @@ struct FnSpec {
     // branch's only callee (Optimizer::TryInline): the C compiler is told so
     // too, since it inlines a function with one caller whatever its size.
     bool outofline = false;
-    // Goose wanted to inline this function at some call but could not
-    // (Optimizer::TryInline), so it is declared GS_INLINE in C and the C
-    // compiler inlines it.
     bool cinline = false;
+    bool poolentry = false;        // Entry specialization dispatched by pool.apply.
 };
 
 // ---------------------------------------------------------------------------
@@ -2582,6 +2583,7 @@ struct Ast {
     TypeExpr *inttypes[IS_VARINT + 1];
     TypeExpr *flttypes[FS_F64 + 1];
     TypeExpr *booltype;
+    TypeExpr *pooltype;
     TypeExpr *voidtype;
 
     Ast() {
@@ -2594,6 +2596,7 @@ struct Ast {
             flttypes[s]->fltstorage = (FltStorage)s;
         }
         booltype = NewType(TY_BOOL, Line {});
+        pooltype = NewType(TY_POOL, Line {});
         voidtype = NewType(TY_VOID, Line {});
     }
 

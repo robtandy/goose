@@ -2647,6 +2647,9 @@ inline void TypeCheck::CheckVarDecl(VarDecl *vd, bool global) {
                                            " binds by reference without it (§4.1)"));
             } else {
                 v = CheckValue(vd->inits[i], ann, false, false, !ann);
+                if (v.type && v.type->kind == TY_POOL && (v.lvalue || IsPlainRef(v.type)))
+                    Error(vd->inits[i],
+                          "thread_pool cannot be copied; pass it by reference (thread_pool&) instead");
                 // An un-annotated binding of a non-fixed lvalue is a
                 // reference to it (§4.1), like an untyped parameter's, and
                 // one of a reference to such a value is that reference,
@@ -2745,6 +2748,7 @@ inline void TypeCheck::CheckCycleInit(VarDef *d, int fi, int calls) {
 
 // §4.4: which lvalues accept `=` after construction.
 inline void TypeCheck::AssignableClassCheck(TypeExpr *t, Node *at) {
+    if (t->kind == TY_POOL) Error(at, "a thread_pool cannot be reassigned");
     auto cls = ClassOf(t);
     if (cls == SC_ROOT) Error(at, "a root owner cannot be assigned as a whole; assign its fields instead");
     if (cls == SC_VARIABLE && !(t->kind == TY_ARRAY && t->arr->akind == A_LIMITED))

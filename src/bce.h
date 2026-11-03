@@ -3401,6 +3401,11 @@ inline void Dot::BceMark(BCE &b) {
 }
 
 inline void Call::BceMark(BCE &b) {
+    if (builtin == B_APPLY) {
+        auto an = ArgNodes();
+        if (an.size() >= 2)
+            if (auto cc = Is<Call>(an[1]); cc && !cc->args.empty()) b.MarkAddr(cc->args[0]);
+    }
     for (auto p : fvparams) b.NoteOwn(p);
     RunChildren(this, [&](Node *ch) { b.Mark(ch); });
 }
@@ -3723,6 +3728,13 @@ inline bool Call::BceWalk(BCE &b) {
             }
             case B_ABORT: case B_EXIT:
                 return false;   // The program ends here (§9.3).
+            case B_APPLY: {
+                auto an = ArgNodes();
+                if (an.size() >= 2)
+                    if (auto cc = Is<Call>(an[1]); cc && !cc->args.empty())
+                        b.KillArgStorage(cc->args[0]);
+                break;
+            }
             default:
                 break;   // len/cap/print/free/queues/threads: no tracked effect.
         }

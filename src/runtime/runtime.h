@@ -207,6 +207,9 @@ enum {
     GS_E_ARRAYLEN,     /* array element count negative or beyond a data stack */
     GS_E_ARRAYSLICE,   /* a nonempty slice is not wholly inside the array */
     GS_E_SPANTREE,     /* a stdlib slice_pool's nodes and tree are no span tree */
+    GS_E_POOLTHREADS,  /* a thread_pool count of zero or less */
+    GS_E_CHUNKSIZE,    /* a chunks() size of zero or less */
+    GS_E_CHUNKBOUNDS,  /* chunk offsets out of bounds or not monotonically increasing */
 };
 
 /* A place in the program's source: where a standard library function
@@ -992,6 +995,8 @@ typedef struct gs_qnode {
 typedef struct gs_qstate *gs_queue;
 #define GS_QUEUE_INIT NULL
 
+typedef struct gs_pool_state *gs_pool;
+
 GS_API void gs_qinit(gs_queue *q);
 GS_API uint8_t gs_qput(gs_queue *q, const void *data, int64_t size);
 GS_API gs_qnode *gs_qget(gs_queue *q);
@@ -1001,6 +1006,13 @@ GS_API void gs_qlimit(gs_queue *q, int64_t n, const char *file, int line);
 /* Frees a queue and the messages left in it, once no thread program can
    use it (goose_exit); gs_qinit makes it again. */
 GS_API void gs_qfree(gs_queue *q);
+
+GS_API gs_pool gs_pool_create(int64_t nthreads, const char *file, int line);
+GS_API void gs_pool_destroy(gs_pool p);
+GS_API void gs_pool_submit(gs_pool p, void (*run)(void (*)(uint8_t *), uint8_t *),
+                           void (*release)(void), void (*entry)(uint8_t *),
+                           const void *args, int64_t argsize);
+GS_API void gs_pool_wait(gs_pool p);
 
 #ifndef GS_RUNTIME_OBJECT
 
@@ -1070,6 +1082,10 @@ static void gs_thread_release(void) {
 static int64_t gs_thread_spawn(void (*entry)(uint8_t *), const void *args, int64_t argsize,
                                int contained) {
     return gs_thread_start(gs_thread_run, gs_thread_release, entry, args, argsize, contained);
+}
+
+static void gs_pool_spawn(gs_pool p, void (*entry)(uint8_t *), const void *args, int64_t argsize) {
+    gs_pool_submit(p, gs_thread_run, gs_thread_release, entry, args, argsize);
 }
 #endif
 

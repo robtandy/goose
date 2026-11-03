@@ -447,6 +447,170 @@ GS_API void gs_qfree(gs_queue *q) {
     *q = NULL;
 }
 
+/* ---------------------------------------------------------------------------
+   Reusable thread pools and scoped parallel blocks (docs/design/parallel_blocks.md).
+   Each worker thread in a pool keeps its Data Stack region reservations mapped
+   across tasks and across consecutive parallel(pool) { ... } blocks, rewinding
+   gs_nregions = 0 before each task so gs_reserve_region reuses the mapped base
+   pointers in O(1). */
+
+typedef struct gs_pool_task {
+    struct gs_pool_task *next;
+    void (*run)(void (*)(uint8_t *), uint8_t *);
+    void (*release)(void);
+    void (*entry)(uint8_t *args);
+    uint8_t *args;
+} gs_pool_task;
+
+struct gs_pool_state {
+    gs_mutex mutex;
+    gs_cond work_cond;
+    gs_cond done_cond;
+    gs_pool_task *head;
+    gs_pool_task *tail;
+    int64_t pending;
+    int64_t nthreads;
+    int stop;
+    #ifdef _WIN32
+        HANDLE *threads;
+    #else
+        pthread_t *threads;
+    #endif
+};
+
+#ifdef _WIN32
+static DWORD WINAPI gs_pool_worker_main(LPVOID p)
+#else
+static void *gs_pool_worker_main(void *p)
+#endif
+{
+    struct gs_pool_state *pool = (struct gs_pool_state *)p;
+    gs_regions_begin(gs_workerregions);
+    gs_native_stack_init();
+    gs_mutex_lock(&gs_threads_mutex);
+    gs_current_thread_id = gs_numthreads++;
+    gs_mutex_unlock(&gs_threads_mutex);
+
+    for (;;) {
+        gs_mutex_lock(&pool->mutex);
+        while (!pool->head && !pool->stop)
+            gs_cond_wait(&pool->work_cond, &pool->mutex);
+        if (!pool->head && pool->stop) {
+            gs_mutex_unlock(&pool->mutex);
+            break;
+        }
+        gs_pool_task *t = pool->head;
+        pool->head = t->next;
+        if (!pool->head) pool->tail = NULL;
+        gs_mutex_unlock(&pool->mutex);
+
+        gs_nregions = 0;
+        t->run(t->entry, t->args);
+        t->release();
+        free(t->args);
+        free(t);
+
+        gs_mutex_lock(&pool->mutex);
+        if (--pool->pending == 0 && !pool->head)
+            gs_cond_broadcast(&pool->done_cond);
+        gs_mutex_unlock(&pool->mutex);
+    }
+
+    gs_release_regions();
+    #ifdef _WIN32
+        return 0;
+    #else
+        return NULL;
+    #endif
+}
+
+GS_API gs_pool gs_pool_create(int64_t nthreads, const char *file, int line) {
+    if (nthreads <= 0) gs_abort(GS_E_POOLTHREADS, file, line);
+    struct gs_pool_state *pool = (struct gs_pool_state *)calloc(1, sizeof(struct gs_pool_state));
+    if (!pool) gs_panic("out of memory creating thread pool");
+    gs_mutex_init(&pool->mutex);
+    gs_cond_init(&pool->work_cond);
+    gs_cond_init(&pool->done_cond);
+    pool->nthreads = nthreads;
+    #ifdef _WIN32
+        pool->threads = (HANDLE *)calloc((size_t)nthreads, sizeof(HANDLE));
+    #else
+        pool->threads = (pthread_t *)calloc((size_t)nthreads, sizeof(pthread_t));
+    #endif
+    if (!pool->threads) gs_panic("out of memory creating thread pool");
+    for (int64_t i = 0; i < nthreads; i++) {
+        #ifdef _WIN32
+            pool->threads[i] = (HANDLE)_beginthreadex(NULL, 0,
+                (unsigned (__stdcall *)(void *))gs_pool_worker_main, pool, 0, NULL);
+            if (!pool->threads[i]) gs_panic("cannot create pool thread");
+        #else
+            if (pthread_create(&pool->threads[i], NULL, gs_pool_worker_main, pool))
+                gs_panic("cannot create pool thread");
+        #endif
+    }
+    return pool;
+}
+
+GS_API void gs_pool_submit(gs_pool pool, void (*run)(void (*)(uint8_t *), uint8_t *),
+                           void (*release)(void), void (*entry)(uint8_t *),
+                           const void *args, int64_t argsize) {
+    if (!pool) gs_panic("null thread pool");
+    if (argsize < 0 || (uint64_t)argsize > SIZE_MAX)
+        gs_panic("invalid thread argument size");
+    gs_pool_task *t = (gs_pool_task *)malloc(sizeof(gs_pool_task));
+    if (!t) gs_panic("out of memory spawning pool task");
+    t->next = NULL;
+    t->run = run;
+    t->release = release;
+    t->entry = entry;
+    t->args = (uint8_t *)malloc(argsize ? (size_t)argsize : 1);
+    if (!t->args) {
+        free(t);
+        gs_panic("out of memory spawning pool task");
+    }
+    if (argsize) memcpy(t->args, args, (size_t)argsize);
+    gs_mutex_lock(&pool->mutex);
+    pool->pending++;
+    if (pool->tail) pool->tail->next = t;
+    else pool->head = t;
+    pool->tail = t;
+    gs_cond_signal(&pool->work_cond);
+    gs_mutex_unlock(&pool->mutex);
+}
+
+GS_API void gs_pool_wait(gs_pool pool) {
+    if (!pool) return;
+    gs_mutex_lock(&pool->mutex);
+    while (pool->pending > 0 || pool->head)
+        gs_cond_wait(&pool->done_cond, &pool->mutex);
+    gs_mutex_unlock(&pool->mutex);
+}
+
+GS_API void gs_pool_destroy(gs_pool pool) {
+    if (!pool) return;
+    gs_mutex_lock(&pool->mutex);
+    while (pool->pending > 0 || pool->head)
+        gs_cond_wait(&pool->done_cond, &pool->mutex);
+    pool->stop = 1;
+    gs_cond_broadcast(&pool->work_cond);
+    gs_mutex_unlock(&pool->mutex);
+    for (int64_t i = 0; i < pool->nthreads; i++) {
+        #ifdef _WIN32
+            WaitForSingleObject(pool->threads[i], INFINITE);
+            CloseHandle(pool->threads[i]);
+        #else
+            pthread_join(pool->threads[i], NULL);
+        #endif
+    }
+    #ifndef _WIN32
+        pthread_mutex_destroy(&pool->mutex);
+        pthread_cond_destroy(&pool->work_cond);
+        pthread_cond_destroy(&pool->done_cond);
+    #endif
+    free(pool->threads);
+    free(pool);
+}
+
 #endif  /* GS_NEED_THREADS */
 
 /* The records of the thread programs that aborted go with the program

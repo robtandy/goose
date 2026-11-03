@@ -704,7 +704,12 @@ inline void CodeGen::BindLocal(VarDef *d, Node *init, bool forlocal) {
         return;
     }
     if (!init) {
-        L(VarCT(d), " ", name, ";");
+        if (t->kind == TY_POOL) {
+            L(VarCT(d), " ", name, " = NULL;");
+            SaveBase(forlocal, "", cat("gs_pool_destroy(", name, ")"));
+        } else {
+            L(VarCT(d), " ", name, ";");
+        }
         return;
     }
     if (PrefVar(d)) {
@@ -725,6 +730,7 @@ inline void CodeGen::BindLocal(VarDef *d, Node *init, bool forlocal) {
         ((Is<StructLit>(init) || Is<ArrayLit>(init)) && HasRelRef(t))) {
         L(CT(t), " ", name, ";");
         GenAny(init, Dst { DK_LVALUE, name, t });
+        if (t->kind == TY_POOL) SaveBase(forlocal, "", cat("gs_pool_destroy(", name, ")"));
         return;
     }
     if (IsStaticLimited(t)) {

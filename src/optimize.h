@@ -502,7 +502,7 @@ struct Optimizer {
         info.nestedcalls = false;
         // A simd body inlined into a caller would lose its versions (§7.12).
         auto noin = sp->sf->isrec || sp->incycle || sp->sf->isthread || sp->sf->isexport ||
-                    sp->sf->issimd || sp->relnamedresult;
+                    sp->sf->issimd || sp->relnamedresult || sp->poolentry;
         auto multiret = sp->rets.size() > 1;
         function<void(Node *, int)> rec = [&](Node *n, int d) {
             if (!n) return;
@@ -955,6 +955,8 @@ inline Node *Call::Cp1(Inliner &inl) const {
     c->dispatcharg = dispatcharg;
     c->builtin = builtin;
     c->poolcheck = poolcheck;
+    c->nobc = nobc;
+    c->pool_has_idx = pool_has_idx;
     c->qtype = qtype;
     c->shaderblob = shaderblob;
     c->rettypes = rettypes;

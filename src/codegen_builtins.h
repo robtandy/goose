@@ -132,6 +132,16 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
             return { tv };
         }
         case B_HARDWARE_THREADS: return { "gs_hardware_threads()" };
+        case B_THREAD_POOL: {
+            usesthreads = true;
+            auto n = an.empty() ? string("gs_hardware_threads()") : GenX(an[0]);
+            auto t = T();
+            L("gs_pool ", t, " = gs_pool_create(", n, ", ", LocArgs(ln), ");");
+            return { t };
+        }
+        case B_APPLY:
+            EmitPoolApply(c, an);
+            return {};
         case B_EMBED_SHADER:
         case B_EMBED_FILE: {
             auto &blob = *c->shaderblob;
@@ -1189,6 +1199,142 @@ inline vector<string> CodeGen::EmitThreadSpawn(Call *c, vector<Node *> &an) {
     L("int64_t ", id, " = gs_thread_spawn(", thunk, ", ", base, ", ", Top(stk), " - ", base,
       c->builtin == B_THREAD_SPAWN_CONTAINED ? ", 1);" : ", 0);");
     return { id };
+}
+
+inline void CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
+    usesthreads = true;
+    auto sp = c->spec;
+    auto thunk = EnsureThreadThunk(sp);
+    auto pv = GenXD(an[0], ast.pooltype);
+    auto poolvar = T();
+    L("gs_pool ", poolvar, " = ", pv, ";");
+    auto cc = Is<Call>(an[1]);
+    auto lv = GenLoc(cc->args[0]);
+    if (lv.t->kind == TY_REF) DerefLoc(lv);
+    auto v = ArrayView(lv);
+    auto base = T(), total = T(), off = T(), idx = T();
+    auto elemct = CT(v.elem);
+    L(elemct, " *", base, " = (", elemct, " *)(", v.elems, ");");
+    L("int64_t ", total, " = ", v.len, ";");
+    auto chunkct = CT(sp->argtypes[0]);
+    auto byoffsets = cc->args[1]->exprtype && cc->args[1]->exprtype->kind == TY_SLICE;
+    string csz, offs;
+    if (byoffsets) {
+        auto ox = GenXD(cc->args[1], cc->args[1]->exprtype);
+        offs = T();
+        L(CT(cc->args[1]->exprtype), " ", offs, " = ", ox, ";");
+    } else {
+        auto csx = GenX(cc->args[1]);
+        csz = T();
+        L("int64_t ", csz, " = ", csx, ";");
+        L("if (", csz, " <= 0) gs_abort(GS_E_CHUNKSIZE, ", LocArgs(cc->line), ");");
+    }
+    size_t first_extra = c->pool_has_idx ? 2 : 1;
+    size_t nextra = an.size() - 3;
+    vector<string> extra_vals(nextra);
+    for (size_t j = 0; j < nextra; j++) {
+        auto pt = sp->argtypes[first_extra + j];
+        if (!IsResz(pt) && !IsBytesT(pt) && FixedSize(pt) > 0 && !HasRelRef(pt)) {
+            auto ev = T();
+            FixedLocal(pt, ev, GenXD(an[3 + j], pt));
+            extra_vals[j] = ev;
+        }
+    }
+    MarkFlush("*");
+    if (byoffsets) {
+        L("if (", offs, ".len == 1) {");
+        ind++;
+        auto o0 = T();
+        L("int64_t ", o0, " = ((int64_t *)", offs, ".data)[0];");
+        L("if (", o0, " < 0 || ", o0, " > ", total, ") gs_abort(GS_E_CHUNKBOUNDS, ",
+          LocArgs(cc->line), ");");
+        ind--;
+        L("}");
+        L("for (int64_t ", idx, " = 0; ", idx, " + 1 < ", offs, ".len; ", idx, "++) {");
+    } else {
+        L("for (int64_t ", off, " = 0, ", idx, " = 0; ", off, " < ", total,
+          "; ", off, " += ", csz, ", ", idx, "++) {");
+    }
+    ind++;
+    PushSc(SC_STMT);
+    auto chunkv = T();
+    if (byoffsets) {
+        auto lo = T(), hi = T();
+        L("int64_t ", lo, " = ((int64_t *)", offs, ".data)[", idx, "];");
+        L("int64_t ", hi, " = ((int64_t *)", offs, ".data)[", idx, " + 1];");
+        L("if (", lo, " < 0 || ", hi, " < ", lo, " || ", hi, " > ", total,
+          ") gs_abort(GS_E_CHUNKBOUNDS, ", LocArgs(cc->line), ");");
+        L(chunkct, " ", chunkv, " = { ", base, " + ", lo, ", ", hi, " - ", lo, " };");
+    } else {
+        auto clen = T();
+        L("int64_t ", clen, " = ", total, " - ", off, " < ", csz, " ? ", total, " - ", off,
+          " : ", csz, ";");
+        L(chunkct, " ", chunkv, " = { ", base, " + ", off, ", ", clen, " };");
+    }
+    string stk;
+    auto pkt = BytesTemp(stk);
+    EmitValStore(stk, sp->argtypes[0], chunkv);
+    if (c->pool_has_idx) EmitValStore(stk, ast.inttypes[IS_I64], idx);
+    for (size_t j = 0; j < nextra; j++) {
+        auto pt = sp->argtypes[first_extra + j];
+        if (!extra_vals[j].empty()) {
+            EmitValStore(stk, pt, extra_vals[j]);
+            continue;
+        }
+        if (!IsResz(pt)) {
+            GenConstruct(an[3 + j], stk, pt);
+            continue;
+        }
+        auto szp = T(), cntp = T();
+        L("gs_i64 *", szp, " = (gs_i64 *)", Top(stk), ";");
+        Bump(stk, "8");
+        L("gs_i64 *", cntp, " = (gs_i64 *)", Top(stk), ";");
+        EmitValStore(stk, ast.inttypes[IS_I64], "0");
+        if (IsFrameObj(pt)) {
+            auto pre = FoPrefixSize(pt), pp = T(), h = T();
+            L("uint8_t *", pp, " = ", Top(stk), ";");
+            Bump(stk, pre);
+            L(CT(pt), " ", h, ";");
+            GenConstruct(an[3 + j], stk, pt, h);
+            L("*", cntp, " = ", FoTailHdr(pt, h), ".len;");
+            L("GS_MEMCPY(", pp, ", &", h, ", ", pre, ");");
+        } else {
+            GenConstruct(an[3 + j], stk, pt, cat("(*", cntp, ")"));
+        }
+        L("*", szp, " = ", Top(stk), " - (uint8_t *)(", szp, " + 1);");
+    }
+    for (auto d : ThreadGlobals(sp)) {
+        auto szp = T();
+        L("gs_i64 *", szp, " = (gs_i64 *)", Top(stk), ";");
+        Bump(stk, "8");
+        auto glv = VarLoc(d);
+        if (IsResz(d->type)) {
+            EmitRzImage(glv, d->type, stk, c->line);
+            if (d->reusable) {
+                auto &p = gpools[d];
+                auto flsz = FlEntrySize(d);
+                EmitValStore(stk, ast.inttypes[IS_I64], cat(p.first, ".len"));
+                L("GS_MEMCPY(", Top(stk), ", ", p.first, ".base, (size_t)(", p.first,
+                  ".len * ", flsz, "));");
+                Bump(stk, cat(p.first, ".len * ", flsz));
+            }
+        } else if (IsBytesT(d->type)) {
+            auto n = T();
+            L("int64_t ", n, " = ", SizeX(d->type, glv.s), ";");
+            L("GS_MEMCPY(", Top(stk), ", ", glv.s, ", (size_t)", n, ");");
+            Bump(stk, n);
+        } else {
+            L("GS_MEMCPY(", Top(stk), ", &", glv.s, ", ", FixedSize(d->type), ");");
+            Bump(stk, cat(FixedSize(d->type)));
+        }
+        L("*", szp, " = ", Top(stk), " - (uint8_t *)(", szp, " + 1);");
+    }
+    L("gs_pool_spawn(", poolvar, ", ", thunk, ", ", pkt, ", ", Top(stk), " - ", pkt, ");");
+    PopSc();
+    ind--;
+    L("}");
+    L("gs_pool_wait(", poolvar, ");");
+    MarkReload("*");
 }
 
 // The worker's entry thunk, by name; its body follows once every thread
