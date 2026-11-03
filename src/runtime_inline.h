@@ -4474,10 +4474,18 @@ static void gs_slot_open(int64_t i) {
     if (mprotect(base, gs_dynusable, PROT_READ | PROT_WRITE))
         gs_panic("cannot open a dynamic stack's slot: the system refused its memory");
     /* As for a data stack (gs_os_reserve): most hold a few bytes, which a
-       transparent huge page at the start would commit 2 MB for. */
+       transparent huge page at the start would commit 2 MB for. Past those
+       2 MB a slot holds a large array, which other threads read at random
+       once it is frozen: huge pages there made the join's probe 17%
+       faster (bench/shared_memory/join.goose), where the system gives
+       them only to memory that asks. */
     #ifdef MADV_NOHUGEPAGE
         madvise(base, gs_dynusable < GS_SLOT_HUGE_MIN ? gs_dynusable : GS_SLOT_HUGE_MIN,
                 MADV_NOHUGEPAGE);
+    #endif
+    #ifdef MADV_HUGEPAGE
+        if (gs_dynusable > GS_SLOT_HUGE_MIN)
+            madvise(base + GS_SLOT_HUGE_MIN, gs_dynusable - GS_SLOT_HUGE_MIN, MADV_HUGEPAGE);
     #endif
 #endif
 }
@@ -4826,13 +4834,28 @@ R"GSRT(GS_API gs_res gs_shm_freeze(gs_att *att, gs_dstack *d, int64_t count, int
 }
 
 )GSRT"
+R"GSRT(/* Whether serial names an arena that has an attachment left, which a view
+   of one of its regions through another arena's attachment tells from one
+   released (a region used after its release). */
+static int gs_shm_live(uint64_t serial) {
+    int live = 0;
+    gs_shm_lock();
+    for (int64_t i = 0; i < gs_narenas && !live; i++) live = gs_arenas[i]->serial == serial;
+    gs_shm_unlock();
+    return live;
+}
+
+)GSRT"
 R"GSRT(GS_API void gs_shm_frozen_slow(gs_att *att, gs_res m, int64_t size, const char *file,
                                int line) {
     struct gs_arena *a = att->arena;
     if (!m) gs_failf(file, line, "view of the zero handle, which names no frozen array");
     if (m >> GS_RES_REGION_BITS != a->serial)
-        gs_failf(file, line, "view of a frozen array of another shared arena than the "
-                             "attachment's");
+        gs_failf(file, line, gs_shm_live(m >> GS_RES_REGION_BITS)
+                                 ? "view of a frozen array of another shared arena than the "
+                                   "attachment's"
+                                 : "view of a frozen array of a released shared arena: it was "
+                                   "released when its last attachment ended");
     int64_t i = (int64_t)(m & (((uint64_t)1 << GS_RES_REGION_BITS) - 1));
     gs_shm_lock();
     if (i < 1 || i > a->nregions) {
@@ -5107,6 +5130,9 @@ static const char *gs_shm_lookup(gs_att *att, gs_res m, const char *op, const ch
                                  int line) {
     struct gs_arena *a = att->arena;
     if (!m) gs_failf(file, line, "%s of the zero handle, which names no mapping", op);
+    if (m >> GS_RES_REGION_BITS != a->serial && !gs_shm_live(m >> GS_RES_REGION_BITS))
+        gs_failf(file, line, "%s of a mapping of a released shared arena: it was released when "
+                 "its last attachment ended", op);
     if (m >> GS_RES_REGION_BITS != a->serial)
         gs_failf(file, line, "%s of a mapping of another shared arena than the attachment's",
                  op);
