@@ -15,7 +15,11 @@ each configuration in a fresh process, --reps times, in this order:
 * drain: n messages queued before 1, 2, 4, 8 or 16 consumers start, which
          then take them all (a pool of workers draining a work queue);
 * tput:  1, 2, 4, 8 or 16 producers putting n messages in all while 1, 2,
-         4, 8 or 16 consumers take them, every pair of counts.
+         4, 8 or 16 consumers take them, every pair of counts;
+* sready: rt1 with a select of four types for the qget, one always ready;
+* srt2:  rt2 with select on both sides;
+* ewake, ewake_qget: a C thread signals an event while its owner sleeps
+         in select, or in qget, and times it until the owner has woken.
 
 With --floor it also builds bench/queues_floor.c (Linux) and measures what
 the machine allows a queue without one: a contended atomic, a spinning
@@ -51,9 +55,15 @@ N = {
     "rt2": {16: 20000, 32768: 5000},
     "drain": {16: 400000, 32768: 20000},
     "tput": {16: 400000, 32768: 20000},
+    "sready": {16: 2000000, 32768: 20000},
+    "srt2": {16: 20000, 32768: 5000},
+    "ewake": {16: 5000},
+    "ewake_qget": {16: 5000},
 }
-QUICK = {"rt1": 20000, "burst": 20000, "empty": 20000, "rt2": 500, "drain": 20000, "tput": 20000}
-QUICK_LARGE = {"rt1": 500, "burst": 500, "empty": 20000, "rt2": 100, "drain": 1000, "tput": 1000}
+QUICK = {"rt1": 20000, "burst": 20000, "empty": 20000, "rt2": 500, "drain": 20000, "tput": 20000,
+         "sready": 20000, "srt2": 500, "ewake": 500, "ewake_qget": 500}
+QUICK_LARGE = {"rt1": 500, "burst": 500, "empty": 20000, "rt2": 100, "drain": 1000, "tput": 1000,
+               "sready": 500, "srt2": 100}
 
 
 def configurations(quick, counts):
@@ -70,6 +80,12 @@ def configurations(quick, counts):
     for size in SIZES:
         yield dict(mode="rt2", size=size, n=n("rt2", size))
     for size in SIZES:
+        yield dict(mode="sready", size=size, n=n("sready", size))
+    for size in SIZES:
+        yield dict(mode="srt2", size=size, n=n("srt2", size))
+    yield dict(mode="ewake_qget", size=16, n=n("ewake_qget", 16))
+    yield dict(mode="ewake", size=16, n=n("ewake", 16))
+    for size in SIZES:
         for c in counts:
             yield dict(mode="drain", size=size, consumers=c, n=n("drain", size))
     for size in SIZES:
@@ -80,7 +96,7 @@ def configurations(quick, counts):
 
 def argv_of(binary, cfg):
     mode = cfg["mode"]
-    if mode in ("rt1", "rt2", "burst", "empty"):
+    if mode in ("rt1", "rt2", "burst", "empty", "sready", "srt2", "ewake", "ewake_qget"):
         rest = [cfg["n"], cfg["size"]]
     elif mode == "drain":
         rest = [cfg["consumers"], cfg["n"], cfg["size"]]
@@ -105,6 +121,10 @@ PRIMARY = {
     "rt2": ["ns_p50", "ns_p99", "ns_mean", "ns_min"],
     "drain": ["ns_per_msg", "msgs_per_s", "mb_per_s"],
     "tput": ["ns_per_msg", "msgs_per_s", "mb_per_s"],
+    "sready": ["ns_per_round_trip"],
+    "srt2": ["ns_p50", "ns_p99", "ns_mean", "ns_min"],
+    "ewake": ["ns_p50", "ns_p99", "ns_mean", "ns_min"],
+    "ewake_qget": ["ns_p50", "ns_p99", "ns_mean", "ns_min"],
 }
 
 
@@ -337,12 +357,50 @@ def render(data):
         if e:
             W(f"A `qpoll` of an empty queue (`empty`) costs {e['median']['ns_per_poll']:,.0f} ns.")
             W("")
+    if has("sready") or has("srt2") or has("ewake"):
+        W(select_table(res))
     if has("drain"):
         W(drain_table(res))
     if has("tput"):
         W(tput_tables(res))
     if data.get("floor"):
         W(render_floor(data["floor"]))
+    return "\n".join(out)
+
+
+def select_table(res):
+    out = []
+    W = out.append
+    W("**Waiting on several sources, and events from C.** `sready` is `rt1` with a "
+      "`select` of four types for the `qget`, one always ready, so each call looks at the "
+      "three empty ones first; `srt2` is `rt2` with `select` on both sides; `ewake` times a "
+      "C thread's `gs_event_signal` until the event's owner, asleep in `select`, has woken "
+      "and said so, and `ewake_qget` the same with the owner in `qget`.")
+    W("")
+    W("| | `qget` | `select` |")
+    W("|---|---:|---:|")
+    ns = lambda v: f"{v:,.0f} ns"  # noqa: E731
+    micro = lambda v: f"{us(v)} us"  # noqa: E731
+
+    def med(mode, size, key, fmt):
+        r = find(res, mode=mode, size=size)
+        return fmt(r["median"][key]) if r else ""
+
+    for size in SIZES:
+        name = "16 B" if size == 16 else "32 KB"
+        W(f"| one source ready, {name}, a put and a take | {med('rt1', size, 'ns_per_round_trip', ns)} "
+          f"| {med('sready', size, 'ns_per_round_trip', ns)} |")
+    for size in SIZES:
+        name = "16 B" if size == 16 else "32 KB"
+        W(f"| woken by a message, {name}, round trip p50 / p99 "
+          f"| {med('rt2', size, 'ns_p50', micro)} / {med('rt2', size, 'ns_p99', micro)} "
+          f"| {med('srt2', size, 'ns_p50', micro)} / {med('srt2', size, 'ns_p99', micro)} |")
+    W(f"| woken by an event from C, p50 / p99 / min "
+      f"| {med('ewake_qget', 16, 'ns_p50', micro)} / {med('ewake_qget', 16, 'ns_p99', micro)} / "
+      f"{med('ewake_qget', 16, 'ns_min', micro)} "
+      f"| {med('ewake', 16, 'ns_p50', micro)} / {med('ewake', 16, 'ns_p99', micro)} / "
+      f"{med('ewake', 16, 'ns_min', micro)} |")
+    W("")
     return "\n".join(out)
 
 

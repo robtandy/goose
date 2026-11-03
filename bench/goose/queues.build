@@ -1,0 +1,2 @@
+// The sidecar of queues.goose: the C thread of the event modes.
+c_sources = ["queues_events.c"];

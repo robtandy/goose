@@ -13,9 +13,17 @@
 //   queues drain <c> <n> <size>       n messages queued first, then c
 //                                     consumers take them, as a work
 //                                     queue's jobs are
+//   queues sready <n> <size>          qput then a select of four types, one
+//                                     always ready, n times (rt1's select)
+//   queues srt2 <n> <size>            rt2 with select on both sides
+//   queues ewake <n> 16               a C thread signals an event while its
+//                                     owner sleeps in select, n times: the
+//                                     time until the owner says it woke
+//   queues ewake_qget <n> 16          the same, the owner in qget
 //
 // <size> is 16 or 32768, the bytes of a message. Each run prints one line of
-// name=value fields, with times in nanoseconds.
+// name=value fields, with times in nanoseconds. The C beside this program
+// (queues.build) is the event modes' signalling thread.
 import std;
 import os;
 
@@ -25,6 +33,24 @@ struct Large { seq: i64, from: i64, data: i64[4094] }    // 32768 bytes
 // The answer of a round trip, a type of its own so that it has a queue of
 // its own.
 struct Back<M> { m: M }
+
+// select's sources: the message, and three types that never come, so a
+// call looks at each before the one that is ready (each site starts after
+// the variant it returned last).
+struct Never1 { x: i64 }
+struct Never2 { x: i64 }
+struct Never3 { x: i64 }
+enum Four<M> { Ready { m: M }, N1 { n: Never1 }, N2 { n: Never2 }, N3 { n: Never3 } }
+enum Two<M> { Msg { m: M }, N1 { n: Never1 } }
+
+// The event modes' C: a thread that signals e n times, each once the owner
+// has slept a while after acknowledging the last, timing each signal until
+// the owner acknowledges it.
+struct Tick { n: i64 }
+extern fn qb_events_start(e: resource<event>, n: i64);
+extern fn qb_events_ack();
+extern fn qb_events_join();
+extern fn qb_events_stat(k: i64) -> i64;
 
 // The start signal, a producer's last message, and a consumer's tally.
 struct Go { at: i64 }
@@ -86,6 +112,25 @@ fn empty_polls<M>(n: i64) {
     print("mode=empty n=", n, " ns_per_poll=", took / max(n, 1));
 }
 
+fn select_ready<M>(n: i64) {
+    var m = default<M>();
+    var sum = 0;
+    let start = clock_ns();
+    for i in n {
+        m.seq = i;
+        qput(m);
+        match select<Four<M>>() {
+            Ready r => { sum += r.m.seq; },
+            N1 x => {},
+            N2 x => {},
+            N3 x => {},
+        }
+    }
+    let took = clock_ns() - start;
+    if sum != n * (n - 1) / 2 { fail("a select lost a message"); }
+    print("mode=sready n=", n, " ns_per_round_trip=", took / max(n, 1));
+}
+
 // --- two threads, one message at a time ----------------------------------------
 
 fn echo<M>() {
@@ -99,7 +144,49 @@ fn echo<M>() {
 thread_fn echo_small() { echo<Small>(); }
 thread_fn echo_large() { echo<Large>(); }
 
-fn ping_pong<M, W>(n: i64) {
+fn select_echo<M>() {
+    loop {
+        match select<Two<M>>() {
+            Msg x => {
+                if x.m.seq < 0 { break; }
+                qput(Back<M> { m: x.m });
+            },
+            N1 x => {},
+        }
+    }
+}
+
+thread_fn select_echo_small() { select_echo<Small>(); }
+thread_fn select_echo_large() { select_echo<Large>(); }
+
+// The owner of the event the C thread signals, which says each time it has
+// taken the copy, by select or by qget.
+thread_fn event_owner(n: i64, by_select: bool) {
+    let e = event(Tick { n: 0 });
+    qb_events_start(e, n);
+    for i in n {
+        if by_select {
+            match select<Two<Tick>>() {
+                Msg x => {},
+                N1 x => {},
+            }
+        } else {
+            qget<Tick>();
+        }
+        qb_events_ack();
+    }
+    qb_events_join();
+    event_close(e);
+}
+
+fn event_wake(n: i64, by_select: bool) {
+    thread_wait(thread_spawn(event_owner, n, by_select));
+    print("mode=", if by_select { "ewake" } else { "ewake_qget" }, " n=", n, " ns_mean=",
+          qb_events_stat(3), " ns_p50=", qb_events_stat(0), " ns_p99=", qb_events_stat(1),
+          " ns_min=", qb_events_stat(2));
+}
+
+fn ping_pong<M, W>(n: i64, by_select: bool) {
     let id = thread_spawn(W);
     var m = default<M>();
     // One round trip first, so that the worker is up and waiting.
@@ -111,7 +198,15 @@ fn ping_pong<M, W>(n: i64) {
         m.seq = i;
         let start = clock_ns();
         qput(m);
-        let b = qget<Back<M>>();
+        var b = default<Back<M>>();
+        if by_select {
+            match select<Two<Back<M>>>() {
+                Msg x => { b = x.m; },
+                N1 x => {},
+            }
+        } else {
+            b = qget<Back<M>>();
+        }
         times.push(clock_ns() - start);
         sum += b.m.seq;
     }
@@ -123,8 +218,9 @@ fn ping_pong<M, W>(n: i64) {
     var total = 0;
     for t in times { total += t; }
     let k = max(times.len, 1);
-    print("mode=rt2 n=", n, " ns_mean=", total / k, " ns_p50=", times[times.len / 2], " ns_p90=",
-          times[times.len * 9 / 10], " ns_p99=", times[times.len * 99 / 100], " ns_min=", times[0]);
+    print("mode=", if by_select { "srt2" } else { "rt2" }, " n=", n, " ns_mean=", total / k,
+          " ns_p50=", times[times.len / 2], " ns_p90=", times[times.len * 9 / 10], " ns_p99=",
+          times[times.len * 99 / 100], " ns_min=", times[0]);
 }
 
 // --- many threads ------------------------------------------------------------------
@@ -229,7 +325,7 @@ fn drain<M, C>(consumers: i64, n: i64) {
 fn main() {
     let a = args();
     guard a.len >= 3 else {
-        fail("usage: queues rt1|rt2|burst|empty <n> <size>, tput <p> <c> <n> <size>, drain <c> <n> <size>");
+        fail("usage: queues rt1|rt2|burst|empty|sready|srt2|ewake|ewake_qget <n> <size>, tput <p> <c> <n> <size>, drain <c> <n> <size>");
         return;
     }
     let mode = a[1];
@@ -247,10 +343,20 @@ fn main() {
         if small { empty_polls<Small>(number(a[2])); } else { empty_polls<Large>(number(a[2])); }
     } else if mode == "rt2" && a.len == 4 {
         if small {
-            ping_pong<Small>(number(a[2]), echo_small);
+            ping_pong<Small>(number(a[2]), false, echo_small);
         } else {
-            ping_pong<Large>(number(a[2]), echo_large);
+            ping_pong<Large>(number(a[2]), false, echo_large);
         }
+    } else if mode == "srt2" && a.len == 4 {
+        if small {
+            ping_pong<Small>(number(a[2]), true, select_echo_small);
+        } else {
+            ping_pong<Large>(number(a[2]), true, select_echo_large);
+        }
+    } else if mode == "sready" && a.len == 4 {
+        if small { select_ready<Small>(number(a[2])); } else { select_ready<Large>(number(a[2])); }
+    } else if (mode == "ewake" || mode == "ewake_qget") && a.len == 4 {
+        event_wake(number(a[2]), mode == "ewake");
     } else if mode == "tput" && a.len == 6 {
         let p = number(a[2]);
         let c = number(a[3]);
