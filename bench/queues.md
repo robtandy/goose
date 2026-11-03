@@ -3,7 +3,8 @@
 The runtime's typed queues (spec §11.2) as they are at `b7815879`, measured
 for [the design of addressed inboxes, `select` and faster
 queues](../docs/design/inboxes_select.md), whose §6.1 sets the targets the
-queue work (#6) has to meet against them.
+queue work (#6) has to meet against them; [phase 1](#phase-1-inboxes-select-and-events),
+inboxes, `select` and events (#5), is measured again at the end.
 `bench/goose/queues.goose` is the program, `bench/queues.py` the harness,
 and `bench/queues_floor.c` measures what the machine allows a queue without
 one. Every sample is in [queues_results.json](queues_results.json).
@@ -165,3 +166,118 @@ Neither setting is the better one: the cell that doubles with one halves
 with the other. That, the 14.7 µs `burst` put of fresh pages against the
 59 ns of a warm `malloc` and `free`, and the 0.95 µs of a 32 KB block freed
 on another thread are why the design takes the allocator out of the queue.
+
+## Phase 1: inboxes, select and events
+
+The runtime of [#5](../docs/design/inboxes_select.md) (its §5 and §7):
+thread records, inboxes, a parker per thread, `select` and events, every
+take looking at the caller's inbox before the global queue and handing its
+message over as a view and a token (`gs_qmsg`). The same program and
+harness, with the modes of `select` and of events added; every sample is in
+[queues_phase1_results.json](queues_phase1_results.json).
+
+```sh
+python3 bench/queues.py --exe build/goose --reps 5 --wait-idle 600 \
+    --json bench/queues_phase1_results.json --markdown /tmp/queues.md
+python3 bench/queues.py --render bench/queues_phase1_results.json
+```
+
+Measured 2026-11-03 16:32 UTC at commit `5796bb9e` (goose v2026.3-310-g31ec3d1c-dirty (runtime f33b70bc0d2b)), `clang -O2`, on Neoverse-N1 (16 CPUs), Linux 7.0.0-1014-aws aarch64. Medians of 5 runs, each a process of its own; 1-minute load average 3.79 before and 3.0 after. Other processes kept at most 3.02 CPUs busy while a configuration ran (median 0.08).
+
+**One message at a time.** `rt1` is `qput` then `qget` on one thread; `burst` is n `qput`s and then n `qget`s on one thread; `rt2` is a message to a worker waiting in `qget<T>()` and its answer back, two wake-ups.
+
+| message | rt1 round trip | burst: qput | burst: qget | rt2 round trip, p50 | rt2 p99 | rt2 min |
+|---|---:|---:|---:|---:|---:|---:|
+| 16 B | 54 ns | 67 ns | 29 ns | 14.7 us | 19.0 us | 8.6 us |
+| 32 KB | 4,092 ns | 15,986 ns | 6,496 ns | 26.0 us | 33.3 us | 25.2 us |
+
+A `qpoll` of an empty queue (`empty`) costs 5 ns.
+
+**Waiting on several sources, and events from C.** `sready` is `rt1` with a `select` of four types for the `qget`, one always ready, so each call looks at the three empty ones first; `srt2` is `rt2` with `select` on both sides; `ewake` times a C thread's `gs_event_signal` until the event's owner, asleep in `select`, has woken and said so, and `ewake_qget` the same with the owner in `qget`.
+
+| | `qget` | `select` |
+|---|---:|---:|
+| one source ready, 16 B, a put and a take | 54 ns | 68 ns |
+| one source ready, 32 KB, a put and a take | 4,092 ns | 5,000 ns |
+| woken by a message, 16 B, round trip p50 / p99 | 14.7 us / 19.0 us | 15.2 us / 21.1 us |
+| woken by a message, 32 KB, round trip p50 / p99 | 26.0 us / 33.3 us | 30.4 us / 38.3 us |
+| woken by an event from C, p50 / p99 / min | 7.2 us / 10.5 us / 6.8 us | 7.2 us / 10.1 us / 6.9 us |
+
+**Draining a full queue** (`drain`): n messages queued before the consumers start, then taken by all of them, as a pool of workers takes the jobs main queued. Wall time per message, and the total rate.
+
+| consumers | 1 | 2 | 4 | 8 | 16 |
+|---|---:|---:|---:|---:|---:|
+| 16 B, per message | 47 ns | 221 ns | 269 ns | 289 ns | 293 ns |
+| 16 B, total | 21.3 M/s | 4.5 M/s | 3.7 M/s | 3.5 M/s | 3.4 M/s |
+| 32 KB, per message | 3,213 ns | 1,752 ns | 950 ns | 659 ns | 636 ns |
+| 32 KB, total | 10.2 GB/s | 18.7 GB/s | 34.5 GB/s | 49.7 GB/s | 51.5 GB/s |
+
+**Throughput, 16-byte messages** (`tput`): millions of messages a second through one queue, producers (rows) putting while consumers (columns) take; in brackets, the wall time per message.
+
+| producers \ consumers | 1 | 2 | 4 | 8 | 16 |
+|---|---:|---:|---:|---:|---:|
+| 1 | 1.91 (524 ns) | 1.50 (664 ns) | 0.35 (2,833 ns) | 0.35 (2,838 ns) | 0.35 (2,856 ns) |
+| 2 | 3.59 (278 ns) | 1.94 (516 ns) | 1.28 (781 ns) | 0.60 (1,660 ns) | 0.55 (1,807 ns) |
+| 4 | 3.28 (305 ns) | 2.32 (430 ns) | 1.88 (533 ns) | 1.05 (950 ns) | 0.64 (1,558 ns) |
+| 8 | 2.81 (355 ns) | 2.04 (489 ns) | 1.79 (559 ns) | 1.69 (592 ns) | 1.21 (823 ns) |
+| 16 | 2.59 (386 ns) | 1.84 (543 ns) | 1.82 (550 ns) | 1.81 (552 ns) | 1.68 (595 ns) |
+
+**Throughput, 32 KB messages** (`tput`): GB/s through one queue, producers (rows) putting while consumers (columns) take; in brackets, the wall time per message.
+
+| producers \ consumers | 1 | 2 | 4 | 8 | 16 |
+|---|---:|---:|---:|---:|---:|
+| 1 | 9.90 (3.3 us) | 5.55 (5.9 us) | 5.54 (5.9 us) | 5.50 (6.0 us) | 5.47 (6.0 us) |
+| 2 | 6.31 (5.2 us) | 19.57 (1.7 us) | 10.76 (3.0 us) | 10.57 (3.1 us) | 10.39 (3.2 us) |
+| 4 | 5.04 (6.5 us) | 11.40 (2.9 us) | 32.11 (1.0 us) | 18.97 (1.7 us) | 15.72 (2.1 us) |
+| 8 | 4.61 (7.1 us) | 8.95 (3.7 us) | 18.44 (1.8 us) | 33.66 (1.0 us) | 23.21 (1.4 us) |
+| 16 | 3.55 (9.2 us) | 5.33 (6.1 us) | 7.33 (4.5 us) | 9.99 (3.3 us) | 13.97 (2.3 us) |
+
+**Against master, in one session.** The baseline above was measured the
+day before, and some of its cells move by more than 10% from one session
+to the next (the 32 KB ones above all). So the cells this session puts more
+than 10% past the baseline were measured again, against master's runtime
+built on the same machine, runs of the two interleaved, five each (medians):
+
+| cell | master | phase 1 | |
+|---|---:|---:|---:|
+| `burst`, 16 B, a `qget` | 26 ns | 29 ns | +12% |
+| `burst`, 32 KB, a `qget` | 6,383 ns | 6,409 ns | 0% |
+| `drain`, 16 B, 4 consumers | 236 ns | 220 ns | -7% |
+| `tput`, 16 B, 1 × 1 | 458 ns | 434 ns | -5% |
+| `tput`, 32 KB, 8 × 8 | 969 ns | 945 ns | -2% |
+| `tput`, 32 KB, 16 × 1 | 9,453 ns | 9,296 ns | -2% |
+| `rt1`, 16 B | 52 ns | 54 ns | +4% |
+
+## What phase 1's numbers say
+
+* **A take pays for the take interface, and one cell is 12% slower.** A
+  `qget` of 16 bytes that finds its message costs 3 ns more than master's:
+  the view and the token it writes for the caller to read back (§7 of the
+  design), where master returned one pointer, and the check of the
+  caller's inbox, which is all that a program using none of the new
+  builtins pays. Every other cell is within 10% of master's, most within
+  noise, and an empty `qpoll` costs 5 ns, not 13, as a take skips a queue
+  whose count says it is empty without taking its lock.
+* **Sleeping consumers are woken faster.** Where consumers outnumber
+  producers, a put now sets its claim on one sleeping consumer under the
+  queue's lock and signals it after letting the lock go, so other puts and
+  takes do not wait for the wake-up's system call: `tput` 16 B at 1 × 4
+  went from 5.0 to 2.8 us a message, 2 × 4 from 2.6 to 0.8 and 32 KB at
+  4 × 4 from 5.6 to 1.0. Waking a thread still makes a system call; phase
+  2's parkers make it rare.
+* **`select` with a source ready costs the look at the others.** `sready`
+  takes the ready message after looking at three empty types, a few loads
+  each: 68 ns a put and a take of 16 bytes, against 54 with `qget`. At
+  32 KB it copies the message twice, into the enum and out of it where the
+  `match` binds the payload by value (spec §3.5), and costs 0.9 us more,
+  about the floor's copy of 32 KB in cache; phase 2's copy elisions are
+  for that.
+* **A wake-up by `select` costs what one by `qget` does.** A round trip
+  with `select` on both sides takes 15.2 us at the median against
+  `qget`'s 14.7, the 32 KB ones 30.4 against 26.0 for the copies above.
+* **An event from C wakes its owner in one wake-up.** From a C thread's
+  `gs_event_signal` to the owner, asleep in `select` or in `qget`, saying
+  it is awake takes 7.2 us at the median and 10 us at the 99th
+  percentile, the same either way: a wake-up's system call and the
+  scheduler's, about half of `rt2`'s two (the floor's futex round trip is
+  11.8 us).
