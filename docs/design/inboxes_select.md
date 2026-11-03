@@ -350,7 +350,7 @@ reach is unmapped. *Bounded memory*: what is queued, as limits bound it, plus
 free lists that `trim_memory()` can give back.
 
 **The targets.** `bench/queues.py` decides: no cell of `bench/queues.md` more
-than 10% slower, and these met; phase 1 stays within 10% of it.
+than 10% slower, and these met. Phase 1 did, but for a 16 B `qget`'s 3 ns.
 
 | figure | today | target | what makes it reachable |
 |---|---:|---:|---|
