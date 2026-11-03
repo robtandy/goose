@@ -1952,6 +1952,27 @@ def main():
         else:
             r.ok(f"member stores {f.name}")
     r.show_task(member_stores)
+    # A freeze is the one change of a grow-only array's base (spec 11.4): a
+    # loop pushing through an alias of a dynamic stack's items and freezing
+    # it writes the top it caches back before the freeze, reads it again
+    # after, and starts the header over on the fresh slot.
+    def freeze_reload():
+        f = HERE / "shared" / "shared_freeze_aliases.goose"
+        cfile = gendir / "shared_freeze_aliases-c.c"
+        code, out, err = r.goose("-O1", "-o", cfile, f)
+        if code != 0:
+            r.fail(f"freeze reload {f.name}", out + err)
+            return
+        body = re.search(r"^static gs_res alias_loop_g\w*\([^\n]*\) \{\n(.*?)^\}\n",
+                         cfile.read_text(), re.MULTILINE | re.DOTALL)
+        reload = body and re.search(
+            r"(\S+)->top = (t\d+);\n\s*t\d+ = gs_shm_freeze\([^\n]*\n\s*\2 = \1->top;\n"
+            r"\s*\(\*[^\n]*\)\.base = \(\1\)->top;", body[1])
+        if not reload:
+            r.fail(f"freeze reload {f.name}", body[1] if body else "no alias_loop in the C")
+        else:
+            r.ok(f"freeze reload {f.name}")
+    r.show_task(freeze_reload)
     # A constant array of listed elements is static data at any length, and
     # a long fill keeps its runtime initialization (MAXSTATICELEMS).
     def static_arrays():

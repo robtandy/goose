@@ -1,0 +1,2 @@
+goose runtime error: dynamic stack overflow: the dynamic stack declared at
+shared_dstack_overflow.goose:7 grew past the 1 MB of its slot; ds.items.check_length(n) refuses a length that would, and --stack-reserve or -DGS_STACK_RESERVE raises a slot's size

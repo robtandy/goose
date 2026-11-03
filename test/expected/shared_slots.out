@@ -1,0 +1,6 @@
+200 rounds: 201600
+4 workers froze 400 rows
+asking for 1099511627776 rows
+check_length: false invalid array length
+trim_memory: true
+a dynamic stack on a trimmed slot: 4

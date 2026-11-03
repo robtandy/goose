@@ -1,0 +1,9 @@
+reference: 59813 matches, payloads summing to 29823943647
+W = 1, P = 1: true
+W = 1, P = 4: true
+W = 2, P = 2: true
+W = 2, P = 8: true
+W = 4, P = 4: true
+W = 4, P = 16: true
+W = 16, P = 16: true
+W = 16, P = 64: true

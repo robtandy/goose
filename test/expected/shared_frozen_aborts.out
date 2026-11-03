@@ -1,0 +1,13 @@
+no abort: 1600 matches
+an abort in phase 1:
+  worker 1 aborted: phase 1
+  main goes on: 900 matches
+an abort in phase 2:
+  worker 1 aborted: phase 2
+  main goes on: 1200 matches
+an abort in phase 3:
+  worker 1 aborted: phase 3
+  main goes on: 1200 matches
+a view of the zero handle: false view of the zero handle, which names no frozen array
+a view of a released arena's array: false view of a frozen array of a released shared arena: it was released when its last attachment ended
+an attach of the released arena: false attach of a released shared arena: it was released when its last attachment ended

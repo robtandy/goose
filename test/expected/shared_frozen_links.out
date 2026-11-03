@@ -1,0 +1,4 @@
+100 nodes, keys summing to 49500, 100 by their u8 links; the leftmost 6 levels down, and its parents' links lead up to key 0
+the ring forward: 543
+a worker walks the same: true
+1 node frozen, its link past the end reads key 2

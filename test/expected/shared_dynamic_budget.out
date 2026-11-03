@@ -1,0 +1,7 @@
+frozen 1
+frozen 2
+frozen 3
+the filler returned: false
+every slot of the dynamic budget is in use, live or frozen: 4 slots of 2 GB and a 1 MB gap each, in 8197 MB; --dynamic-budget or -DGS_DYNAMIC_BUDGET raises it
+main's dynamic stack on the slot the worker gave back: 7
+four at once once the arena is gone: 5
