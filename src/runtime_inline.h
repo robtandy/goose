@@ -156,6 +156,13 @@ R"GSRT(/* Configuration; all overridable from the compile command line. */
 #ifndef GS_STACK_BUDGET
 #define GS_STACK_BUDGET (32ull << 40)
 #endif
+/* The address space the dynamic stacks' slots take (§11.4), reserved whole
+   as the first dynamic stack is declared: slots of GS_STACK_RESERVE bytes
+   and a gap of GS_STACK_GAP each, 8,188 of them by default. What the
+   platform refuses is retried with half as many slots, down to one. */
+#ifndef GS_DYNAMIC_BUDGET
+#define GS_DYNAMIC_BUDGET (16ull << 40)
+#endif
 #ifndef GS_STACK_STATS
 #define GS_STACK_STATS 0    /* 1: each thread program reports its stack use as it ends. */
 #endif
@@ -1008,9 +1015,11 @@ R"GSRT(/* Starts the runtime on main's thread: the program's arguments, each
    region's usable reservation and trailing guard gap, the address space
    budgeted for regions over the whole program, and the most regions the
    main program and any one worker hold (the compiler's static counts),
-   which size their registries and give hardware_threads() its cap. */
+   which size their registries and give hardware_threads() its cap; and the
+   address space of the dynamic stacks' slots (GS_DYNAMIC_BUDGET). */
 GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
-                        uint64_t budget, int64_t mainregions, int64_t workerregions);
+                        uint64_t budget, int64_t mainregions, int64_t workerregions,
+                        uint64_t dynbudget);
 /* A fresh region, registered to the calling thread program. */
 GS_API uint8_t *gs_reserve_region(gs_stack *stack);
 /* The calling thread program's stack use, on stderr (GS_STACK_STATS):
@@ -1094,10 +1103,11 @@ GS_API void gs_qlimit(gs_queue *q, int64_t n, const char *file, int line);
 )GSRT"
 R"GSRT(/* ---------------------------------------------------------------------------
    Shared memory (§11.4, docs/design/shared_memory.md), runtime_shared.h: an
-   arena of read-only regions, which any thread that attaches to it reads in
-   place through views. A runtime handle (§3.12) names an arena, its serial
-   in bits 63..24, never reused, with 0 below it, or one of its regions,
-   numbered from 1 in bits 23..0; the zero handle names nothing. */
+   arena of read-only regions, mapped files and frozen arrays, which any
+   thread that attaches to it reads in place through views. A runtime handle
+   (§3.12) names an arena, its serial in bits 63..24, never reused, with 0
+   below it, or one of its regions, numbered from 1 in bits 23..0; the zero
+   handle names nothing. */
 
 )GSRT"
 R"GSRT(#define GS_RES_SERIAL_BITS 40
@@ -1142,11 +1152,52 @@ GS_API const uint8_t *gs_shm_view_slow(gs_att *a, gs_res m, int64_t off, int64_t
                                        int64_t size, int64_t align, const char *type,
                                        const char *file, int line);
 /* After a contained worker's abort, and as any worker ends: the end of every
-   attachment its thread still holds. */
+   attachment and dynamic stack its thread still holds. */
 GS_API void gs_shm_release_held(void);
-/* The arenas and mappings made and released so far, on stderr
-   (GS_SHARED_STATS). */
+/* The arenas, mappings, dynamic stacks and frozen regions made and released
+   so far, on stderr (GS_SHARED_STATS). */
 GS_API void gs_shm_stats(void);
+
+)GSRT"
+R"GSRT(/* A dynamic stack (`var ds = dynamic_stack<T> {};`): the data stack its
+   array, ds.items, lies alone on, a slot of the dynamic budget
+   (GS_DYNAMIC_BUDGET), and that slot's number. The generated code keeps the
+   array's header beside it and hands the stack as the array's: a gs_rref's
+   stk is the descriptor's address, stack being its first member, and no
+   freeze changes it. */
+typedef struct {
+    gs_stack stack;
+    int64_t slot;
+} gs_dstack;
+
+)GSRT"
+R"GSRT(/* A dynamic stack's declaration: a free slot, else a fresh one, with the
+   stack's top at its start, held by the calling thread until the
+   declaration's end (gs_dstack_close), which hands the slot back with its
+   pages, or until a contained worker holding it aborts
+   (gs_shm_release_held). Aborts where every slot is in use. */
+GS_API void gs_dstack_open(gs_dstack *d, const char *file, int line);
+GS_API void gs_dstack_close(gs_dstack *d);
+/* sh.freeze(ds): the `count` elements of `size` bytes on d's slot, a region
+   of a's arena from now on, made read-only where `protect` says (a debug
+   build), and the region's handle. d starts over on a fresh slot, its top at
+   the slot's start; an empty array keeps its slot, and freezes as the empty
+   region. */
+GS_API gs_res gs_shm_freeze(gs_att *a, gs_dstack *d, int64_t count, int64_t size, int protect,
+                            const char *file, int line);
+/* What gs_shm_frozen does where the region is not the one a's cache holds:
+   looks it up into the cache, or aborts. */
+GS_API void gs_shm_frozen_slow(gs_att *a, gs_res r, int64_t size, const char *file, int line);
+
+)GSRT"
+R"GSRT(/* sh.view(r): the whole frozen array r names, of `size`-byte elements: its
+   address, and its length in *len. */
+static const uint8_t *gs_shm_frozen(gs_att *a, gs_res r, int64_t size, int64_t *len,
+                                    const char *file, int line) {
+    if (r != a->res || !r) gs_shm_frozen_slow(a, r, size, file, line);
+    *len = a->len / size;
+    return a->base;
+}
 
 )GSRT"
 R"GSRT(/* view<T>(sh, m, offset, count): `count` T's of `size` bytes from byte
@@ -1204,7 +1255,7 @@ R"GSRT(/* The compiler passes the main program's stack count and the most region
 static void gs_rt_init(int argc, char **argv, int64_t mainstacks, int64_t mainregions,
                        int64_t workerregions) {
     gs_rt_start(argc, argv, GS_STACK_RESERVE, GS_STACK_GAP, GS_STACK_BUDGET, mainregions,
-                workerregions);
+                workerregions, GS_DYNAMIC_BUDGET);
     gs_stack_block(mainstacks);
 }
 
@@ -1875,6 +1926,84 @@ static size_t gs_mapfault_text(char *buf, const gs_mapsnap *s, const uint8_t *at
 }
 
 )GSRT"
+R"GSRT(/* The dynamic stacks' slots (runtime_shared.h), for the fault handlers: one
+   reservation of gs_dynn slots of gs_dynstride bytes, the first
+   gs_dynusable of each a slot's usable part and the rest its guard gap, and
+   each slot's state and its dynamic stack's declaration. A handler finds a
+   slot from an address by arithmetic, with no lock and no search, on any
+   thread. The reservation's sizes and records are set before its base is
+   published (gs_word_store) and never change; a slot's words are stored
+   under the shared registry's lock, and only the thread whose dynamic stack
+   is on a slot, or a defect writing a frozen one, faults in it. */
+enum { GS_SLOT_FRESH, GS_SLOT_LIVE, GS_SLOT_FROZEN, GS_SLOT_FREE };
+typedef struct {
+    uintptr_t state;            /* GS_SLOT_*, a word the handlers load. */
+    uintptr_t file, line;       /* Where its dynamic stack is declared. */
+    uintptr_t committed;        /* Windows: one past the highest page committed. */
+    /* Under the shared registry's lock alone: */
+    int64_t next;               /* The free list's next slot, or -1. */
+    int protect;                /* Frozen read-only (a debug build). */
+    int trimmed;                /* Free, its pages given back (trim_memory). */
+} gs_slot;
+static uintptr_t gs_dynbase;    /* The reservation, 0 before the first dynamic stack. */
+static uintptr_t gs_dynn, gs_dynstride, gs_dynusable;
+static gs_slot *gs_dynslots;
+static uint64_t gs_dynbudget;   /* GS_DYNAMIC_BUDGET, as gs_rt_start was told. */
+
+)GSRT"
+R"GSRT(/* The slot `at` lies in, with *gap set where it lies in the slot's guard
+   gap; or -1. No lock, no call: a fault handler's. */
+static int64_t gs_slotfault(const void *at, int *gap) {
+    uintptr_t base = gs_word_load(&gs_dynbase);
+    if (!base) return -1;
+    uintptr_t off = (uintptr_t)at - base;
+    if (off / gs_dynstride >= gs_dynn) return -1;
+    *gap = off % gs_dynstride >= gs_dynusable;
+    return (int64_t)(off / gs_dynstride);
+}
+
+)GSRT"
+R"GSRT(/* The report of a fault at `at` in slot i, for one write from the handler:
+   a dynamic stack that grew into its slot's gap, as a data stack's overrun
+   is reported, naming its declaration; or a write to a frozen region, which
+   a debug build makes read-only. Fits GS_SLOTFAULT_TEXT. */
+#define GS_SLOTFAULT_TEXT 640
+static size_t gs_slotfault_text(char *buf, int64_t i, const uint8_t *at) {
+    gs_slot *s = &gs_dynslots[i];
+    char *p = gs_text(buf, "goose runtime error: ");
+    if (gs_word_load(&s->state) == GS_SLOT_FROZEN) {
+        p = gs_text(p, "a write to a frozen region, which is read-only, faulted at byte ");
+        p = gs_dec(p, (uint64_t)((uintptr_t)at - (gs_dynbase + (uintptr_t)i * gs_dynstride)));
+        p = gs_text(p, " of it: a defect of the compiler or of C code\n");
+        return (size_t)(p - buf);
+    }
+    const char *file = (const char *)gs_word_load(&s->file);
+    p = gs_text(p, "dynamic stack overflow: the dynamic stack declared at ");
+    p = gs_text(p, file ? file : "?");
+    p = gs_text(p, ":");
+    p = gs_dec(p, (uint64_t)gs_word_load(&s->line));
+    p = gs_text(p, " grew past the ");
+    p = gs_size(p, gs_dynusable);
+    p = gs_text(p, " of its slot; ds.items.check_length(n) refuses a length that would, and "
+                   "--stack-reserve or -DGS_STACK_RESERVE raises a slot's size, up to "
+                   "256 TB\n");
+    return (size_t)(p - buf);
+}
+
+)GSRT"
+R"GSRT(/* Whether the fault at `at` is a dynamic stack's overrun or a write to a
+   frozen region: a live slot's gap, or any part of a frozen slot. Anything
+   else in the reservation is no access the program can make. */
+static int64_t gs_slotfault_ours(const void *at) {
+    int gap = 0;
+    int64_t i = gs_slotfault(at, &gap);
+    if (i < 0) return -1;
+    uintptr_t state = gs_word_load(&gs_dynslots[i].state);
+    if (state == GS_SLOT_FROZEN || (state == GS_SLOT_LIVE && gap)) return i;
+    return -1;
+}
+
+)GSRT"
 R"GSRT(GS_API GS_NORETURN void gs_stack_overflow(const void *at) {
     for (long i = 0; i < gs_nregions; i++) {
         const gs_region *r = &gs_regions[i];
@@ -1883,6 +2012,15 @@ R"GSRT(GS_API GS_NORETURN void gs_stack_overflow(const void *at) {
             fwrite(msg, 1, gs_overflow_text(msg, r), stderr);
             gs_end(1);
         }
+    }
+    /* A dynamic stack's top: in its slot's usable part, or where its gap
+       starts. */
+    int gap = 0;
+    int64_t si = gs_slotfault(at, &gap);
+    if (si >= 0 && gs_word_load(&gs_dynslots[si].state) == GS_SLOT_LIVE) {
+        char msg[GS_SLOTFAULT_TEXT];
+        fwrite(msg, 1, gs_slotfault_text(msg, si, (const uint8_t *)at), stderr);
+        gs_end(1);
     }
     gs_panic("data stack overflow");
 }
@@ -1989,6 +2127,38 @@ R"GSRT(static LONG WINAPI gs_fault_filter(EXCEPTION_POINTERS *ep) {
             DWORD written;
             WriteFile(GetStdHandle(STD_ERROR_HANDLE), msg, (DWORD)gs_overflow_text(msg, r),
                       &written, NULL);
+            ExitProcess(1);
+        }
+    }
+    /* A dynamic stack's slot (runtime_shared.h): committed on touch in its
+       usable part as a data stack is, which only its own thread grows; or
+       an overrun into its gap, or a write to a frozen slot. */
+    int gap = 0;
+    int64_t si = gs_slotfault(hit, &gap);
+    if (si >= 0) {
+        gs_slot *s = &gs_dynslots[si];
+        uint8_t *base = (uint8_t *)(gs_dynbase + (uintptr_t)si * gs_dynstride);
+        if (!gap && gs_word_load(&s->state) == GS_SLOT_LIVE) {
+            uint8_t *page = (uint8_t *)((size_t)hit & ~(gs_page_size - 1));
+            size_t n = GS_COMMIT_CHUNK;
+            if (page + n > base + gs_dynusable) n = (size_t)(base + gs_dynusable - page);
+            if (VirtualAlloc(page, n, MEM_COMMIT, PAGE_READWRITE)) {
+                if ((uintptr_t)(page + n) > gs_word_load(&s->committed))
+                    gs_word_store(&s->committed, (uintptr_t)(page + n));
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+            static const char nomem[] =
+                "goose runtime error: out of memory committing a dynamic stack\n";
+            DWORD written;
+            WriteFile(GetStdHandle(STD_ERROR_HANDLE), nomem, sizeof(nomem) - 1, &written,
+                      NULL);
+            ExitProcess(1);
+        }
+        if (gs_slotfault_ours(hit) >= 0) {
+            char msg[GS_SLOTFAULT_TEXT];
+            DWORD written;
+            WriteFile(GetStdHandle(STD_ERROR_HANDLE), msg,
+                      (DWORD)gs_slotfault_text(msg, si, hit), &written, NULL);
             ExitProcess(1);
         }
     }
@@ -2110,6 +2280,15 @@ R"GSRT(static void gs_fault_handler(int sig, siginfo_t *info, void *ctx) {
     if (gs_mapfault(hit, &m)) {
         char msg[GS_MAPFAULT_TEXT];
         ssize_t w = write(2, msg, gs_mapfault_text(msg, &m, hit, sig == SIGSEGV));
+        (void)w;
+        _exit(1);
+    }
+    /* A dynamic stack's overrun into its slot's gap, or a write to a frozen
+       slot (runtime_shared.h). */
+    int64_t si = gs_slotfault_ours(hit);
+    if (si >= 0) {
+        char msg[GS_SLOTFAULT_TEXT];
+        ssize_t w = write(2, msg, gs_slotfault_text(msg, si, hit));
         (void)w;
         _exit(1);
     }
@@ -2327,7 +2506,13 @@ R"GSRT(   Eager on purpose: Windows decommits, which returns the commit charge a
 R"GSRT(   Only generated code may call this, through os.trim_memory, whose callers
    publish their cached tops first (SFunction::readsalltops). C reached
    from Goose through another extern must not: tops cached by the Goose
-   frames above it would still be stale, and live pages above them lost. */
+   frames above it would still be stale, and live pages above them lost.
+
+)GSRT"
+R"GSRT(   The dynamic stacks' free slots, which every thread's releases share, go
+   back too (gs_slots_trim, runtime_shared.h): no thread can see their
+   pages, and a slot taken again faults in fresh ones. */
+static int gs_slots_trim(void);
 GS_API uint8_t gs_trim_memory(void) {
     uintptr_t page = (uintptr_t)gs_page_size;
     int ok = 1;
@@ -2363,6 +2548,7 @@ GS_API uint8_t gs_trim_memory(void) {
         if (madvise((void *)start, len, MADV_DONTNEED)) ok = 0;
 #endif
     }
+    if (!gs_slots_trim()) ok = 0;
     return (uint8_t)ok;
 }
 
@@ -3179,7 +3365,8 @@ R"GSRT(GS_API int64_t gs_scan_pair(const uint8_t *p, int64_t n, const void *a, i
 
 )GSRT"
 R"GSRT(GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
-                        uint64_t budget, int64_t mainregions, int64_t workerregions) {
+                        uint64_t budget, int64_t mainregions, int64_t workerregions,
+                        uint64_t dynbudget) {
     gs_argc = argc;
     gs_argv = argv;
     /* A region's usable part is whole pages: the guard gap behind it has to
@@ -3192,6 +3379,7 @@ R"GSRT(GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t
     gs_region_usable = gs_region_reserve = (size_t)reserve;
     gs_region_gap = (size_t)gap;
     gs_stack_budget = budget;
+    gs_dynbudget = dynbudget;
     gs_mainregions = mainregions;
     gs_workerregions = workerregions;
     /* The workers the budget holds beside the main program, each at the
@@ -4014,20 +4202,23 @@ R"GSRT(#endif  /* GS_NEED_THREADS */
     ) },
     { "runtime_shared.h", string_view(
 R"GSRT(/* Goose runtime — shared memory (§11.4, docs/design/shared_memory.md), as
-   runtime.h declares it: the arenas, the attachments that count them, and
-   the files mapped into them, which every thread attached to an arena reads
-   in place. Follows runtime_threads.h. Like the queues, an arena is runtime
-   memory outside every data stack.
+   runtime.h declares it: the arenas, the attachments that count them, the
+   files mapped into them and the arrays frozen into them, which every
+   thread attached to an arena reads in place; and the dynamic stacks those
+   arrays are built on, each alone on a slot of one reservation, the
+   dynamic budget. Follows runtime_threads.h. Like the queues, an arena is
+   runtime memory outside every data stack.
 
 )GSRT"
 R"GSRT(   The registry holds every arena that has an attachment left, by serial,
-   under one lock, which also guards each arena's table of regions: attach
-   looks a serial up under it, and map_file appends a region under it, its
-   system calls made before. A view takes it only for a region its
-   attachment has not looked up yet. The count of attachments is atomic,
-   with acquire-release order, so that whoever ends the last attachment and
-   releases the arena sees every view of it done. Without threads there is
-   one thread, and neither a lock nor atomics. */
+   under one lock, which also guards each arena's table of regions and the
+   slots' free list: attach looks a serial up under it, and map_file and
+   freeze append a region under it, their system calls made outside it. A
+   view takes it only for a region its attachment has not looked up yet.
+   The count of attachments is atomic, with acquire-release order, so that
+   whoever ends the last attachment and releases the arena sees every view
+   of it done. Without threads there is one thread, and neither a lock nor
+   atomics. */
 
 )GSRT"
 R"GSRT(#ifndef _WIN32
@@ -4080,8 +4271,10 @@ static int64_t gs_shm_count_(int64_t *p, int64_t n) {
 
 )GSRT"
 R"GSRT(/* A region of an arena: a mapped file, or one read into memory of the
-   runtime's own where the system does not map it. An empty file maps no
-   memory, and is a view's base all the same. */
+   runtime's own where the system does not map it; or a frozen array, of
+   `elemsize`-byte elements, on the slot that was its dynamic stack's. An
+   empty file maps no memory, and an empty array takes no slot; each is a
+   view's base all the same. */
 typedef struct {
     const uint8_t *base;
     int64_t len;
@@ -4090,6 +4283,8 @@ typedef struct {
     size_t memlen;
     int copied;                 /* Read into anonymous memory, not mapped. */
     int64_t fault;              /* Its entry for the fault handlers, or -1. */
+    int64_t elemsize;           /* A frozen array's element size; 0 for a mapping. */
+    int64_t slot;               /* A frozen array's slot, or -1. */
 #ifdef _WIN32
     HANDLE file, mapping;
 #endif
@@ -4113,27 +4308,47 @@ static struct gs_arena **gs_arenas;
 static int64_t gs_narenas, gs_caparenas;
 static uint64_t gs_shm_next = 1;
 static int64_t gs_shm_made, gs_shm_released, gs_shm_mapped, gs_shm_unmapped;
+static int64_t gs_dyn_opened, gs_dyn_closed, gs_dyn_frozen, gs_dyn_thawed;
+static int64_t gs_dyn_fresh, gs_dyn_reused;
 
 )GSRT"
-R"GSRT(/* The calling thread's attachments, innermost last: a declaration pushes
-   its arena and its ends pop it (they nest, as scopes do), and after a
-   contained worker's abort, which skips the ends, gs_shm_release_held ends
-   the rest. Runtime memory, not the frames the attachments lie in, which an
-   abort leaves behind. */
-static GS_TLS struct gs_arena **gs_shm_held;
+R"GSRT(/* The calling thread's attachments and dynamic stacks, innermost last: a
+   declaration pushes its arena or its slot, a freeze swaps the slot, and
+   its ends pop it (they nest, as scopes do), and after a contained worker's
+   abort, which skips the ends, gs_shm_release_held ends the rest. Runtime
+   memory, not the frames the declarations lie in, which an abort leaves
+   behind. */
+typedef struct {
+    struct gs_arena *arena;     /* An attachment's; NULL for a dynamic stack. */
+    int64_t slot;               /* A dynamic stack's slot; -1 for an attachment. */
+} gs_shm_holding;
+static GS_TLS gs_shm_holding *gs_shm_held;
 static GS_TLS int64_t gs_shm_nheld, gs_shm_capheld;
 
 )GSRT"
-R"GSRT(static void gs_shm_hold(struct gs_arena *a) {
+R"GSRT(static void gs_shm_hold(struct gs_arena *a, int64_t slot) {
     if (gs_shm_nheld == gs_shm_capheld) {
         int64_t cap = gs_shm_capheld ? gs_shm_capheld * 2 : 8;
-        struct gs_arena **p =
-            (struct gs_arena **)realloc(gs_shm_held, (size_t)cap * sizeof(*p));
-        if (!p) gs_panic("out of memory attaching to a shared arena");
+        gs_shm_holding *p = (gs_shm_holding *)realloc(gs_shm_held, (size_t)cap * sizeof(*p));
+        if (!p) gs_panic("out of memory holding a shared arena or a dynamic stack");
         gs_shm_held = p;
         gs_shm_capheld = cap;
     }
-    gs_shm_held[gs_shm_nheld++] = a;
+    gs_shm_held[gs_shm_nheld].arena = a;
+    gs_shm_held[gs_shm_nheld].slot = slot;
+    gs_shm_nheld++;
+}
+
+)GSRT"
+R"GSRT(/* n in decimal, its digits in groups of three, in buf. */
+static void gs_shm_thousands(char *buf, int64_t n) {
+    char d[32];
+    int k = snprintf(d, sizeof d, "%lld", (long long)n), j = 0;
+    for (int i = 0; i < k; i++) {
+        if (i && (k - i) % 3 == 0) buf[j++] = ',';
+        buf[j++] = d[i];
+    }
+    buf[j] = 0;
 }
 
 )GSRT"
@@ -4181,20 +4396,232 @@ static void gs_shm_unmap(gs_shm_region *r) {
 }
 
 )GSRT"
+R"GSRT(/* ---------------------------------------------------------------------------
+   The dynamic budget (§11.4): one reservation of N slots, each of R usable
+   bytes, a data stack's reservation (GS_STACK_RESERVE), and a guard gap of
+   G (GS_STACK_GAP), where N is what B (GS_DYNAMIC_BUDGET) holds beside the
+   slots' records, N * (R + G) + H <= B. The first dynamic stack reserves it,
+   inaccessible; a slot is opened read-write as a dynamic stack first takes
+   it (on Windows its pages are committed on touch, as a data stack's are).
+   A slot is fresh, live (a dynamic stack's), frozen (a region of an arena)
+   or free, its pages kept: a dynamic stack takes a free slot before a fresh
+   one, so arenas built and dropped over and over fault no pages after the
+   first round, and no slot is unmapped while the program runs, which keeps
+   every slot of the budget for reuse. trim_memory() gives the free slots'
+   pages back. The lock guards the free list, the count of slots opened, and
+   each slot's state, which the fault handlers read as words
+   (runtime_impl.h). */
+
+)GSRT"
+R"GSRT(#define GS_SLOT_HUGE_MIN (2u << 20)
+
+)GSRT"
+R"GSRT(static uint8_t *gs_slot_base(int64_t i) {
+    return (uint8_t *)(gs_dynbase + (uintptr_t)i * gs_dynstride);
+}
+
+)GSRT"
+R"GSRT(/* Under the lock, by the first dynamic stack: the reservation. Where the
+   platform refuses it, half as many slots, down to one. */
+static int64_t gs_dynnext;          /* Slots below it have been opened. */
+static int64_t gs_dynfree = -1;     /* The free list, latest first. */
+
+)GSRT"
+R"GSRT(static void *gs_slots_os_reserve(size_t size) {
+#ifdef _WIN32
+    return VirtualAlloc(NULL, size, MEM_RESERVE, PAGE_READWRITE);
+#else
+    void *p = mmap(NULL, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS
+                   #ifdef MAP_NORESERVE
+                       | MAP_NORESERVE
+                   #endif
+                   , -1, 0);
+    return p == MAP_FAILED ? NULL : p;
+#endif
+}
+
+)GSRT"
+R"GSRT(static int gs_slots_reserve(void) {
+    if (gs_dynbase) return 1;
+    uint64_t stride = (uint64_t)gs_region_reserve + (uint64_t)gs_region_gap;
+    uint64_t n = stride ? gs_dynbudget / stride : 0;
+    while (n && n * (stride + sizeof(gs_slot)) > gs_dynbudget) n--;
+    if (!n) return 0;
+    void *p = NULL;
+    for (;;) {
+        p = gs_slots_os_reserve((size_t)(n * stride));
+        if (p) break;
+        if (n == 1) gs_panic("cannot reserve address space for a dynamic stack's slot");
+        n /= 2;
+    }
+    gs_dynslots = (gs_slot *)calloc((size_t)n, sizeof(gs_slot));
+    if (!gs_dynslots) gs_panic("out of memory reserving the dynamic stacks' slots");
+    for (uint64_t i = 0; i < n; i++) gs_dynslots[i].next = -1;
+    gs_dynn = (uintptr_t)n;
+    gs_dynstride = (uintptr_t)stride;
+    gs_dynusable = (uintptr_t)gs_region_reserve;
+    gs_word_store(&gs_dynbase, (uintptr_t)p);
+    return 1;
+}
+
+)GSRT"
+R"GSRT(/* Opens fresh slot i read-write, which no other thread can reach yet. */
+static void gs_slot_open(int64_t i) {
+    uint8_t *base = gs_slot_base(i);
+#ifdef _WIN32
+    gs_word_store(&gs_dynslots[i].committed, (uintptr_t)base);
+#else
+    if (mprotect(base, gs_dynusable, PROT_READ | PROT_WRITE))
+        gs_panic("cannot open a dynamic stack's slot: the system refused its memory");
+    /* As for a data stack (gs_os_reserve): most hold a few bytes, which a
+       transparent huge page at the start would commit 2 MB for. */
+    #ifdef MADV_NOHUGEPAGE
+        madvise(base, gs_dynusable < GS_SLOT_HUGE_MIN ? gs_dynusable : GS_SLOT_HUGE_MIN,
+                MADV_NOHUGEPAGE);
+    #endif
+#endif
+}
+
+)GSRT"
+R"GSRT(/* Under the lock: a free slot, else a fresh one, which *open says the
+   caller opens (gs_slot_open) once the lock is let go; -1 where all N are
+   live or frozen. */
+static int64_t gs_slot_take(int *open) {
+    *open = 0;
+    int64_t i = gs_dynfree;
+    if (i >= 0) {
+        gs_dynfree = gs_dynslots[i].next;
+        gs_dynslots[i].next = -1;
+        gs_dynslots[i].trimmed = 0;
+        gs_dyn_reused++;
+        return i;
+    }
+    if (gs_dynnext >= (int64_t)gs_dynn) return -1;
+    *open = 1;
+    gs_dyn_fresh++;
+    return gs_dynnext++;
+}
+
+)GSRT"
+R"GSRT(/* Under the lock: slot i on the free list, its pages kept. */
+static void gs_slot_free(int64_t i) {
+    gs_slot *s = &gs_dynslots[i];
+    gs_word_store(&s->state, GS_SLOT_FREE);
+    s->next = gs_dynfree;
+    gs_dynfree = i;
+}
+
+)GSRT"
+R"GSRT(/* Slot i, now its dynamic stack's, declared at file:line. */
+static void gs_slot_live(int64_t i, const char *file, int line) {
+    gs_slot *s = &gs_dynslots[i];
+    gs_word_store(&s->file, (uintptr_t)file);
+    gs_word_store(&s->line, (uintptr_t)line);
+    gs_word_store(&s->state, GS_SLOT_LIVE);
+}
+
+)GSRT"
+R"GSRT(/* A frozen slot's protection, a debug build's: read-only, or read-write
+   again as its arena goes. On Windows only the committed pages, which are
+   all its array wrote; past them nothing is committed, and a write faults
+   all the same. */
+static void gs_slot_protect(int64_t i, int readonly) {
+    uint8_t *base = gs_slot_base(i);
+#ifdef _WIN32
+    uintptr_t end = gs_word_load(&gs_dynslots[i].committed);
+    DWORD old;
+    if (end > (uintptr_t)base &&
+        !VirtualProtect(base, (size_t)(end - (uintptr_t)base),
+                        readonly ? PAGE_READONLY : PAGE_READWRITE, &old))
+        gs_panic("cannot protect a frozen region");
+#else
+    if (mprotect(base, gs_dynusable, readonly ? PROT_READ : PROT_READ | PROT_WRITE))
+        gs_panic("cannot protect a frozen region");
+#endif
+}
+
+)GSRT"
+R"GSRT(/* The abort where every slot is live or frozen: the budget, the slot's
+   sizes, the count and what raises it. */
+static GS_NORETURN void gs_slots_full(const char *file, int line) {
+    char b[40], r[40], g[40], n[32];
+    *gs_size(b, gs_dynbudget) = 0;
+    *gs_size(r, gs_region_reserve) = 0;
+    *gs_size(g, gs_region_gap) = 0;
+    gs_shm_thousands(n, (int64_t)gs_dynn);
+    if (!gs_dynn)
+        gs_failf(file, line, "the dynamic budget of %s holds no slot of %s and a %s gap, which "
+                 "a dynamic stack takes; --dynamic-budget or -DGS_DYNAMIC_BUDGET raises it",
+                 b, r, g);
+    gs_failf(file, line, "every slot of the dynamic budget is in use, live or frozen: %s slot%s "
+             "of %s and a %s gap each, in %s; --dynamic-budget or -DGS_DYNAMIC_BUDGET raises it",
+             n, gs_dynn == 1 ? "" : "s", r, g, b);
+}
+
+)GSRT"
+R"GSRT(/* The free slots' pages, given back (trim_memory, runtime_impl.h): the
+   slots stay reserved and open, and the next owner of one faults in fresh
+   pages. 0 where the system refused. */
+static int gs_slots_trim(void) {
+    int ok = 1;
+    gs_shm_lock();
+    for (int64_t i = gs_dynfree; i >= 0; i = gs_dynslots[i].next) {
+        gs_slot *s = &gs_dynslots[i];
+        if (s->trimmed) continue;
+        uint8_t *base = gs_slot_base(i);
+#ifdef _WIN32
+        uintptr_t end = gs_word_load(&s->committed);
+        if (end > (uintptr_t)base) {
+            if (VirtualFree(base, (size_t)(end - (uintptr_t)base), MEM_DECOMMIT))
+                gs_word_store(&s->committed, (uintptr_t)base);
+            else
+                ok = 0;
+        }
+#elif defined(__APPLE__)
+        if (mmap(base, gs_dynusable, PROT_READ | PROT_WRITE,
+                 MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) == MAP_FAILED)
+            ok = 0;
+#else
+        if (madvise(base, gs_dynusable, MADV_DONTNEED)) ok = 0;
+#endif
+        s->trimmed = 1;
+    }
+    gs_shm_unlock();
+    return ok;
+}
+
+)GSRT"
 R"GSRT(/* The arena whose last attachment just ended: out of the registry, so that
-   no attach finds it, its files unmapped, then gone. */
+   no attach finds it, its frozen slots free, its files unmapped, then gone.
+   No attachment is left, so no view either, and its regions are this
+   thread's alone: a debug build's protection comes off before the lock is
+   taken. */
 static void gs_shm_release(struct gs_arena *a) {
+    for (int64_t i = 1; i <= a->nregions; i++)
+        if (a->regions[i].slot >= 0 && gs_dynslots[a->regions[i].slot].protect) {
+            gs_slot_protect(a->regions[i].slot, 0);
+            gs_dynslots[a->regions[i].slot].protect = 0;
+        }
     gs_shm_lock();
     for (int64_t i = 0; i < gs_narenas; i++)
         if (gs_arenas[i] == a) {
             gs_arenas[i] = gs_arenas[--gs_narenas];
             break;
         }
-    for (int64_t i = 1; i <= a->nregions; i++) gs_shm_clear_fault(a->regions[i].fault);
+    for (int64_t i = 1; i <= a->nregions; i++) {
+        gs_shm_region *r = &a->regions[i];
+        if (r->elemsize) {
+            if (r->slot >= 0) gs_slot_free(r->slot);
+            gs_dyn_thawed++;
+        } else {
+            gs_shm_clear_fault(r->fault);
+            gs_shm_unmapped++;
+        }
+    }
     gs_shm_released++;
-    gs_shm_unmapped += a->nregions;
     gs_shm_unlock();
-    for (int64_t i = 1; i <= a->nregions; i++) gs_shm_unmap(&a->regions[i]);
+    for (int64_t i = 1; i <= a->nregions; i++)
+        if (!a->regions[i].elemsize) gs_shm_unmap(&a->regions[i]);
     free(a->regions);
     free(a);
 }
@@ -4229,7 +4656,7 @@ R"GSRT(GS_API void gs_shm_new(gs_att *att, const char *file, int line) {
     gs_arenas[gs_narenas++] = a;
     gs_shm_made++;
     gs_shm_unlock();
-    gs_shm_hold(a);
+    gs_shm_hold(a, -1);
     att->arena = a;
     att->res = 0;
     att->base = NULL;
@@ -4259,7 +4686,7 @@ R"GSRT(GS_API void gs_shm_attach(gs_att *att, gs_res h, const char *file, int li
     if (!a)
         gs_failf(file, line, "attach of a released shared arena: it was released when its "
                              "last attachment ended");
-    gs_shm_hold(a);
+    gs_shm_hold(a, -1);
     att->arena = a;
     att->res = 0;
     att->base = NULL;
@@ -4269,8 +4696,8 @@ R"GSRT(GS_API void gs_shm_attach(gs_att *att, gs_res h, const char *file, int li
 )GSRT"
 R"GSRT(GS_API void gs_shm_detach(gs_att *att) {
     struct gs_arena *a = att->arena;
-    if (!gs_shm_nheld || gs_shm_held[gs_shm_nheld - 1] != a)
-        gs_panic("shared arena attachments ended out of order");
+    if (!gs_shm_nheld || gs_shm_held[gs_shm_nheld - 1].arena != a)
+        gs_panic("shared arena attachments and dynamic stacks ended out of order");
     gs_shm_nheld--;
     att->arena = NULL;
     att->res = 0;
@@ -4278,8 +4705,21 @@ R"GSRT(GS_API void gs_shm_detach(gs_att *att) {
 }
 
 )GSRT"
+R"GSRT(/* An unfrozen slot's dynamic stack ended: the slot free, its pages kept. */
+static void gs_dstack_end(int64_t slot) {
+    gs_shm_lock();
+    gs_slot_free(slot);
+    gs_dyn_closed++;
+    gs_shm_unlock();
+}
+
+)GSRT"
 R"GSRT(GS_API void gs_shm_release_held(void) {
-    while (gs_shm_nheld) gs_shm_end(gs_shm_held[--gs_shm_nheld]);
+    while (gs_shm_nheld) {
+        gs_shm_holding h = gs_shm_held[--gs_shm_nheld];
+        if (h.arena) gs_shm_end(h.arena);
+        else gs_dstack_end(h.slot);
+    }
     free(gs_shm_held);
     gs_shm_held = NULL;
     gs_shm_capheld = 0;
@@ -4289,6 +4729,125 @@ R"GSRT(GS_API void gs_shm_release_held(void) {
 )GSRT"
 R"GSRT(GS_API gs_res gs_shm_handle(const gs_att *att) {
     return (gs_res)(att->arena->serial << GS_RES_REGION_BITS);
+}
+
+)GSRT"
+R"GSRT(/* A slot for a dynamic stack declared at file:line, taken under the lock
+   and opened outside it; or the abort where none is left. The first
+   reserves the budget. */
+static int64_t gs_dstack_slot(const char *file, int line) {
+    int open = 0;
+    gs_shm_lock();
+    int64_t i = gs_slots_reserve() ? gs_slot_take(&open) : -1;
+    gs_shm_unlock();
+    if (i < 0) gs_slots_full(file, line);
+    if (open) gs_slot_open(i);
+    gs_slot_live(i, file, line);
+    return i;
+}
+
+)GSRT"
+R"GSRT(GS_API void gs_dstack_open(gs_dstack *d, const char *file, int line) {
+    int64_t i = gs_dstack_slot(file, line);
+    gs_shm_hold(NULL, i);
+    gs_shm_lock();
+    gs_dyn_opened++;
+    gs_shm_unlock();
+    d->slot = i;
+    d->stack.top = gs_slot_base(i);
+}
+
+)GSRT"
+R"GSRT(GS_API void gs_dstack_close(gs_dstack *d) {
+    if (!gs_shm_nheld || gs_shm_held[gs_shm_nheld - 1].arena ||
+        gs_shm_held[gs_shm_nheld - 1].slot != d->slot)
+        gs_panic("shared arena attachments and dynamic stacks ended out of order");
+    gs_shm_nheld--;
+    gs_dstack_end(d->slot);
+    d->slot = -1;
+}
+
+)GSRT"
+R"GSRT(GS_API gs_res gs_shm_freeze(gs_att *att, gs_dstack *d, int64_t count, int64_t size, int protect,
+                            const char *file, int line) {
+    struct gs_arena *a = att->arena;
+    int64_t old = d->slot, bytes = count * size;
+    gs_shm_region r;
+    memset(&r, 0, sizeof r);
+    r.fault = -1;
+    r.elemsize = size;
+    r.slot = bytes ? old : -1;
+    r.base = bytes ? gs_slot_base(old) : gs_shm_empty;
+    r.len = bytes;
+    int64_t fresh = -1;
+    int open = 0;
+    gs_shm_lock();
+    if (a->nregions >= GS_SHM_MAX_REGIONS) {
+        gs_shm_unlock();
+        char most[32];
+        gs_shm_thousands(most, GS_SHM_MAX_REGIONS);
+        gs_failf(file, line, "a shared arena holds at most %s regions", most);
+    }
+    /* Taken first, so that an abort for want of one changes nothing. */
+    if (bytes && (fresh = gs_slot_take(&open)) < 0) {
+        gs_shm_unlock();
+        gs_slots_full(file, line);
+    }
+    if (a->nregions + 1 >= a->capregions) {
+        int64_t cap = a->capregions ? a->capregions * 2 : 8;
+        gs_shm_region *p = (gs_shm_region *)realloc(a->regions, (size_t)cap * sizeof(*p));
+        if (!p) gs_panic("out of memory freezing an array");
+        a->regions = p;
+        a->capregions = cap;
+    }
+    if (bytes) {
+        gs_word_store(&gs_dynslots[old].state, GS_SLOT_FROZEN);
+        gs_dynslots[old].protect = protect != 0;
+    }
+    a->regions[++a->nregions] = r;
+    gs_res h = (gs_res)(a->serial << GS_RES_REGION_BITS | (uint64_t)a->nregions);
+    gs_dyn_frozen++;
+    gs_shm_unlock();
+    if (!bytes) return h;
+    /* The region is the arena's, which this attachment keeps, so it stays
+       while its protection goes on. */
+    if (protect) gs_slot_protect(old, 1);
+    if (open) gs_slot_open(fresh);
+    gs_slot_live(fresh, (const char *)gs_word_load(&gs_dynslots[old].file),
+                 (int)gs_word_load(&gs_dynslots[old].line));
+    for (int64_t k = gs_shm_nheld - 1; k >= 0; k--)
+        if (!gs_shm_held[k].arena && gs_shm_held[k].slot == old) {
+            gs_shm_held[k].slot = fresh;
+            break;
+        }
+    d->slot = fresh;
+    d->stack.top = gs_slot_base(fresh);
+    return h;
+}
+
+)GSRT"
+R"GSRT(GS_API void gs_shm_frozen_slow(gs_att *att, gs_res m, int64_t size, const char *file,
+                               int line) {
+    struct gs_arena *a = att->arena;
+    if (!m) gs_failf(file, line, "view of the zero handle, which names no frozen array");
+    if (m >> GS_RES_REGION_BITS != a->serial)
+        gs_failf(file, line, "view of a frozen array of another shared arena than the "
+                             "attachment's");
+    int64_t i = (int64_t)(m & (((uint64_t)1 << GS_RES_REGION_BITS) - 1));
+    gs_shm_lock();
+    if (i < 1 || i > a->nregions) {
+        gs_shm_unlock();
+        gs_panic("a handle names a region past its shared arena's count");
+    }
+    gs_shm_region *r = &a->regions[i];
+    if (r->elemsize != size) {
+        gs_shm_unlock();
+        gs_panic("a frozen array's handle names a region of another kind");
+    }
+    att->res = m;
+    att->base = r->base;
+    att->len = r->len;
+    gs_shm_unlock();
 }
 
 )GSRT"
@@ -4403,18 +4962,6 @@ static int gs_shm_copy_in(int fd, int64_t hint, gs_shm_region *r) {
 #endif
 
 )GSRT"
-R"GSRT(/* n in decimal, its digits in groups of three, in buf. */
-static void gs_shm_thousands(char *buf, int64_t n) {
-    char d[32];
-    int k = snprintf(d, sizeof d, "%lld", (long long)n), j = 0;
-    for (int i = 0; i < k; i++) {
-        if (i && (k - i) % 3 == 0) buf[j++] = ',';
-        buf[j++] = d[i];
-    }
-    buf[j] = 0;
-}
-
-)GSRT"
 R"GSRT(GS_API uint8_t gs_shm_map_file(gs_att *att, const uint8_t *path, int64_t pathlen, gs_res *m,
                                uint8_t **why, int64_t *whylen, const char *file, int line) {
     *m = 0;
@@ -4426,6 +4973,7 @@ R"GSRT(GS_API uint8_t gs_shm_map_file(gs_att *att, const uint8_t *path, int64_t 
     gs_shm_region r;
     memset(&r, 0, sizeof r);
     r.fault = -1;
+    r.slot = -1;
     r.path = (char *)malloc((size_t)pathlen + 1);
     if (!r.path) gs_panic("out of memory mapping a file");
     if (pathlen) memcpy(r.path, path, (size_t)pathlen);
@@ -4569,6 +5117,10 @@ static const char *gs_shm_lookup(gs_att *att, gs_res m, const char *op, const ch
         gs_panic("a handle names a region past its shared arena's count");
     }
     gs_shm_region *r = &a->regions[i];
+    if (r->elemsize) {
+        gs_shm_unlock();
+        gs_panic("a mapping's handle names a region of another kind");
+    }
     att->res = m;
     att->base = r->base;
     att->len = r->len;
@@ -4603,11 +5155,23 @@ R"GSRT(GS_API const uint8_t *gs_shm_view_slow(gs_att *att, gs_res m, int64_t off
 }
 
 )GSRT"
-R"GSRT(GS_API void gs_shm_stats(void) {
+R"GSRT(/* With the dynamic stacks, once one was declared: those declared and
+   ended, the arrays frozen and released with their arenas, and the slots
+   opened fresh, taken again from the free list, and free now. */
+GS_API void gs_shm_stats(void) {
     gs_shm_lock();
     fprintf(stderr, "goose shared stats: %lld arenas made, %lld released, %lld live; %lld files "
             "mapped, %lld unmapped\n", (long long)gs_shm_made, (long long)gs_shm_released,
             (long long)gs_narenas, (long long)gs_shm_mapped, (long long)gs_shm_unmapped);
+    if (gs_dynbase) {
+        int64_t nfree = 0;
+        for (int64_t i = gs_dynfree; i >= 0; i = gs_dynslots[i].next) nfree++;
+        fprintf(stderr, "goose shared stats: %lld dynamic stacks declared, %lld ended; %lld "
+                "arrays frozen, %lld released; %lld slots opened, %lld reused, %lld free\n",
+                (long long)gs_dyn_opened, (long long)gs_dyn_closed, (long long)gs_dyn_frozen,
+                (long long)gs_dyn_thawed, (long long)gs_dyn_fresh, (long long)gs_dyn_reused,
+                (long long)nfree);
+    }
     gs_shm_unlock();
 }
 )GSRT"

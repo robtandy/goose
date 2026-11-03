@@ -405,6 +405,80 @@ static size_t gs_mapfault_text(char *buf, const gs_mapsnap *s, const uint8_t *at
     return (size_t)(p - buf);
 }
 
+/* The dynamic stacks' slots (runtime_shared.h), for the fault handlers: one
+   reservation of gs_dynn slots of gs_dynstride bytes, the first
+   gs_dynusable of each a slot's usable part and the rest its guard gap, and
+   each slot's state and its dynamic stack's declaration. A handler finds a
+   slot from an address by arithmetic, with no lock and no search, on any
+   thread. The reservation's sizes and records are set before its base is
+   published (gs_word_store) and never change; a slot's words are stored
+   under the shared registry's lock, and only the thread whose dynamic stack
+   is on a slot, or a defect writing a frozen one, faults in it. */
+enum { GS_SLOT_FRESH, GS_SLOT_LIVE, GS_SLOT_FROZEN, GS_SLOT_FREE };
+typedef struct {
+    uintptr_t state;            /* GS_SLOT_*, a word the handlers load. */
+    uintptr_t file, line;       /* Where its dynamic stack is declared. */
+    uintptr_t committed;        /* Windows: one past the highest page committed. */
+    /* Under the shared registry's lock alone: */
+    int64_t next;               /* The free list's next slot, or -1. */
+    int protect;                /* Frozen read-only (a debug build). */
+    int trimmed;                /* Free, its pages given back (trim_memory). */
+} gs_slot;
+static uintptr_t gs_dynbase;    /* The reservation, 0 before the first dynamic stack. */
+static uintptr_t gs_dynn, gs_dynstride, gs_dynusable;
+static gs_slot *gs_dynslots;
+static uint64_t gs_dynbudget;   /* GS_DYNAMIC_BUDGET, as gs_rt_start was told. */
+
+/* The slot `at` lies in, with *gap set where it lies in the slot's guard
+   gap; or -1. No lock, no call: a fault handler's. */
+static int64_t gs_slotfault(const void *at, int *gap) {
+    uintptr_t base = gs_word_load(&gs_dynbase);
+    if (!base) return -1;
+    uintptr_t off = (uintptr_t)at - base;
+    if (off / gs_dynstride >= gs_dynn) return -1;
+    *gap = off % gs_dynstride >= gs_dynusable;
+    return (int64_t)(off / gs_dynstride);
+}
+
+/* The report of a fault at `at` in slot i, for one write from the handler:
+   a dynamic stack that grew into its slot's gap, as a data stack's overrun
+   is reported, naming its declaration; or a write to a frozen region, which
+   a debug build makes read-only. Fits GS_SLOTFAULT_TEXT. */
+#define GS_SLOTFAULT_TEXT 640
+static size_t gs_slotfault_text(char *buf, int64_t i, const uint8_t *at) {
+    gs_slot *s = &gs_dynslots[i];
+    char *p = gs_text(buf, "goose runtime error: ");
+    if (gs_word_load(&s->state) == GS_SLOT_FROZEN) {
+        p = gs_text(p, "a write to a frozen region, which is read-only, faulted at byte ");
+        p = gs_dec(p, (uint64_t)((uintptr_t)at - (gs_dynbase + (uintptr_t)i * gs_dynstride)));
+        p = gs_text(p, " of it: a defect of the compiler or of C code\n");
+        return (size_t)(p - buf);
+    }
+    const char *file = (const char *)gs_word_load(&s->file);
+    p = gs_text(p, "dynamic stack overflow: the dynamic stack declared at ");
+    p = gs_text(p, file ? file : "?");
+    p = gs_text(p, ":");
+    p = gs_dec(p, (uint64_t)gs_word_load(&s->line));
+    p = gs_text(p, " grew past the ");
+    p = gs_size(p, gs_dynusable);
+    p = gs_text(p, " of its slot; ds.items.check_length(n) refuses a length that would, and "
+                   "--stack-reserve or -DGS_STACK_RESERVE raises a slot's size, up to "
+                   "256 TB\n");
+    return (size_t)(p - buf);
+}
+
+/* Whether the fault at `at` is a dynamic stack's overrun or a write to a
+   frozen region: a live slot's gap, or any part of a frozen slot. Anything
+   else in the reservation is no access the program can make. */
+static int64_t gs_slotfault_ours(const void *at) {
+    int gap = 0;
+    int64_t i = gs_slotfault(at, &gap);
+    if (i < 0) return -1;
+    uintptr_t state = gs_word_load(&gs_dynslots[i].state);
+    if (state == GS_SLOT_FROZEN || (state == GS_SLOT_LIVE && gap)) return i;
+    return -1;
+}
+
 GS_API GS_NORETURN void gs_stack_overflow(const void *at) {
     for (long i = 0; i < gs_nregions; i++) {
         const gs_region *r = &gs_regions[i];
@@ -413,6 +487,15 @@ GS_API GS_NORETURN void gs_stack_overflow(const void *at) {
             fwrite(msg, 1, gs_overflow_text(msg, r), stderr);
             gs_end(1);
         }
+    }
+    /* A dynamic stack's top: in its slot's usable part, or where its gap
+       starts. */
+    int gap = 0;
+    int64_t si = gs_slotfault(at, &gap);
+    if (si >= 0 && gs_word_load(&gs_dynslots[si].state) == GS_SLOT_LIVE) {
+        char msg[GS_SLOTFAULT_TEXT];
+        fwrite(msg, 1, gs_slotfault_text(msg, si, (const uint8_t *)at), stderr);
+        gs_end(1);
     }
     gs_panic("data stack overflow");
 }
@@ -512,6 +595,38 @@ static LONG WINAPI gs_fault_filter(EXCEPTION_POINTERS *ep) {
             DWORD written;
             WriteFile(GetStdHandle(STD_ERROR_HANDLE), msg, (DWORD)gs_overflow_text(msg, r),
                       &written, NULL);
+            ExitProcess(1);
+        }
+    }
+    /* A dynamic stack's slot (runtime_shared.h): committed on touch in its
+       usable part as a data stack is, which only its own thread grows; or
+       an overrun into its gap, or a write to a frozen slot. */
+    int gap = 0;
+    int64_t si = gs_slotfault(hit, &gap);
+    if (si >= 0) {
+        gs_slot *s = &gs_dynslots[si];
+        uint8_t *base = (uint8_t *)(gs_dynbase + (uintptr_t)si * gs_dynstride);
+        if (!gap && gs_word_load(&s->state) == GS_SLOT_LIVE) {
+            uint8_t *page = (uint8_t *)((size_t)hit & ~(gs_page_size - 1));
+            size_t n = GS_COMMIT_CHUNK;
+            if (page + n > base + gs_dynusable) n = (size_t)(base + gs_dynusable - page);
+            if (VirtualAlloc(page, n, MEM_COMMIT, PAGE_READWRITE)) {
+                if ((uintptr_t)(page + n) > gs_word_load(&s->committed))
+                    gs_word_store(&s->committed, (uintptr_t)(page + n));
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+            static const char nomem[] =
+                "goose runtime error: out of memory committing a dynamic stack\n";
+            DWORD written;
+            WriteFile(GetStdHandle(STD_ERROR_HANDLE), nomem, sizeof(nomem) - 1, &written,
+                      NULL);
+            ExitProcess(1);
+        }
+        if (gs_slotfault_ours(hit) >= 0) {
+            char msg[GS_SLOTFAULT_TEXT];
+            DWORD written;
+            WriteFile(GetStdHandle(STD_ERROR_HANDLE), msg,
+                      (DWORD)gs_slotfault_text(msg, si, hit), &written, NULL);
             ExitProcess(1);
         }
     }
@@ -621,6 +736,15 @@ static void gs_fault_handler(int sig, siginfo_t *info, void *ctx) {
     if (gs_mapfault(hit, &m)) {
         char msg[GS_MAPFAULT_TEXT];
         ssize_t w = write(2, msg, gs_mapfault_text(msg, &m, hit, sig == SIGSEGV));
+        (void)w;
+        _exit(1);
+    }
+    /* A dynamic stack's overrun into its slot's gap, or a write to a frozen
+       slot (runtime_shared.h). */
+    int64_t si = gs_slotfault_ours(hit);
+    if (si >= 0) {
+        char msg[GS_SLOTFAULT_TEXT];
+        ssize_t w = write(2, msg, gs_slotfault_text(msg, si, hit));
         (void)w;
         _exit(1);
     }
@@ -822,7 +946,12 @@ GS_API uint8_t *gs_reserve_region(gs_stack *stack) {
    Only generated code may call this, through os.trim_memory, whose callers
    publish their cached tops first (SFunction::readsalltops). C reached
    from Goose through another extern must not: tops cached by the Goose
-   frames above it would still be stale, and live pages above them lost. */
+   frames above it would still be stale, and live pages above them lost.
+
+   The dynamic stacks' free slots, which every thread's releases share, go
+   back too (gs_slots_trim, runtime_shared.h): no thread can see their
+   pages, and a slot taken again faults in fresh ones. */
+static int gs_slots_trim(void);
 GS_API uint8_t gs_trim_memory(void) {
     uintptr_t page = (uintptr_t)gs_page_size;
     int ok = 1;
@@ -858,6 +987,7 @@ GS_API uint8_t gs_trim_memory(void) {
         if (madvise((void *)start, len, MADV_DONTNEED)) ok = 0;
 #endif
     }
+    if (!gs_slots_trim()) ok = 0;
     return (uint8_t)ok;
 }
 
@@ -1619,7 +1749,8 @@ GS_API int64_t gs_scan_pair(const uint8_t *p, int64_t n, const void *a, int64_t 
 }
 
 GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
-                        uint64_t budget, int64_t mainregions, int64_t workerregions) {
+                        uint64_t budget, int64_t mainregions, int64_t workerregions,
+                        uint64_t dynbudget) {
     gs_argc = argc;
     gs_argv = argv;
     /* A region's usable part is whole pages: the guard gap behind it has to
@@ -1632,6 +1763,7 @@ GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
     gs_region_usable = gs_region_reserve = (size_t)reserve;
     gs_region_gap = (size_t)gap;
     gs_stack_budget = budget;
+    gs_dynbudget = dynbudget;
     gs_mainregions = mainregions;
     gs_workerregions = workerregions;
     /* The workers the budget holds beside the main program, each at the

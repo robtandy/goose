@@ -133,6 +133,13 @@ typedef uint64_t gs_res GS_ALIGN1;
 #ifndef GS_STACK_BUDGET
 #define GS_STACK_BUDGET (32ull << 40)
 #endif
+/* The address space the dynamic stacks' slots take (§11.4), reserved whole
+   as the first dynamic stack is declared: slots of GS_STACK_RESERVE bytes
+   and a gap of GS_STACK_GAP each, 8,188 of them by default. What the
+   platform refuses is retried with half as many slots, down to one. */
+#ifndef GS_DYNAMIC_BUDGET
+#define GS_DYNAMIC_BUDGET (16ull << 40)
+#endif
 #ifndef GS_STACK_STATS
 #define GS_STACK_STATS 0    /* 1: each thread program reports its stack use as it ends. */
 #endif
@@ -925,9 +932,11 @@ typedef struct {
    region's usable reservation and trailing guard gap, the address space
    budgeted for regions over the whole program, and the most regions the
    main program and any one worker hold (the compiler's static counts),
-   which size their registries and give hardware_threads() its cap. */
+   which size their registries and give hardware_threads() its cap; and the
+   address space of the dynamic stacks' slots (GS_DYNAMIC_BUDGET). */
 GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
-                        uint64_t budget, int64_t mainregions, int64_t workerregions);
+                        uint64_t budget, int64_t mainregions, int64_t workerregions,
+                        uint64_t dynbudget);
 /* A fresh region, registered to the calling thread program. */
 GS_API uint8_t *gs_reserve_region(gs_stack *stack);
 /* The calling thread program's stack use, on stderr (GS_STACK_STATS):
@@ -1003,10 +1012,11 @@ GS_API void gs_qlimit(gs_queue *q, int64_t n, const char *file, int line);
 
 /* ---------------------------------------------------------------------------
    Shared memory (§11.4, docs/design/shared_memory.md), runtime_shared.h: an
-   arena of read-only regions, which any thread that attaches to it reads in
-   place through views. A runtime handle (§3.12) names an arena, its serial
-   in bits 63..24, never reused, with 0 below it, or one of its regions,
-   numbered from 1 in bits 23..0; the zero handle names nothing. */
+   arena of read-only regions, mapped files and frozen arrays, which any
+   thread that attaches to it reads in place through views. A runtime handle
+   (§3.12) names an arena, its serial in bits 63..24, never reused, with 0
+   below it, or one of its regions, numbered from 1 in bits 23..0; the zero
+   handle names nothing. */
 
 #define GS_RES_SERIAL_BITS 40
 #define GS_RES_REGION_BITS 24
@@ -1048,11 +1058,49 @@ GS_API const uint8_t *gs_shm_view_slow(gs_att *a, gs_res m, int64_t off, int64_t
                                        int64_t size, int64_t align, const char *type,
                                        const char *file, int line);
 /* After a contained worker's abort, and as any worker ends: the end of every
-   attachment its thread still holds. */
+   attachment and dynamic stack its thread still holds. */
 GS_API void gs_shm_release_held(void);
-/* The arenas and mappings made and released so far, on stderr
-   (GS_SHARED_STATS). */
+/* The arenas, mappings, dynamic stacks and frozen regions made and released
+   so far, on stderr (GS_SHARED_STATS). */
 GS_API void gs_shm_stats(void);
+
+/* A dynamic stack (`var ds = dynamic_stack<T> {};`): the data stack its
+   array, ds.items, lies alone on, a slot of the dynamic budget
+   (GS_DYNAMIC_BUDGET), and that slot's number. The generated code keeps the
+   array's header beside it and hands the stack as the array's: a gs_rref's
+   stk is the descriptor's address, stack being its first member, and no
+   freeze changes it. */
+typedef struct {
+    gs_stack stack;
+    int64_t slot;
+} gs_dstack;
+
+/* A dynamic stack's declaration: a free slot, else a fresh one, with the
+   stack's top at its start, held by the calling thread until the
+   declaration's end (gs_dstack_close), which hands the slot back with its
+   pages, or until a contained worker holding it aborts
+   (gs_shm_release_held). Aborts where every slot is in use. */
+GS_API void gs_dstack_open(gs_dstack *d, const char *file, int line);
+GS_API void gs_dstack_close(gs_dstack *d);
+/* sh.freeze(ds): the `count` elements of `size` bytes on d's slot, a region
+   of a's arena from now on, made read-only where `protect` says (a debug
+   build), and the region's handle. d starts over on a fresh slot, its top at
+   the slot's start; an empty array keeps its slot, and freezes as the empty
+   region. */
+GS_API gs_res gs_shm_freeze(gs_att *a, gs_dstack *d, int64_t count, int64_t size, int protect,
+                            const char *file, int line);
+/* What gs_shm_frozen does where the region is not the one a's cache holds:
+   looks it up into the cache, or aborts. */
+GS_API void gs_shm_frozen_slow(gs_att *a, gs_res r, int64_t size, const char *file, int line);
+
+/* sh.view(r): the whole frozen array r names, of `size`-byte elements: its
+   address, and its length in *len. */
+static const uint8_t *gs_shm_frozen(gs_att *a, gs_res r, int64_t size, int64_t *len,
+                                    const char *file, int line) {
+    if (r != a->res || !r) gs_shm_frozen_slow(a, r, size, file, line);
+    *len = a->len / size;
+    return a->base;
+}
 
 /* view<T>(sh, m, offset, count): `count` T's of `size` bytes from byte
    `offset` of region m, `align` the size of T's widest scalar, a power of
@@ -1102,7 +1150,7 @@ static void gs_stack_block(int64_t n) {
 static void gs_rt_init(int argc, char **argv, int64_t mainstacks, int64_t mainregions,
                        int64_t workerregions) {
     gs_rt_start(argc, argv, GS_STACK_RESERVE, GS_STACK_GAP, GS_STACK_BUDGET, mainregions,
-                workerregions);
+                workerregions, GS_DYNAMIC_BUDGET);
     gs_stack_block(mainstacks);
 }
 

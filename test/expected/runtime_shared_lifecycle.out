@@ -1,6 +1,9 @@
 truncated: exit 1: goose runtime error: <dir>/big was truncated or could not be read while mapped: a read at byte <n> faulted
 truncated while workers map and release: exit 1: goose runtime error: <dir>/big was truncated or could not be read while mapped: a read at byte <n> faulted
 written: exit 1: goose runtime error: a write to <dir>/col.i64, which is mapped read-only, faulted at byte 16: a defect of the compiler or of C code
+a dynamic stack past its slot: exit 1: goose runtime error: dynamic stack overflow: the dynamic stack declared at ds.goose:7 grew past the 256 KB of its slot; ds.items.check_length(n) refuses a length that would, and --stack-reserve or -DGS_STACK_RESERVE raises a slot's size, up to 256 TB
+a dynamic stack's growth that cannot fit: exit 1: goose runtime error: dynamic stack overflow: the dynamic stack declared at ds.goose:7 grew past the 256 KB of its slot; ds.items.check_length(n) refuses a length that would, and --stack-reserve or -DGS_STACK_RESERVE raises a slot's size, up to 256 TB
+a write to a frozen array: exit 1: goose runtime error: a write to a frozen region, which is read-only, faulted at byte 16 of it: a defect of the compiler or of C code
 churn: 200 arenas, 600 files mapped, all released
 files the system reports no size for, or will not map: read in whole
 abort: assert failed
@@ -14,6 +17,12 @@ abort: limited array capacity exceeded
 workers: 129 viewers and 8 aborts, all released
 abort: attach of a released shared arena: it was released when its last attachment ended
 abort: attach of the zero handle, which names no shared arena
+dynamic stacks: 200 arenas, 600 arrays frozen, slots reused
+dynamic stacks in workers: 4 builders and an abort, all released
+abort: every slot of the dynamic budget is in use, live or frozen: 8 slots of 256 KB and a 64 KB gap each, in 2568 KB; --dynamic-budget or -DGS_DYNAMIC_BUDGET raises it
+abort: view of the zero handle, which names no frozen array
+abort: view of a frozen array of another shared arena than the attachment's
+trim_memory: free slots' pages given back
 lookups while an entry is reused for other sizes: each found the mapping
 refused a missing file: <dir>/missing: <the system's reason>
 refused a directory: <dir>: a directory, not a regular file

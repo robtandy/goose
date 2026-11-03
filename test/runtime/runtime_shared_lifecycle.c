@@ -6,7 +6,14 @@
    attachments ends them; small limits on serials and regions abort with
    their messages; and a read past the end of a file truncated while
    mapped, or a write to a mapping, ends the process with a message naming
-   the file. */
+   the file. Dynamic stacks frozen into arenas over and over reuse their
+   slots, opening no more than the most live at once; a frozen array reads
+   back what was pushed, through any attachment, in any thread; an empty one
+   takes no slot; a contained worker that aborts holding dynamic stacks
+   frees their slots and leaves what it froze; a budget whose slots are all
+   in use aborts with its message; trim_memory gives the free slots' pages
+   back; and a dynamic stack growing past its slot, or a write to a frozen
+   region a debug build protected, ends the process with its message. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -105,6 +112,9 @@ static int counted_munmap(void *base, size_t size) {
    limit's own test take, and a few regions per arena. */
 #define GS_SHM_MAX_SERIAL 600
 #define GS_SHM_MAX_REGIONS 4
+/* Eight slots of GS_STACK_RESERVE and GS_STACK_GAP, and room for their
+   records. */
+#define GS_DYNAMIC_BUDGET (8 * (320u << 10) + (8u << 10))
 #include "../../src/runtime/runtime.h"
 #include "../../src/runtime/runtime_impl.h"
 #include "../../src/runtime/runtime_threads.h"
@@ -469,6 +479,165 @@ static void truncated_churning(void) {
 }
 #endif
 
+/* Dynamic stacks (§11.4): the elements a dynamic stack's array holds are
+   pushed at its stack's top, as generated code pushes them, its header
+   beside the descriptor. */
+typedef struct {
+    gs_dstack d;
+    uint8_t *base;
+    int64_t len;
+} dstack;
+
+static void ds_open(dstack *s) {
+    gs_dstack_open(&s->d, "ds.goose", 7);
+    s->base = s->d.stack.top;
+    s->len = 0;
+}
+
+static void ds_push(dstack *s, int64_t v) {
+    memcpy(s->d.stack.top, &v, 8);
+    s->d.stack.top += 8;
+    s->len++;
+}
+
+/* sh.freeze(ds), as generated code does it: the array starts over where the
+   runtime moved its stack. */
+static gs_res ds_freeze(gs_att *a, dstack *s, int protect) {
+    gs_res r = gs_shm_freeze(a, &s->d, s->len, 8, protect, __FILE__, __LINE__);
+    s->base = s->d.stack.top;
+    s->len = 0;
+    return r;
+}
+
+static void ds_close(dstack *s) { gs_dstack_close(&s->d); }
+
+/* The frozen array r names, of n i64s from `first` up, read through a. */
+static int frozen_holds(gs_att *a, gs_res r, int64_t first, int64_t n) {
+    int64_t len;
+    const uint8_t *p = gs_shm_frozen(a, r, 8, &len, __FILE__, __LINE__);
+    if (len != n) return 0;
+    for (int64_t i = 0; i < n; i++) {
+        int64_t x;
+        memcpy(&x, p + 8 * i, 8);
+        if (x != first + i) return 0;
+    }
+    return 1;
+}
+
+static int64_t slots_free(void) {
+    int64_t n = 0;
+    gs_shm_lock();
+    for (int64_t i = gs_dynfree; i >= 0; i = gs_dynslots[i].next) n++;
+    gs_shm_unlock();
+    return n;
+}
+
+/* A worker given main's arena: builds an array on a dynamic stack of its
+   own, freezes it into the arena and hands its handle back; its dynamic
+   stack's fresh slot is free again as it ends. */
+typedef struct {
+    gs_res arena;
+    int64_t first, n;
+} build_job;
+static gs_res built[16];
+
+static void builder(uint8_t *args) {
+    build_job j;
+    memcpy(&j, args, sizeof j);
+    gs_att a;
+    gs_shm_attach(&a, j.arena, __FILE__, __LINE__);
+    dstack s;
+    ds_open(&s);
+    for (int64_t i = 0; i < j.n; i++) ds_push(&s, j.first + i);
+    gs_res r = ds_freeze(&a, &s, 0);
+    gs_mutex_lock(&test_mutex);
+    built[j.first / 1000] = r;
+    gs_mutex_unlock(&test_mutex);
+    ds_close(&s);
+    gs_shm_detach(&a);
+}
+
+/* Aborts holding two dynamic stacks and an attachment, after freezing one
+   array into main's arena: the slots it holds are freed, and the frozen
+   array stays with the arena. */
+static void ds_holder(uint8_t *args) {
+    build_job j;
+    memcpy(&j, args, sizeof j);
+    gs_att a;
+    gs_shm_attach(&a, j.arena, __FILE__, __LINE__);
+    dstack s, t;
+    ds_open(&s);
+    ds_open(&t);
+    for (int64_t i = 0; i < j.n; i++) ds_push(&s, j.first + i);
+    gs_res r = ds_freeze(&a, &s, 0);
+    gs_mutex_lock(&test_mutex);
+    built[0] = r;
+    gs_mutex_unlock(&test_mutex);
+    ds_push(&s, 1);
+    ds_push(&t, 2);
+    gs_abort(GS_E_ASSERT, __FILE__, __LINE__);
+}
+
+/* Takes every slot the budget has, and one more. */
+static void ds_exhaust(uint8_t *args) {
+    (void)args;
+    dstack s[9];
+    for (int i = 0; i < 9; i++) ds_open(&s[i]);
+}
+
+/* A frozen array's view of the zero handle, and of another arena's array. */
+static void ds_zero_view(uint8_t *args) {
+    (void)args;
+    gs_att a;
+    gs_shm_new(&a, __FILE__, __LINE__);
+    int64_t len;
+    gs_shm_frozen(&a, 0, 8, &len, __FILE__, __LINE__);
+}
+
+static void ds_foreign_view(uint8_t *args) {
+    (void)args;
+    gs_att a, b;
+    gs_shm_new(&a, __FILE__, __LINE__);
+    gs_shm_new(&b, __FILE__, __LINE__);
+    dstack s;
+    ds_open(&s);
+    ds_push(&s, 1);
+    gs_res r = ds_freeze(&a, &s, 0);
+    int64_t len;
+    gs_shm_frozen(&b, r, 8, &len, __FILE__, __LINE__);
+}
+
+#ifndef _WIN32
+/* A dynamic stack growing into its slot's gap, as a push past the slot's
+   end would, and through the overflow report a growth that cannot fit
+   gives (check_length's, gs_stack_overflow). */
+static void ds_overrun(void) {
+    dstack s;
+    ds_open(&s);
+    s.d.stack.top += gs_dynusable;
+    ds_push(&s, 1);
+}
+
+static void ds_overflow(void) {
+    dstack s;
+    ds_open(&s);
+    ds_push(&s, 1);
+    gs_stack_overflow(s.d.stack.top);
+}
+
+/* A write to a frozen array that a debug build protected. */
+static void ds_frozen_write(void) {
+    gs_att a;
+    gs_shm_new(&a, __FILE__, __LINE__);
+    dstack s;
+    ds_open(&s);
+    for (int i = 0; i < 4; i++) ds_push(&s, i);
+    uint8_t *old = s.base;
+    ds_freeze(&a, &s, 1);
+    old[16] = 1;
+}
+#endif
+
 static void check_baseline(long allocations, long mappings) {
     check(counter_add(&live_allocations, 0) == allocations,
           "every arena, region, path and hold released");
@@ -497,6 +666,16 @@ int main(void) {
         printf("truncated while workers map and release: %s\n", lead);
         printf("written: exit 1: goose runtime error: a write to <dir>/col.i64, which is mapped "
                "read-only, faulted at byte 16: a defect of the compiler or of C code\n");
+        const char *over = "exit 1: goose runtime error: dynamic stack overflow: the dynamic stack "
+                           "declared at ds.goose:7 grew past the 256 KB of its slot; "
+                           "ds.items.check_length(n) refuses a length that would, and "
+                           "--stack-reserve or -DGS_STACK_RESERVE raises a slot's size, up to "
+                           "256 TB";
+        printf("a dynamic stack past its slot: %s\n", over);
+        printf("a dynamic stack's growth that cannot fit: %s\n", over);
+        printf("a write to a frozen array: exit 1: goose runtime error: a write to a frozen "
+               "region, which is read-only, faulted at byte 16 of it: a defect of the compiler "
+               "or of C code\n");
     }
 #else
     /* First, while this process has one thread, so that its children may
@@ -516,6 +695,9 @@ int main(void) {
         free(bytes);
         in_child(written, "written", NULL);
         unlink(big);
+        in_child(ds_overrun, "a dynamic stack past its slot", NULL);
+        in_child(ds_overflow, "a dynamic stack's growth that cannot fit", NULL);
+        in_child(ds_frozen_write, "a write to a frozen array", NULL);
     }
 #endif
     /* The registry and the fault handlers' first chunk are the runtime's
@@ -531,6 +713,12 @@ int main(void) {
         check(!gs_thread_wait(id, &msg, &len, __FILE__, __LINE__), "the first holder aborted");
         gs_free_msg(msg);
         gs_shm_detach(&a);
+        gs_shm_release_held();
+        /* And the dynamic budget's reservation and the slots' records, with
+           the first dynamic stack. */
+        dstack s;
+        ds_open(&s);
+        ds_close(&s);
         gs_shm_release_held();
     }
     long allocations = counter_add(&live_allocations, 0);
@@ -631,6 +819,116 @@ int main(void) {
         expect_abort(stale, h);
         h.arena = 0;
         expect_abort(stale, h);
+    }
+
+    /* Dynamic stacks frozen into arenas made and released over and over:
+       each round's two arrays read back through another attachment, an
+       empty one takes no slot, and the slots go round, opening no more
+       than the three live or frozen at once. */
+    {
+        int64_t fresh = gs_dyn_fresh;
+        for (int round = 0; round < 200; round++) {
+            gs_att a, b;
+            gs_shm_new(&a, __FILE__, __LINE__);
+            dstack s;
+            ds_open(&s);
+            for (int64_t i = 0; i < 100 + round; i++) ds_push(&s, round + i);
+            gs_res r1 = ds_freeze(&a, &s, 0);
+            check(s.len == 0 && s.base == s.d.stack.top, "the array starts over, empty");
+            gs_res r0 = ds_freeze(&a, &s, 0);
+            for (int64_t i = 0; i < 7; i++) ds_push(&s, -i);
+            gs_res r2 = ds_freeze(&a, &s, 0);
+            check(r1 != r0 && r0 != r2, "three arrays, three handles");
+            gs_shm_attach(&b, gs_shm_handle(&a), __FILE__, __LINE__);
+            check(frozen_holds(&b, r1, round, 100 + round), "a frozen array reads back");
+            check(frozen_holds(&b, r0, 0, 0), "an empty array freezes empty");
+            int64_t len;
+            const uint8_t *p = gs_shm_frozen(&a, r2, 8, &len, __FILE__, __LINE__);
+            int64_t last;
+            memcpy(&last, p + 48, 8);
+            check(len == 7 && last == -6, "the second array reads back");
+            gs_shm_detach(&b);
+            ds_close(&s);
+            gs_shm_detach(&a);
+        }
+        gs_shm_release_held();
+        check(gs_dyn_fresh - fresh <= 2, "the slots go round");
+        check(slots_free() == gs_dyn_fresh, "every slot is free again");
+        check_baseline(allocations, mappings);
+        printf("dynamic stacks: 200 arenas, 600 arrays frozen, slots reused\n");
+    }
+
+    /* Workers freeze arrays into main's arena: main reads them after the
+       workers end, and the arena's end frees their slots. One aborts
+       holding dynamic stacks and an attachment, and what it froze stays. */
+    {
+        gs_att a;
+        gs_shm_new(&a, __FILE__, __LINE__);
+        int64_t ids[4];
+        for (int i = 0; i < 4; i++) {
+            build_job j = { gs_shm_handle(&a), 1000 * i + 1, 50 + i };
+            ids[i] = gs_thread_spawn(builder, &j, sizeof j, 0);
+        }
+        for (int i = 0; i < 4; i++)
+            check(gs_thread_wait(ids[i], NULL, NULL, __FILE__, __LINE__), "the builder returned");
+        for (int i = 0; i < 4; i++)
+            check(frozen_holds(&a, built[i], 1000 * i + 1, 50 + i),
+                  "a worker's frozen array reads back in main");
+        check(slots_free() == gs_dyn_fresh - 4, "the arena holds the workers' four arrays");
+        gs_shm_detach(&a);
+        gs_shm_new(&a, __FILE__, __LINE__);
+        build_job j = { gs_shm_handle(&a), 5, 9 };
+        int64_t id = gs_thread_spawn(ds_holder, &j, sizeof j, 1);
+        uint8_t *msg;
+        int64_t len;
+        check(!gs_thread_wait(id, &msg, &len, __FILE__, __LINE__), "the holder aborted");
+        gs_free_msg(msg);
+        check(frozen_holds(&a, built[0], 5, 9), "what an aborted worker froze stays");
+        check(slots_free() == gs_dyn_fresh - 1, "its dynamic stacks' slots are free");
+        gs_shm_detach(&a);
+        gs_shm_release_held();
+        check(slots_free() == gs_dyn_fresh, "every slot is free again");
+        check_baseline(allocations, mappings);
+        printf("dynamic stacks in workers: 4 builders and an abort, all released\n");
+    }
+
+    /* The budget's slots are all in use: the abort says how many there are
+       of what size, in what budget, and what raises it; the worker's end
+       frees them. A frozen array's view of the zero handle, or through an
+       attachment to another arena, aborts. */
+    {
+        handles none = { 0, 0 };
+        expect_abort(ds_exhaust, none);
+        check(slots_free() == 8, "an exhausting worker's slots are free again");
+        expect_abort(ds_zero_view, none);
+        expect_abort(ds_foreign_view, none);
+        gs_shm_release_held();
+        check_baseline(allocations, mappings);
+    }
+
+    /* trim_memory gives the free slots' pages back: a slot written, freed
+       and trimmed is not resident, and its next owner finds zeroes. */
+    {
+        dstack s;
+        ds_open(&s);
+        for (int64_t i = 0; i < 4096; i++) ds_push(&s, i + 1);
+        uint8_t *base = s.base;
+        ds_close(&s);
+        check(gs_trim_memory(), "trim_memory");
+#ifdef __linux__
+        unsigned char resident = 1;
+        check(mincore(base, page, &resident) == 0 && !(resident & 1),
+              "a trimmed free slot's pages are not resident");
+#endif
+        ds_open(&s);
+        check(s.base == base, "the trimmed slot is taken first");
+        int64_t x;
+        memcpy(&x, s.base + 8, 8);
+        check(x == 0, "a trimmed slot's pages come back zeroed");
+        ds_close(&s);
+        gs_shm_release_held();
+        check_baseline(allocations, mappings);
+        printf("trim_memory: free slots' pages given back\n");
     }
 
     lookups_during_reuse();
