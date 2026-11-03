@@ -24,9 +24,9 @@ flat type (§11.2). This note adds **addressed delivery**, to one thread by its
 id; **`select`**, a wait for the next message of several types, including
 events C signals when an I/O completes; and **faster queues**, with no `malloc`
 and no lock shared by every put and take. All that §11.2 promises stays.
-Written against `a646a68c`. Phase 1, delivery, `select` and events, is #5, in
-full; phase 2, the queues' speed, is #6, its exact lock-free protocol
-provisional (§6). Not implemented.
+Written against `a646a68c`. Phase 1, delivery, `select` and events, is #5,
+implemented (spec §11.2); phase 2, the queues' speed, is #6, its exact
+lock-free protocol provisional (§6).
 
 ## 1. Decisions
 
@@ -277,13 +277,13 @@ of owner, and `RUNNING`, `WAITING` or `CLAIMED`. Each queue lists its waiters
 under its mutex, a record and a count each. A take that finds nothing becomes
 (its count plus one, `WAITING`), joins its sources' lists, looks again, and
 sleeps while still so. A put after linking, or a signal after its hint, claims
-the first entry whose thread is (its count, `WAITING`), setting `CLAIMED` and
-signalling in one critical section of the parker's mutex and removing stale
-entries, so no thread is seen claimed and not woken; mutexes nest only queue,
+the first entry whose thread is (its count, `WAITING`), setting `CLAIMED` under
+the parker's mutex, dropping stale entries, then signals it with both mutexes
+let go, so no put waits for a wake-up's system call; mutexes nest only queue,
 then parker. The woken thread becomes `RUNNING`, leaves the lists, takes as any
-take does, and claims a waiter for any source it leaves a message on; a
-deadline that finds its thread `CLAIMED` acts on the claim. Claims compare
-counts, so an ended worker's entry never claims its record's next owner.
+take does, and passes its claim to a waiter of the global queue that claimed it
+if it took nothing there; a deadline that meets a claim acts on it. Claims
+compare counts, so an ended worker's entry never claims its record's next owner.
 
 **Watches.** A watch sits in its worker's list and its watcher's, each under
 its record's mutex. `thread_watch` links it into both, unless the worker has
@@ -477,10 +477,10 @@ Fixtures follow `docs/testing.md`, natively at `-O0` and `-O2` (no JIT).
 * **`threads/`**: `inbox_basic`; `inbox_limits` (limits switched between 4 and
   64 under eight putters, never exceeded nor refusing early); `inbox_ended`
   (puts racing a thousand ends and reuses, none reaching a later owner);
-  `thread_watch` (ten thousand fires, each once, and 100,000 short-lived
-  workers or watchers, live records bounded); `select_basic`; `select_wait` (no
-  message lost or stranded, deadlines met by claims, the semaphore parker
-  forced on macOS by `GS_QTEST_PARKER_SEM`); `select_flood_timer` (a 10 ms
+  `thread_watch` (ten thousand fires, each once, and ten thousand short-lived
+  watchers, live records bounded by the lifecycle test); `select_basic`;
+  `select_wait` (no message lost or stranded, deadlines met by claims; #6's
+  semaphore parker forced by `GS_QTEST_PARKER_SEM`); `select_flood_timer` (a 10 ms
   timer firing at least 80 times a second under a flooded inbox);
   `event_signal` (`event_signal.build`, `event_signal_impl.c`, C threads
   signalling); `reports_watched` (§3.3, with a contained abort);
@@ -494,7 +494,7 @@ Fixtures follow `docs/testing.md`, natively at `-O0` and `-O2` (no JIT).
   `GS_QTEST_HOOK(point, queue)`, empty elsewhere, parks a thread at a chosen
   point: #5's cases are events closed under their copies, publishers paused
   before their hint, signals paused across a close and across 70,000 reuses of
-  their owner's record, stale handles (`GS_QTEST_EVENT_SERIAL_BITS=3`,
+  their owner's record, stale handles (`GS_QTEST_EVENT_SERIAL_BITS=5`,
   `GS_QTEST_EVENT_INDEX_BITS=4`), inbox first after a wake-up, a claim and its
   wake-up, and deadlines meeting claims; #6's, the rows of §6.3, with
   `GS_QSEG_SLOTS=4`. All run under the sanitize profile, and phase 2's also
@@ -522,7 +522,8 @@ change. 2. The take interface (§7), inboxes still empty. 3. Waiting (§5), with
 `runtime_queue_stalls.c` and its claim, wake-up and deadline cases, and
 `bench/queues.py` within 10%. 4. `thread_id`, `qput_to`, `qlimit_inbox`, ends
 and refusals. 5. `thread_watch`. 6. `select<E>`, both modes. 7. Events, on the
-foundation. 8. Documentation, and `bench/queues.md` measured again.
+foundation. 8. Documentation, and `bench/queues.md` measured again. Built, the
+runtime first and then the builtins, as §5 and §10 now say (`bench/queues.md`).
 
 **Phase 2 (#6)**, provisional as §6 says: #6 may change these steps, but not
 §6's gate, invariants or targets. 1. Parkers, `GS_QSPIN_NS` measured, and
