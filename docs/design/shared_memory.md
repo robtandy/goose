@@ -25,8 +25,8 @@ file, or an array that a thread built on a dynamic stack and froze. Such a
 region belongs to a shared arena, and any thread reads it in place through
 `const` views rooted at its attachment. Handles are option C's `resource<U>`
 (owning_dynamic_data.md), step 0, shared with inboxes_select.md. Written against
-`a646a68`. Step 0 is #9 and phase 1 #3, implemented (spec §3.12, §11.4); phase
-2 is #4, not implemented.
+`a646a68`. Step 0 (#9), phase 1 (#3) and phase 2 (#4) are implemented (spec
+§3.12, §11.4).
 
 ## 1. Decisions
 
@@ -425,25 +425,25 @@ come (5.4), a real main collects with a timed `qget<T>(ms)`, or `select`.
 
 A handle is a `gs_res`, one `uint64_t`. An attachment is a `gs_att` in its
 frame, its arena and the region it looked up last; `shared&` passes its address.
-A dynamic stack is a `gs_dstack`: the `gs_slot *` it has, its own `gs_stack`
-block pointing into that slot, and `items`' `gs_rhdr`; `ds.items` as a `T[>..]&`
-is `gs_rref { &ds_g.items, &ds_g.stack }`, which no freeze changes. A
+A dynamic stack is a root owner's descriptor whose `items` is the `gs_rref` of
+a `gs_rhdr` in the frame and the `stack` of a `gs_dstack` beside it, its own
+`gs_stack` block and its slot's number, the block first, so a component's stack
+is the descriptor's address; no freeze changes either address. A
 `dynamic_stack<T>&` parameter is split as root parameters are
-(`FindSplitRootParams`); a frozen one keeps the descriptor's address, by the
-rule for parameters handed to builtins, so the freeze updates the caller's. The
+(`FindSplitRootParams`), and a freeze through it updates the caller's. The
 owners' ends are scope entries beside restores and `defer`s
 (`EmitExitRestores`). A view's address comes from an inline check of that
 region, a compare of the handle and three of the bounds; the loop over it is
 today's, and a program using none of this compiles to the C it does today.
 
 **A freeze is a rebind** of `ds.items`, the one operation that moves a grow-only
-array's base: the cached top is written back first, no cached base, length or
-top crosses it, and a loop that may freeze hoists none (`hoistrefs`,
-`hoistfields`). A specialization that may freeze, itself or through a call,
-records in its effect summary the components it may rebase, and calls to it
-reload the caller's caches of every reference that may reach one, as for stack
-tops (`SyncReach`); otherwise a stale base would write the frozen slot. The
-runtime's entry points are in section 8.
+array's base: every cached top and count is written back first and read again
+after, and only then does the header start over on the fresh slot, so a cached
+count is the one reset; no cached base crosses it, and a loop that may freeze
+hoists none (`hoistrefs`, `hoistfields`), as a freeze is a clear to the bounds
+checks' kills, which effect summaries carry to callers, whose calls sync the
+stacks they hand over (`SyncReach`); otherwise a stale base would write the
+frozen slot. The runtime's entry points are in section 8.
 
 ## 8. The compiler's pieces
 
@@ -457,7 +457,7 @@ runtime's entry points are in section 8.
 | Read-back, bounds checks (`RootCandidates`, `HoldsByValue`, `bce.h`) | an attachment holds every plain-data and freezable type by value, as `StaticCanContain` does; the facts of 4.6; views' own checks are aborts, and `Call::nobc` is not involved |
 | Codegen | step 0: `CT` of a handle is `gs_res`. Then the owners' `CT`s (`codegen_types.h`), the builtins (`codegen_builtins.h`), their ends beside `RegisterDefer`'s, `shared&` and split `dynamic_stack<T>&` (`codegen_frames.h`), and freeze as a rebind for stack-top caching and view hoisting (implementation.md §6.10) |
 | Coroutines, driver, editors | R1's check (`CycleCallTemps`) covers both owners, once coroutines exist; `--dynamic-budget size` writes `-DGS_DYNAMIC_BUDGET`, as `--stack-reserve` writes `GS_STACK_RESERVE`; the language server's hover and completion come from the builtin table; no lexer, parser or formatter change, and no new keyword |
-| Runtime | `runtime.h` declares, and a new `runtime_shared.h` after `runtime_threads.h` defines: `gs_shm_new(gs_att *, loc)`, registering a new arena, attached once, or aborting when serials are used up; `gs_shm_attach(gs_att *, gs_res, loc)`, under the registry's lock, aborting for a stale or zero handle; `gs_shm_detach(gs_att *)`, releasing at zero and popping the hold; `gs_shm_map_file(gs_att *, path, len, gs_res *, why, whylen, loc)`, the reason a message the runtime holds until `gs_shm_reason_done` or the worker's end, registering the mapping for the fault handlers, whose entries are sequence locks; `gs_shm_size(gs_att *, gs_res, loc)`; the inline `gs_shm_view(...)`, against the region `gs_att` looked up last, and `gs_shm_view_slow`, which looks one up and aborts for another arena's or a misfit; `gs_shm_frozen(gs_att *, gs_res, elemsize, int64_t *len, loc)`; `gs_dstack_open(gs_dstack *, loc)` (`GS_E_BUDGET`, reserving the budget on first use) and `gs_dstack_close(gs_dstack *)`; `gs_shm_freeze(gs_att *, gs_dstack *, elemsize, loc)`; `gs_shm_release_held(void)`, for a contained abort; and `GS_SHARED_STATS`, a report at exit for tests. In `runtime_impl.h`, `gs_fault_handler` and `gs_fault_filter` look up mappings and slots, and `gs_trim_memory` trims free slots; `gs_thread_main` calls `gs_shm_release_held()` after a contained abort, before `t->release()`; `runtime_inline.h` is regenerated |
+| Runtime | `runtime.h` declares, and a new `runtime_shared.h` after `runtime_threads.h` defines: `gs_shm_new(gs_att *, loc)`, registering a new arena, attached once, or aborting when serials are used up; `gs_shm_attach(gs_att *, gs_res, loc)`, under the registry's lock, aborting for a stale or zero handle; `gs_shm_detach(gs_att *)`, releasing at zero and popping the hold; `gs_shm_map_file(gs_att *, path, len, gs_res *, why, whylen, loc)`, the reason a message the runtime holds until `gs_shm_reason_done` or the worker's end, registering the mapping for the fault handlers, whose entries are sequence locks; `gs_shm_size(gs_att *, gs_res, loc)`; the inline `gs_shm_view(...)`, against the region `gs_att` looked up last, and `gs_shm_view_slow`, which looks one up and aborts for another arena's or a misfit; the inline `gs_shm_frozen(gs_att *, gs_res, elemsize, int64_t *len, loc)` and `gs_shm_frozen_slow`, which tells a released arena's array from a live one's; `gs_dstack_open(gs_dstack *, loc)` (aborting where every slot is in use, reserving the budget on first use) and `gs_dstack_close(gs_dstack *)`; `gs_shm_freeze(gs_att *, gs_dstack *, count, elemsize, protect, loc)`, the program saying whether it is a debug build; `gs_shm_release_held(void)`, for a contained abort; and `GS_SHARED_STATS`, a report at exit for tests. In `runtime_impl.h`, `gs_fault_handler` and `gs_fault_filter` look up mappings and slots, and `gs_trim_memory` trims free slots; `gs_thread_main` calls `gs_shm_release_held()` after a contained abort, before `t->release()`; `runtime_inline.h` is regenerated |
 
 ## 9. Alternatives considered
 
@@ -514,29 +514,29 @@ review should start with them.
 #9 lands it before either track's phase 1; the messaging design builds
 `resource<event>` on it. It adds no runtime state and no builtin.
 
-**Built**, with two changes: no runtime kind until phase 1, which declares them
-with their rule and the two fixtures that need one; and a UFCS call looks in the
-kind's namespace, so a binding's functions are its handles' methods (§11.1).
+**Built**, with two changes: no runtime kind until phase 1, and a UFCS call
+looks in the kind's namespace, so a binding's functions are its handles' methods.
 
 ### Phase 1: mapped files, attachments and views (#3)
 
-**Built**: `shared`, `attach`, `handle`, both `map_file`s, `size` and mapping
-views, all of section 8 but dynamic stacks and `freeze`, on POSIX and Windows,
-with four changes. A program's function named like a builtin takes the plain
-calls it matches, and the builtin a call taking an attachment first: one
-applying only where nothing is so named hid views from a program with a `view`.
-C makes no runtime handle in storage it writes, or as an export's argument. An
-attachment keeps the region it looked up last, so the inline check reads its own
-thread's record, with no atomic; one lock guards registry and tables. And the
-runtime keeps `why`'s message until it is appended, as an append may abort.
+**Built**: all of section 8 but dynamic stacks and `freeze`, on POSIX and
+Windows, with four changes. A program's function named like a builtin takes the
+plain calls it matches, and the builtin a call taking an attachment first. C
+makes no runtime handle in storage it writes, or as an export's argument. An
+attachment keeps the region it looked up last, for an inline check with no
+atomic. And the runtime keeps `why`'s message until it is appended.
 
 ### Phase 2: dynamic stacks and frozen regions (#4)
 
-`dynamic_stack<T>`, `Freezable`, `freeze` and frozen views: the rest of section
-8, the budget's slots and faults, `trim_memory` and debug protection; std's
-`hash` marked `checkfree`, as it has no checks. Check: the join at W = 16, 16M
-build and 64M probe rows, in rows/s, against private copies of the tables sent
-through queues, with each's memory.
+**Built**: the rest of section 8, with six changes. A dynamic stack is a
+local's. An empty array freezes empty and keeps its slot. Its header lies beside
+the `gs_dstack` (section 7), as `gs_rhdr` is the program's own type. A view of a
+released arena's array says so. std's `hash` is `checkfree` but for floats, as
+their bits come through a byte view. A slot past its first 2 MB asks for huge
+pages: the probe ran 17% faster. The join at W = 16 and P = 64, 16M build and 64M
+probe rows (`bench/shared_memory/join.goose`), builds at 238M rows/s and probes
+at 133M; private copies, queued to every worker, probe at 106M after 6.5 s of
+copying in, and take 10.5 GB to 655 MB, 23.0 GB resident at the peak to 1.67.
 
 ## 13. Deferred and open
 
@@ -546,7 +546,7 @@ through queues, with each's memory.
 * **Smaller slots** (`dynamic_stack<T> { reserve: n }`): keep R; pack arrays.
 * **Per-region release within an arena**: no; use an arena per lifetime.
 * **A prefetch hint**, `sh.prefetch(m, offset, length)`: once one shows a gain.
-* **Huge pages for large slots**: measure in #4's join; invisible to programs.
+* **A global dynamic stack**, for main's long-lived tables: later.
 * **Verified views of frozen bytes**, after `from_bytes`'s verifier: later.
 * **Index types and base-relative links into frozen arrays**: later.
 * **Comparing handles**: no; keep a `bool`, or add a named builtin if needed.
