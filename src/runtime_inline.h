@@ -1109,8 +1109,14 @@ GS_API uint8_t gs_qwait(gs_queue *q, int64_t ms, gs_qmsg *m);
    after the one it returned last, which it moves on. */
 GS_API int64_t gs_qselect(gs_queue *const *qs, int64_t n, int64_t ms, uint32_t *at,
                           gs_qmsg *m);
-/* After the copy: frees or returns what the message was held in. */
-GS_API void gs_qdone(gs_qmsg *m);
+/* After the copy: frees or returns what the message was held in, a node
+   here, else an event's record (gs_qheld). */
+GS_API void gs_qheld(void *hold);
+static inline void gs_qdone(gs_qmsg *m) {
+    uintptr_t h = (uintptr_t)m->hold;
+    if (h & 1) gs_qheld(m->hold);
+    else if (h) free(m->hold);
+}
 GS_API void gs_qlimit(gs_queue *q, int64_t n, const char *file, int line);
 /* qlimit_inbox<T>(n): every thread's inbox of q's type holds at most n
    messages of its own. */
@@ -3502,6 +3508,12 @@ R"GSRT(#if defined(__GNUC__) || defined(__clang__)
 #define gs_aadd(p, v)     __atomic_fetch_add((p), (v), __ATOMIC_ACQ_REL)
 #define gs_aloadp(p)      __atomic_load_n((p), __ATOMIC_ACQUIRE)
 #define gs_astorep(p, v)  __atomic_store_n((p), (v), __ATOMIC_RELEASE)
+/* A queue's count and a type's inbox limit: written under the queue's
+   mutex or once, read outside it as a hint that a lock would find what it
+   says. A read after any critical section of the mutex sees every count
+   written before, which is all a wait needs (gs_wait). */
+#define gs_rload(p)       __atomic_load_n((p), __ATOMIC_RELAXED)
+#define gs_rstore(p, v)   __atomic_store_n((p), (v), __ATOMIC_RELAXED)
 #else
 static int64_t gs_aload_(volatile void *p) {
     return InterlockedCompareExchange64((volatile LONG64 *)p, 0, 0);
@@ -3521,6 +3533,8 @@ static int gs_acas_(volatile void *p, uint64_t *e, uint64_t v) {
 #define gs_aadd(p, v)     InterlockedExchangeAdd64((volatile LONG64 *)(p), (LONG64)(v))
 #define gs_aloadp(p)      InterlockedCompareExchangePointer((PVOID volatile *)(p), NULL, NULL)
 #define gs_astorep(p, v)  ((void)InterlockedExchangePointer((PVOID volatile *)(p), (PVOID)(v)))
+#define gs_rload(p)       (*(volatile int64_t *)(p))
+#define gs_rstore(p, v)   ((void)(*(volatile int64_t *)(p) = (v)))
 #endif
 
 )GSRT"
@@ -3888,7 +3902,7 @@ static gs_parker *gs_link(struct gs_qstate *s, gs_qnode *n) {
     if (s->tail) s->tail->next = n;
     else s->head = n;
     s->tail = n;
-    gs_astore(&s->count, gs_aload(&s->count) + 1);
+    gs_rstore(&s->count, gs_rload(&s->count) + 1);
     return s->whead ? gs_claim(s) : NULL;
 }
 
@@ -3910,7 +3924,7 @@ R"GSRT(GS_API uint8_t gs_qput(gs_queue *q, const void *data, int64_t size) {
     struct gs_qstate *s = *q;
     gs_qnode *n = gs_node(data, size);
     gs_mutex_lock(&s->mutex);
-    if (gs_aload(&s->count) >= s->limit) {
+    if (gs_rload(&s->count) >= s->limit) {
         gs_mutex_unlock(&s->mutex);
         free(n);
         return 0;
@@ -3931,7 +3945,7 @@ static int gs_put_inbox(gs_thread *rec, int64_t id, struct gs_qstate *g, gs_qnod
     if (ib) {
         gs_mutex_lock(&ib->mutex);
         if (ib->owner == id && ib->open &&
-            (force || gs_aload(&ib->count) < (int64_t)gs_aload(&g->inboxlimit))) {
+            (force || gs_rload(&ib->count) < gs_rload(&g->inboxlimit))) {
             gs_parker *p = gs_link(ib, n);
             gs_mutex_unlock(&ib->mutex);
             gs_wake(p);
@@ -3968,7 +3982,7 @@ R"GSRT(GS_API void gs_qlimit(gs_queue *q, int64_t n, const char *file, int line)
 )GSRT"
 R"GSRT(GS_API void gs_qlimit_inbox(gs_queue *q, int64_t n, const char *file, int line) {
     if (n <= 0) gs_abort(GS_E_QBOUND, file, line);
-    gs_astore(&(*q)->inboxlimit, n);
+    gs_rstore(&(*q)->inboxlimit, n);
 }
 
 )GSRT"
@@ -3979,13 +3993,13 @@ R"GSRT(/* ----------------------------------------------------------------------
 
 )GSRT"
 R"GSRT(static int gs_take_queued(struct gs_qstate *s, gs_qmsg *m) {
-    if (!gs_aload(&s->count)) return 0;
+    if (!gs_rload(&s->count)) return 0;
     gs_mutex_lock(&s->mutex);
     gs_qnode *n = s->head;
     if (n) {
         s->head = n->next;
         if (!s->head) s->tail = NULL;
-        gs_astore(&s->count, gs_aload(&s->count) - 1);
+        gs_rstore(&s->count, gs_rload(&s->count) - 1);
     }
     gs_mutex_unlock(&s->mutex);
     if (!n) return 0;
@@ -4058,7 +4072,7 @@ static int gs_take_pending(struct gs_qstate *ib, gs_qmsg *m) {
 }
 
 )GSRT"
-R"GSRT(static int gs_take_inbox(struct gs_qstate *ib, gs_qmsg *m) {
+R"GSRT(static GS_NOINLINE int gs_take_inbox(struct gs_qstate *ib, gs_qmsg *m) {
     if (ib->turn) {
         if (gs_take_pending(ib, m)) {
             ib->turn = 0;
@@ -4074,23 +4088,30 @@ R"GSRT(static int gs_take_inbox(struct gs_qstate *ib, gs_qmsg *m) {
 }
 
 )GSRT"
+R"GSRT(/* One look at a type's sources: the caller's inbox, which it skips while it
+   holds nothing, then the global queue. */
+static GS_INLINE int gs_try1(gs_thread *me, struct gs_qstate *g, gs_qmsg *m,
+                             struct gs_qstate **from) {
+    struct gs_qstate **table = gs_aloadp(&me->inbox);
+    struct gs_qstate *ib = table ? gs_aloadp(&table[g->type]) : NULL;
+    if (ib && (gs_rload(&ib->count) || ib->nhints) && gs_take_inbox(ib, m)) {
+        *from = ib;
+        return 1;
+    }
+    if (gs_take_queued(g, m)) {
+        *from = g;
+        return 1;
+    }
+    return 0;
+}
+
+)GSRT"
 R"GSRT(/* One look at every source, types in turn from `start`: the variant taken,
    with the queue it came from, or -1. */
-static int64_t gs_try(gs_thread *me, gs_queue *const *qs, int64_t n, uint32_t start,
+static int64_t gs_try(gs_thread *me, gs_queue *const *qs, int64_t n, int64_t start,
                       gs_qmsg *m, struct gs_qstate **from) {
-    for (int64_t k = 0; k < n; k++) {
-        int64_t i = (int64_t)(((uint64_t)start + (uint64_t)k) % (uint64_t)n);
-        struct gs_qstate *g = *qs[i];
-        struct gs_qstate *ib = gs_inbox(me, g, 0, 0);
-        if (ib && gs_take_inbox(ib, m)) {
-            *from = ib;
-            return i;
-        }
-        if (gs_take_queued(g, m)) {
-            *from = g;
-            return i;
-        }
-    }
+    for (int64_t k = 0, i = start; k < n; k++, i = i + 1 == n ? 0 : i + 1)
+        if (gs_try1(me, *qs[i], m, from)) return i;
     return -1;
 }
 
@@ -4115,8 +4136,8 @@ R"GSRT(/* Waits until a message of the sources comes or the deadline passes (ms
    passes the claim on where it took nothing from the queue that claimed it.
    A deadline that meets a claim acts on the claim. Spurious wake-ups, and
    messages others took first, wait on with the time left. */
-static int64_t gs_wait(gs_thread *me, gs_queue *const *qs, int64_t n, int64_t ms,
-                       uint32_t start, gs_qmsg *m, struct gs_qstate **from) {
+static GS_NOINLINE int64_t gs_wait(gs_thread *me, gs_queue *const *qs, int64_t n, int64_t ms,
+                                   int64_t start, gs_qmsg *m, struct gs_qstate **from) {
     if (ms > INT64_MAX / 2000000) ms = INT64_MAX / 2000000;
     int64_t deadline = ms > 0 ? gs_qclock_ns() + ms * 1000000 : -1;
     gs_waiter local[2 * GS_WAIT_LOCAL];
@@ -4195,11 +4216,13 @@ static int64_t gs_wait(gs_thread *me, gs_queue *const *qs, int64_t n, int64_t ms
 
 )GSRT"
 R"GSRT(/* A take of the n types' messages, waiting at most ms milliseconds (below
-   zero: until one comes): the variant taken, or -1 with no message. */
+   zero: until one comes): the variant taken, or -1 with no message. The
+   wait is out of line, so that a take that finds its message pays for no
+   more than the look. */
 static int64_t gs_take(gs_queue *const *qs, int64_t n, int64_t ms, uint32_t *at,
                        gs_qmsg *m) {
     gs_thread *me = gs_me();
-    uint32_t start = at ? (uint32_t)(*at % (uint64_t)n) : 0;
+    int64_t start = at && *at < (uint64_t)n ? (int64_t)*at : 0;
     struct gs_qstate *from = NULL;
     int64_t r = gs_try(me, qs, n, start, m, &from);
     if (r < 0 && ms != 0) r = gs_wait(me, qs, n, ms, start, m, &from);
@@ -4209,20 +4232,31 @@ static int64_t gs_take(gs_queue *const *qs, int64_t n, int64_t ms, uint32_t *at,
         m->hold = NULL;
         return -1;
     }
-    if (at) *at = (uint32_t)((r + 1) % n);
+    if (at) *at = (uint32_t)(r + 1 == n ? 0 : r + 1);
     return r;
 }
 
 )GSRT"
-R"GSRT(GS_API void gs_qget(gs_queue *q, gs_qmsg *m) {
+R"GSRT(/* qget and qpoll look at one type, inline. */
+GS_API void gs_qget(gs_queue *q, gs_qmsg *m) {
+    gs_thread *me = gs_me();
+    struct gs_qstate *from;
+    if (gs_try1(me, *q, m, &from)) return;
     gs_queue *const qs[1] = { q };
-    gs_take(qs, 1, -1, NULL, m);
+    gs_wait(me, qs, 1, -1, 0, m, &from);
 }
 
 )GSRT"
 R"GSRT(GS_API uint8_t gs_qwait(gs_queue *q, int64_t ms, gs_qmsg *m) {
+    gs_thread *me = gs_me();
+    struct gs_qstate *from;
+    if (gs_try1(me, *q, m, &from)) return 1;
     gs_queue *const qs[1] = { q };
-    return gs_take(qs, 1, ms > 0 ? ms : 0, NULL, m) >= 0;
+    if (ms > 0 && gs_wait(me, qs, 1, ms, 0, m, &from) >= 0) return 1;
+    m->data = NULL;
+    m->size = 0;
+    m->hold = NULL;
+    return 0;
 }
 
 )GSRT"
@@ -4236,12 +4270,11 @@ R"GSRT(GS_API int64_t gs_qselect(gs_queue *const *qs, int64_t n, int64_t ms, uin
 R"GSRT(static void gs_event_return(gs_event *e);
 
 )GSRT"
-R"GSRT(GS_API void gs_qdone(gs_qmsg *m) {
-    uintptr_t h = (uintptr_t)m->hold;
-    m->hold = NULL;
-    if (!h) return;
-    if (!(h & 1)) free((void *)h);
-    else if ((h & 3) == 3) gs_event_return((gs_event *)(h & ~(uintptr_t)3));
+R"GSRT(/* The token of an event's copy (gs_take_pending): a closed event's record
+   goes back now that its copy is out. */
+GS_API void gs_qheld(void *hold) {
+    uintptr_t h = (uintptr_t)hold;
+    if ((h & 3) == 3) gs_event_return((gs_event *)(h & ~(uintptr_t)3));
 }
 
 )GSRT"
@@ -4688,7 +4721,7 @@ static void gs_record_close(gs_thread *t) {
         ib->open = 0;
         gs_qnode *n = ib->head;
         ib->head = ib->tail = NULL;
-        gs_astore(&ib->count, (int64_t)0);
+        gs_rstore(&ib->count, (int64_t)0);
         gs_mutex_unlock(&ib->mutex);
         while (n) {
             gs_qnode *next = n->next;

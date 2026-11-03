@@ -1018,8 +1018,14 @@ GS_API uint8_t gs_qwait(gs_queue *q, int64_t ms, gs_qmsg *m);
    after the one it returned last, which it moves on. */
 GS_API int64_t gs_qselect(gs_queue *const *qs, int64_t n, int64_t ms, uint32_t *at,
                           gs_qmsg *m);
-/* After the copy: frees or returns what the message was held in. */
-GS_API void gs_qdone(gs_qmsg *m);
+/* After the copy: frees or returns what the message was held in, a node
+   here, else an event's record (gs_qheld). */
+GS_API void gs_qheld(void *hold);
+static inline void gs_qdone(gs_qmsg *m) {
+    uintptr_t h = (uintptr_t)m->hold;
+    if (h & 1) gs_qheld(m->hold);
+    else if (h) free(m->hold);
+}
 GS_API void gs_qlimit(gs_queue *q, int64_t n, const char *file, int line);
 /* qlimit_inbox<T>(n): every thread's inbox of q's type holds at most n
    messages of its own. */
