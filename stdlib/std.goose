@@ -88,23 +88,26 @@ fn swap<T>(a: T&, b: T&) {
 // their high half folded into the low half first: a double's low bits are
 // often zero (52 of them for 1.0), and the multiply carries bits only
 // upwards. The fold and the mix are invertible, so distinct floats hash
-// apart.
+// apart. Every overload but the floats' is `checkfree`, so that a
+// `checkfree` loop can hash (a probe of a frozen table, docs/design/
+// shared_memory.md): a float's bits come through a byte view, whose length
+// the analysis does not know.
 
-fn hash_mix(x: u64) -> u64 {
+checkfree fn hash_mix(x: u64) -> u64 {
     var h = x * 11400714819323198485;
     h = h ^ (h >> 32);
     return h;
 }
 
-fn hash(x: i8) -> u64 { hash_mix(x as! u64) }
-fn hash(x: i16) -> u64 { hash_mix(x as! u64) }
-fn hash(x: i32) -> u64 { hash_mix(x as! u64) }
-fn hash(x: i64) -> u64 { hash_mix(x as! u64) }
-fn hash(x: u8) -> u64 { hash_mix(x) }
-fn hash(x: u16) -> u64 { hash_mix(x) }
-fn hash(x: u32) -> u64 { hash_mix(x) }
-fn hash(x: u64) -> u64 { hash_mix(x) }
-fn hash(x: bool) -> u64 { if x { return hash_mix(1); } return hash_mix(2); }
+checkfree fn hash(x: i8) -> u64 { hash_mix(x as! u64) }
+checkfree fn hash(x: i16) -> u64 { hash_mix(x as! u64) }
+checkfree fn hash(x: i32) -> u64 { hash_mix(x as! u64) }
+checkfree fn hash(x: i64) -> u64 { hash_mix(x as! u64) }
+checkfree fn hash(x: u8) -> u64 { hash_mix(x) }
+checkfree fn hash(x: u16) -> u64 { hash_mix(x) }
+checkfree fn hash(x: u32) -> u64 { hash_mix(x) }
+checkfree fn hash(x: u64) -> u64 { hash_mix(x) }
+checkfree fn hash(x: bool) -> u64 { if x { return hash_mix(1); } return hash_mix(2); }
 // -0.0 hashes as 0.0, which it equals; an f32 as the f64 of its value.
 fn hash(x: f32) -> u64 { hash(x as f64) }
 fn hash(x: f64) -> u64 {
@@ -115,12 +118,12 @@ fn hash(x: f64) -> u64 {
 
 // The 8 bytes of s from i, and the 4 bytes, little-endian; C compilers turn
 // each into one load.
-fn hash_le64(s: u8[:], i: i64) -> u64 {
+checkfree fn hash_le64(s: u8[:], i: i64) -> u64 {
     let c = s[i..i + 8];
     c[0] | (c[1] as u64) << 8 | (c[2] as u64) << 16 | (c[3] as u64) << 24 |
         (c[4] as u64) << 32 | (c[5] as u64) << 40 | (c[6] as u64) << 48 | (c[7] as u64) << 56
 }
-fn hash_le32(s: u8[:], i: i64) -> u64 {
+checkfree fn hash_le32(s: u8[:], i: i64) -> u64 {
     let c = s[i..i + 4];
     c[0] | (c[1] as u64) << 8 | (c[2] as u64) << 16 | (c[3] as u64) << 24
 }
@@ -132,7 +135,7 @@ fn hash_le32(s: u8[:], i: i64) -> u64 {
 // reaches the low bits. Keys longer than 24 bytes take hash_lanes, a call of
 // its own from this early return, so that the short keys' code stays small
 // enough for the C compiler to inline into a dictionary's lookups.
-fn hash(s: u8[:]) -> u64 {
+checkfree fn hash(s: u8[:]) -> u64 {
     let n = s.len;
     if n > 24 { return hash_lanes(s); }
     var h = (n as! u64) * 11400714819323198485;
@@ -159,7 +162,7 @@ fn hash(s: u8[:]) -> u64 {
 // before, so the words before the last 24 bytes or fewer go to two lanes of
 // rounds, the even and the odd words of each 16 bytes, which a processor
 // overlaps; the second is folded into the first for the remaining words.
-fn hash_lanes(s: u8[:]) -> u64 {
+checkfree fn hash_lanes(s: u8[:]) -> u64 {
     let n = s.len;
     var h = (n as! u64) * 11400714819323198485;
     var g = h ^ 0x9E3779B97F4A7C15;
@@ -182,7 +185,7 @@ fn hash_lanes(s: u8[:]) -> u64 {
     return h ^ (h >> 32);
 }
 
-fn hash_combine(seed: u64, h: u64) -> u64 {
+checkfree fn hash_combine(seed: u64, h: u64) -> u64 {
     seed ^ (h + 11400714819323198485 + (seed << 6) + (seed >> 2))
 }
 
