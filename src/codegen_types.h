@@ -568,6 +568,8 @@ inline string CodeGen::RawMangle(TypeExpr *t) {
         case TY_FLT: return t->fltstorage == FS_F32 ? "f32" : "f64";
         case TY_BOOL: return "b";
         case TY_STRUCT: {
+            // The runtime's kind, apart from a program's type of its name.
+            if (t->struc->st->rtkind) return cat("rk_", t->struc->st->name);
             auto s = Sanitize(t->struc->st->ns, t->struc->st->name);
             for (auto a : t->struc->args) Append(s, "_", Mangle(a));
             return s;

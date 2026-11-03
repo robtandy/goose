@@ -83,6 +83,13 @@ inline int RecvKindOf(TypeExpr *t) {
     F(B_QGET,             "qget",             0,  1,   "",   "",  0,              "",            BF_TYARGS) \
     F(B_QPOLL,            "qpoll",            0,  0,   "",   "",  0,              "",            BF_TYARGS) \
     F(B_QLIMIT,           "qlimit",           1,  1,   "",   "",  0,              "",            BF_TYARGS) \
+    F(B_QLIMIT_INBOX,     "qlimit_inbox",     1,  1,   "",   "",  0,              "",            BF_TYARGS) \
+    F(B_QPUT_TO,          "qput_to",          2,  2,   "",   "",  0,              "",            0) \
+    F(B_THREAD_ID,        "thread_id",        0,  0,   "",   "i", 0,              "",            0) \
+    F(B_THREAD_WATCH,     "thread_watch",     2,  2,   "",   "",  0,              "",            0) \
+    F(B_SELECT,           "select",           0,  1,   "",   "",  0,              "",            BF_TYARGS) \
+    F(B_EVENT,            "event",            1,  1,   "",   "",  0,              "",            0) \
+    F(B_EVENT_CLOSE,      "event_close",      1,  1,   "",   "",  0,              "",            0) \
     F(B_DEFAULT,          "default",          0,  0,   "",   "",  0,              "",            BF_TYARGS) \
     F(B_COPY,             "copy",             1,  1,   "",   "",  0,              "",            0) \
     F(B_MOVE_FROM,        "move_from",        2,  2,   "",   "",  BR_SLICE,       "",            BF_MEMBER | BF_WRITE) \

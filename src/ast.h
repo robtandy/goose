@@ -1553,6 +1553,9 @@ struct SStruct {
     // and a value of it, or one expected to be of it, ends the check of the
     // code at hand silently.
     bool unknown = false;
+    // A kind of handle the runtime makes (§3.12): `event`, of event(v),
+    // written only as resource's argument (Ast::eventkind).
+    bool rtkind = false;
 };
 
 struct SVariant {
@@ -2554,6 +2557,10 @@ struct Ast {
     // The structs standing for the type names that name nothing
     // (SStruct::unknown), in no namespace and no declaration list.
     vector<SStruct *> unknowntypes;
+    // The runtime's kind `event` (§11.2), which `event` names where no
+    // declaration of the program has the name (ResolveTypeNames): in no
+    // namespace and no declaration list either.
+    SStruct eventkind;
 
     // Typecheck products (owned here so later phases can rely on them).
     vector<VarDef *> vardefs;
@@ -2603,6 +2610,17 @@ struct Ast {
         }
         booltype = NewType(TY_BOOL, Line {});
         voidtype = NewType(TY_VOID, Line {});
+        eventkind.name = eventkind.qname = "event";
+        eventkind.rtkind = true;
+    }
+
+    // The type `event`, the runtime's kind of resource<event> (§11.2).
+    TypeExpr *EventKind(Line line) {
+        auto t = NewType(TY_STRUCT, line);
+        auto d = NewDetail<TypeStruct>();
+        d->st = &eventkind;
+        t->struc = d;
+        return t;
     }
 
     ~Ast() {

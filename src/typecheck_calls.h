@@ -2563,6 +2563,36 @@ inline bool TypeCheck::ExternValueOk(TypeExpr *t, string &why) {
     return true;
 }
 
+// The handle of a kind the runtime makes (resource<event>, §3.12) that a
+// value of type t holds, at any depth of its fields, elements and payloads,
+// or null. C takes such a handle but never makes one (§7.10).
+inline TypeExpr *TypeCheck::RuntimeHandleIn(TypeExpr *t) {
+    switch (t->kind) {
+        case TY_RESOURCE:
+            return t->sub->kind == TY_STRUCT && t->sub->struc->st->rtkind ? t : nullptr;
+        case TY_ARRAY: return RuntimeHandleIn(t->arr->sub);
+        case TY_STRUCT: case TY_ENUM: case TY_VARIANT: {
+            TypeExpr *h = nullptr;
+            EachField(t, [&](TypeExpr *ft) { if (!h) h = RuntimeHandleIn(ft); });
+            return h;
+        }
+        default: return nullptr;
+    }
+}
+
+// The same of what C would write through a parameter of type t, a reference
+// or slice that is not read-only, or of what it would hand Goose through one
+// of any kind (`all`, an exported function's).
+inline TypeExpr *TypeCheck::RuntimeHandleFromC(TypeExpr *t, bool all) {
+    if (t->kind == TY_REF || t->kind == TY_SLICE) {
+        if (t->cq && !all) return nullptr;
+        auto s = t->kind == TY_REF ? t->ref->sub : t->sub;
+        if (s->kind == TY_ARRAY && s->arr->akind == A_GROW) s = s->arr->sub;
+        return RuntimeHandleIn(s);
+    }
+    return all ? RuntimeHandleIn(t) : nullptr;
+}
+
 inline bool TypeCheck::ExternParamOk(TypeExpr *t, string &why) {
     if (t->kind == TY_REF) {
         if (t->ref->optional || t->ref->lenstorage >= 0) {
@@ -2642,6 +2672,11 @@ inline void TypeCheck::CheckExternSpec(FnSpec *spec) {
         if (!ExternParamOk(pt, why) || !DylibValueOk(sf, pt, why))
             Error(sf->line, cat("extern fn ", sf->name, ": parameter ", p.name, " of type ",
                                 TypeStr(pt), " cannot cross to C: ", why));
+        if (auto h = RuntimeHandleFromC(pt, false))
+            Error(sf->line, cat("extern fn ", sf->name, ": parameter ", p.name, " of type ",
+                                TypeStr(pt), " would let C write a ", TypeStr(h),
+                                ", which only the runtime makes; pass it by value or "
+                                "read-only (§7.10)"));
         auto vd = ast.NewVarDef();
         vd->name = p.name;
         vd->type = pt;
@@ -2660,6 +2695,10 @@ inline void TypeCheck::CheckExternSpec(FnSpec *spec) {
         if (!ExternValueOk(t, why) || !DylibValueOk(sf, t, why))
             Error(sf->line, cat("extern fn ", sf->name, " cannot return ", TypeStr(t), ": ",
                                 why));
+        if (auto h = RuntimeHandleIn(t))
+            Error(sf->line, cat("extern fn ", sf->name, " cannot return ", TypeStr(t), ": a ",
+                                TypeStr(h), " comes only from the runtime, and C takes one "
+                                "but never makes one (§7.10)"));
         spec->rets.push_back(t);
     }
     spec->retsknown = true;
@@ -2718,6 +2757,10 @@ inline void TypeCheck::CheckExport(SFunction *sf) {
         if (CarriesPool(t))
             fail(cat("parameter ", sf->params[i].name,
                      " uses a reusable pool and has no public C representation"));
+        if (auto h = RuntimeHandleFromC(t, true))
+            fail(cat("parameter ", sf->params[i].name, " of type ", TypeStr(t),
+                     " would take a ", TypeStr(h), " from C, which only the runtime "
+                     "makes (§7.10)"));
         if (t->kind == TY_REF && t->ref->sub->kind == TY_ARRAY &&
             t->ref->sub->arr->akind == A_GROW && IsU8(t->ref->sub->arr->sub))
             fail(cat("parameter ", sf->params[i].name,

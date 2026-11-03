@@ -119,6 +119,83 @@ inline vector<string> CodeGen::EmitTakenMessage(TypeExpr *t, const string &m, co
     return { tv };
 }
 
+// select<E>() and select<E>(ms) (§11.2): the site's queues, variant i's
+// field type's being queue i, and its rotation, one per thread, in the
+// program's statics; the runtime returns the tag it took, or -1 at the
+// deadline. The message is the variant's one field, so it is copied in
+// behind the tag: into the union of a fixed-mode E, onto the data stack for
+// an E.., tag first. A missed timed select is E's zero value.
+inline vector<string> CodeGen::EmitSelect(Call *c, const vector<Node *> &an, Dst d0) {
+    auto e = c->rettypes[0];
+    auto ei = EIOf(e);
+    auto nv = ei->en->variants.size();
+    string qs;
+    for (size_t vi = 0; vi < nv; vi++)
+        Append(qs, vi ? ", &" : "&", QueueFor(ei->vftypes[vi][0]));
+    auto site = Unique("gs_select");
+    Append(data, "static gs_queue *const ", site, "_qs[] = { ", qs, " };\n",
+           "static GS_TLS uint32_t ", site, "_at;\n");
+    auto timed = c->rettypes.size() > 1;
+    string ms = "-1";
+    if (timed) {
+        // A wait of zero or less does not wait, as qget's (§11.2).
+        ms = T();
+        L("int64_t ", ms, " = ", GenX(an[0]), ";");
+        L("if (", ms, " < 0) ", ms, " = 0;");
+    }
+    auto m = T(), tag = T();
+    L("gs_qmsg ", m, ";");
+    L("int64_t ", tag, " = gs_qselect(", site, "_qs, ", nv, ", ", ms, ", &", site, "_at, &", m,
+      ");");
+    auto ts = TagStore(ei->en);
+    vector<string> vals;
+    if (!e->enu->varmode) {
+        auto tv = T();
+        FixedLocal(e, tv);
+        L("if (", tag, " >= 0) {");
+        ind++;
+        L(tv, ".tag = (", IntCT(ts, false), ")", tag, ";");
+        L("GS_MEMCPY(&", tv, ".u, ", m, ".data, (size_t)", m, ".size);");
+        ind--;
+        L("} else {");
+        ind++;
+        L("GS_MEMZERO(&", tv, ", sizeof(", tv, "));");
+        ind--;
+        L("}");
+        vals.push_back(tv);
+    } else {
+        string stk = d0.k == DK_STACK ? d0.s : "";
+        string base = T();
+        if (stk.empty()) {
+            stk = AllocStk(false);
+            L("uint8_t *", base, " = ", Top(stk), ";");
+            SaveBase(false, stk, base);
+        } else {
+            L("uint8_t *", base, " = ", Top(stk), ";");
+        }
+        L("if (", tag, " >= 0) {");
+        ind++;
+        EmitValStoreTag(stk, ts, tag);
+        L("GS_MEMCPY(", Top(stk), ", ", m, ".data, (size_t)", m, ".size);");
+        Bump(stk, cat(m, ".size"));
+        ind--;
+        L("} else {");
+        ind++;
+        L("GS_MEMZERO(", Top(stk), ", ", MinBytes(e, true), ");");
+        Bump(stk, cat(MinBytes(e, true)));
+        ind--;
+        L("}");
+        vals.push_back(base);
+    }
+    L("gs_qdone(&", m, ");");
+    if (timed) {
+        auto got = T();
+        L("uint8_t ", got, " = ", tag, " >= 0;");
+        vals.push_back(got);
+    }
+    return vals;
+}
+
 // The receiver of a member operation, dereferenced, with its stack. The
 // arguments run after it and may rebind a reference it is reached through
 // (Loc::viaref), so such a receiver is resolved first: a reference is read
@@ -279,12 +356,47 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
             L("uint8_t ", ok, " = gs_qput(&", q, ", ", img.first, ", ", img.second, ");");
             return { ok };
         }
-        case B_QLIMIT: {
-            auto q = QueueFor(c->qtype);
-            auto n = GenX(an[0]);
-            L("gs_qlimit(&", q, ", ", n, ", ", LocArgs(ln), ");");
+        case B_QPUT_TO: case B_THREAD_WATCH: {
+            // The id first, as the arguments are written.
+            auto id = T();
+            L("int64_t ", id, " = ", GenX(an[0]), ";");
+            auto q = QueueFor(an[1]->exprtype);
+            auto img = MessageImage(an[1], ln);
+            if (c->builtin == B_THREAD_WATCH) {
+                L("gs_thread_watch(&", q, ", ", id, ", ", img.first, ", ", img.second, ", ",
+                  LocArgs(ln), ");");
+                return {};
+            }
+            auto ok = T();
+            L("uint8_t ", ok, " = gs_qput_to(&", q, ", ", id, ", ", img.first, ", ", img.second,
+              ", ", LocArgs(ln), ");");
+            return { ok };
+        }
+        case B_THREAD_ID:
+            usesthreads = true;
+            return { "gs_thread_self()" };
+        case B_EVENT: {
+            auto q = QueueFor(an[0]->exprtype);
+            auto img = MessageImage(an[0], ln);
+            auto h = T();
+            L("gs_res ", h, " = gs_event_new(&", q, ", ", img.first, ", ", img.second, ", ",
+              LocArgs(ln), ");");
+            return { h };
+        }
+        case B_EVENT_CLOSE: {
+            usesthreads = true;
+            auto h = GenX(an[0]);
+            L("gs_event_close(", h, ", ", LocArgs(ln), ");");
             return {};
         }
+        case B_QLIMIT: case B_QLIMIT_INBOX: {
+            auto q = QueueFor(c->qtype);
+            auto n = GenX(an[0]);
+            L(c->builtin == B_QLIMIT ? "gs_qlimit(&" : "gs_qlimit_inbox(&", q, ", ", n, ", ",
+              LocArgs(ln), ");");
+            return {};
+        }
+        case B_SELECT: return EmitSelect(c, an, d0);
         case B_QGET: case B_QPOLL: {
             auto t = c->rettypes[0];
             auto q = QueueFor(t);

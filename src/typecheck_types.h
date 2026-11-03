@@ -692,6 +692,10 @@ inline void TypeCheck::ValidateType(TypeExpr *t, Line l, int pos) {
         case TY_FN:
             Error(l, "function value types are compile-time only and cannot be stored");
         case TY_STRUCT:
+            if (t->struc->st->rtkind)
+                Error(l, cat(t->struc->st->name, " is a kind of handle the runtime makes, "
+                             "written only as resource's argument: resource<",
+                             t->struc->st->name, "> (§3.12)"));
             // Check placement before instantiation: nested root ownership is
             // unsupported even if the nested type is empty, fixed-only,
             // generic, or the enclosing declaration is itself a root.
@@ -780,6 +784,7 @@ inline void TypeCheck::ValidatePointee(TypeExpr *t, Line l) {
         return;
     }
     if (t->kind == TY_RESOURCE) {
+        if (t->sub->kind == TY_STRUCT && t->sub->struc->st->rtkind) return;
         ValidateType(t->sub, l, VT_POINTEE);
         NameExtents(t->sub);
         return;

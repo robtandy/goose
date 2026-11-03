@@ -2417,6 +2417,8 @@ struct TypeCheck {
     bool SameRecord(const FnRecord &a, const FnRecord &b, const FnSpec *spec);
     bool ExternValueOk(TypeExpr *t, string &why);
     bool ExternParamOk(TypeExpr *t, string &why);
+    TypeExpr *RuntimeHandleIn(TypeExpr *t);
+    TypeExpr *RuntimeHandleFromC(TypeExpr *t, bool all);
     bool DylibValueOk(SFunction *sf, TypeExpr *t, string &why);
     void CheckExternSpec(FnSpec *spec);
     void CheckExport(SFunction *sf);
@@ -2500,6 +2502,11 @@ struct TypeCheck {
     // Builtins (§3.7, §9.3, §11.2) and array members (§3.3, §5.4).
 
     Val CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> &args, Val *precv);
+    // select<E>() and select<E>(ms) (§11.2): E's one-field variants, each
+    // receiving its field's type.
+    Val CheckSelect(Call *c, vector<Node *> &args);
+    // resource<event>, what event(v) returns and event_close takes (§11.2).
+    TypeExpr *EventHandleType(Line l) { return ast.ResourceOf(ast.EventKind(l), l); }
     void CheckByteOut(Call *c, Node *out, const string &form);
     void CheckPrintable(Call *c, const char *what, vector<Node *> &args, size_t i,
                         const Val *out = nullptr);

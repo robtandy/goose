@@ -2,7 +2,8 @@
 // file is in (top-level declarations are order-independent). Every parse-time
 // TY_UNRESOLVED is rewritten in place: struct and enum names become TY_STRUCT /
 // TY_ENUM, alias uses are substituted with the aliased type, `resource<U>`
-// where no declaration has the name becomes TY_RESOURCE (§3.12), and
+// where no declaration has the name becomes TY_RESOURCE (§3.12), `event`
+// there the runtime's kind of an event (Ast::eventkind, §11.2), and
 // anything else becomes TY_GENERIC — a generic type parameter, or an unknown
 // name, which typecheck decides since it knows scopes. A qualified name
 // (`ns::Name`) can only be a declaration, so an unknown one is an error here,
@@ -96,6 +97,16 @@ inline void ResolveTypeNames(Ast &ast) {
             auto kind = nm->args[0];
             t->kind = TY_RESOURCE;
             t->sub = kind;
+        } else if (GlobalLeaf(nm->name) == "event") {
+            // The runtime's kind of an event (§11.2), found as `resource`
+            // is; the checker keeps it to resource's argument.
+            if (!nm->args.empty() || nm->varmode)
+                ErrorAt(t, nm, "event takes no type arguments: it names the kind of an "
+                               "event's handle, resource<event> (§11.2)", nm->name);
+            auto d = ast.NewDetail<TypeStruct>();
+            d->st = &ast.eventkind;
+            t->kind = TY_STRUCT;
+            t->struc = d;
         } else {
             if (SplitName(nm->name, nm->ns).qualified) {
                 ErrorAt(t, nm, cat("unknown type: ", nm->name), nm->name);

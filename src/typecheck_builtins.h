@@ -111,21 +111,37 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             v.type = ast.booltype;
             return v;
         }
-        case B_QPUT: {
-            auto av = CheckValue(args[0], nullptr);
-            NoUntypedEmptyArray(av, args[0], d.name);
+        case B_QPUT: case B_QPUT_TO: case B_THREAD_WATCH: case B_EVENT: {
+            // A message: qput's, qput_to's and thread_watch's after the id,
+            // which is an i64, and the one an event holds (§11.2).
+            auto mi = d.kind == B_QPUT || d.kind == B_EVENT ? 0 : 1;
+            if (mi) CheckArg(args[0], ast.inttypes[IS_I64]);
+            auto av = CheckValue(args[mi], nullptr);
+            NoUntypedEmptyArray(av, args[mi], d.name);
             if (av.type->kind == TY_VOID || av.type->kind == TY_FN || !IsFlat(av.type))
                 Error(c, cat("queue elements must be flat (§11.2), not ", TypeStr(av.type)));
             if (HoldsIndexT(av.type)) ThreadIndexError(c, av.type);
-            // false when the queue is full (§11.2); a call statement drops it.
-            Val ok;
-            ok.type = ast.booltype;
-            return ok;
+            if (d.kind == B_THREAD_WATCH) return VoidVal();
+            Val v;
+            // The handle of a new event of this thread.
+            if (d.kind == B_EVENT) {
+                v.type = EventHandleType(c->line);
+                return v;
+            }
+            // false when the queue or inbox is full, or qput_to's thread has
+            // ended (§11.2); a call statement drops it.
+            v.type = ast.booltype;
+            return v;
         }
-        case B_QGET: case B_QPOLL: case B_QLIMIT: {
+        case B_EVENT_CLOSE:
+            CheckArg(args[0], EventHandleType(c->line));
+            return VoidVal();
+        case B_SELECT: return CheckSelect(c, args);
+        case B_QGET: case B_QPOLL: case B_QLIMIT: case B_QLIMIT_INBOX: {
+            auto limit = d.kind == B_QLIMIT || d.kind == B_QLIMIT_INBOX;
             if (c->tyargs.size() != 1)
                 Error(c, cat(d.name,
-                             d.kind == B_QLIMIT ? "<T>(n)" : args.empty() ? "<T>()" : "<T>(ms)",
+                             limit ? "<T>(n)" : args.empty() ? "<T>()" : "<T>(ms)",
                              " needs exactly one explicit type argument"));
             auto t = Subst(c->tyargs[0]);
             ValidateType(t, c->line, VT_LOCAL);
@@ -134,7 +150,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             if (HoldsIndexT(t)) ThreadIndexError(c, t);
             // A limit, or a wait's milliseconds.
             if (!args.empty()) CheckArg(args[0], ast.inttypes[IS_I64]);
-            if (d.kind == B_QLIMIT) {
+            if (limit) {
                 c->qtype = t;
                 return VoidVal();
             }
@@ -2073,6 +2089,63 @@ inline void TypeCheck::NoteGlobalBinding(VarDef *gd, const Roots &roots, bool by
 
 // Each thread program has a copy of the globals of its own, which grow apart
 // once it runs, so an index of one copy says nothing about another (§3.11).
+// select<E>() -> E and select<E>(ms) -> E, bool (§11.2): the next message
+// of a type a variant of E holds, in that variant. Each variant holds one
+// field, of any name, whose type is what it receives, from the caller's
+// inbox first, so a sender puts the plain type. The types are distinct and
+// are what qget<T> takes, but for a resizable one, which no select takes
+// yet. A field cannot be of a zero-size type (§3.4), so a message is a byte
+// at least.
+inline Val TypeCheck::CheckSelect(Call *c, vector<Node *> &args) {
+    if (c->tyargs.size() != 1)
+        Error(c, cat("select", args.empty() ? "<E>()" : "<E>(ms)",
+                     " needs exactly one explicit type argument, an enum whose variants "
+                     "hold the messages it receives"));
+    auto e = Subst(c->tyargs[0]);
+    ValidateType(e, c->line, VT_LOCAL);
+    if (e->kind != TY_ENUM)
+        Error(c, cat("select<", TypeStr(e), ">: select receives into an enum, each of whose "
+                     "variants holds one field, the message it receives (§11.2)"));
+    auto ei = GetEnumInst(e);
+    auto name = cat("select<", TypeStr(e), ">: ");
+    for (size_t vi = 0; vi < ei->en->variants.size(); vi++) {
+        auto &v = ei->en->variants[vi];
+        if (v.fields.size() != 1 || v.fields[0].ispad)
+            Error(c, cat(name, "variant ", v.name,
+                         " must hold exactly one field, the message it receives"));
+        auto ft = ei->vftypes[vi][0];
+        if (!IsFlat(ft))
+            Error(c, cat(name, "variant ", v.name, " receives ", TypeStr(ft),
+                         ", and queue elements must be flat (§11.2)"));
+        if (HoldsIndexT(ft)) ThreadIndexError(c, ft);
+        if (ClassOf(ft) == SC_RESIZABLE)
+            Error(c, cat(name, "variant ", v.name, " receives ", TypeStr(ft),
+                         ": select cannot receive a resizable value yet; take it with qget"));
+        if (auto zs = ZeroSizeKind(ft))
+            Error(c, cat(name, "variant ", v.name, " receives ", zs, ", which no message "
+                         "is (§3.4)"));
+        for (size_t vj = 0; vj < vi; vj++)
+            if (TypeEq(ei->vftypes[vj][0], ft))
+                Error(c, cat(name, "variants ", ei->en->variants[vj].name, " and ", v.name,
+                             " both receive ", TypeStr(ft)));
+    }
+    // A wait's milliseconds, which add whether a message came.
+    if (!args.empty()) CheckArg(args[0], ast.inttypes[IS_I64]);
+    c->rettypes.push_back(e);
+    Val first;
+    first.type = e;
+    first.Set(TempRoot(), false);
+    lastcallrets.clear();
+    lastcallrets.push_back(first);
+    if (!args.empty()) {
+        Val b2;
+        b2.type = ast.booltype;
+        c->rettypes.push_back(ast.booltype);
+        lastcallrets.push_back(b2);
+    }
+    return first;
+}
+
 inline void TypeCheck::ThreadIndexError(Node *at, TypeExpr *t) {
     Error(at, cat(TypeStr(t), " cannot pass between threads: it holds an index type, and each "
                   "thread program's copy of the array it names grows on its own (§3.11)"));
