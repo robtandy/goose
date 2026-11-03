@@ -4124,14 +4124,20 @@ is the root of everything viewed through it.
 the program's functions, as an array's members are (`CheckUfcsCall`); no
 other receiver takes them there. A plain call `view<T>(sh, ...)` resolves
 against the program's functions of the name first, as every builtin's
-does, and falls back to the builtin only where its first argument names an
-attachment, or a reference to one, or for `attach`, where the call is its
-declaration's initializer (`SharedBuiltinHidden`). So a program's own
+does, and falls back to the builtin only where its first argument, as
+resolution checked it, is an attachment, or a reference to one, or for
+`attach`, where the call is its declaration's initializer
+(`SharedBuiltinHidden`). So a program's own
 `size` or `view` keeps its diagnostics. `CheckSharedMember` checks the rest:
 the path as a `const u8[:]` and `why` as a byte output (`CheckByteOut`);
 the handle of kind `mapping`; and for `view<T>` the type argument, which
 must be plain data (`PlainData`, which names the field path at fault), and
-a constant offset, which must be a multiple of `WidestScalar(T)`. The
+a constant offset, which must be a multiple of `WidestScalar(T)`: a
+constant above `i64.max` by its bits, and an integer conversion of a
+constant, `12 as u64`, by the value it makes, which the cast records as
+it is checked (`AsCast::constint`, `WrapStorage`) and which is no
+constant for anything else: a conversion keeps the low bits an alignment
+reads, or aborts in a debug build. The
 view's value takes the receiver's roots and exactness (`TakeAlts`, reads
 cleared), as a slice of an array takes the array's, and is not writable;
 its type is `const T[:]`. So §9.2's rules keep it in the attachment's
@@ -5373,7 +5379,10 @@ results: `EnsureEr` compiles a second, `_er` twin of the callee that emits
 raw elements plus a count, so that `v.append(f())` is contiguous. A callee
 without a twin (a builtin, a dispatch, a `return from` target) delivers the
 value form, and the receiver slides the length prefix out with one
-`memmove` (`EmitSlidePrefix`). A `T[]` result that ends up in a slot of
+`memmove` (`EmitSlidePrefix`). A builtin whose result is fixed-size, a
+slice (`view`, `embed_file`, `bytes_of`) or a fixed array, builds no value
+form there, only a C value, and the run is constructed from it as from any
+slice (`ConstructCall`). A `T[]` result that ends up in a slot of
 another length storage is re-prefixed afterwards (`EmitReprefix`). A
 runtime-capacity limited result (`T[..]`) has no run form: `EmitAppend`
 builds its image on the destination stack, then compacts its live elements

@@ -570,6 +570,7 @@ inline Val AsCast::Check(TypeCheck &tc, TypeExpr *) {
     // converts, which its destination or operator converts again
     // (TypeCheck::ToFloat).
     if (implicit) return tc.Operand(child);
+    constint = false;
     tc.ForgetCastAlt(this);
     // The operand as checked, which is also what an argument without the
     // cast would pass (TypeCheck::JudgeCallCasts).
@@ -619,6 +620,16 @@ inline Val AsCast::Check(TypeCheck &tc, TypeExpr *) {
         return v;
     }
     tc.NoteCast(this, raw, cv, v);
+    if (IsIntT(st) && tt->kind == TY_INT) {
+        auto inner = Is<AsCast>(child);
+        if (cv.ck == CK_INT) {
+            constint = true;
+            constbits = WrapStorage(cv.ival, tt->intstorage);
+        } else if (inner && !inner->implicit && inner->constint) {
+            constint = true;
+            constbits = WrapStorage(inner->constbits, tt->intstorage);
+        }
+    }
     return v;
 }
 

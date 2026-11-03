@@ -3886,7 +3886,8 @@ since a file can hold any bytes: the integer and float types, and fixed
 arrays and structs of them, pads included. A `bool`, an enum, a reference
 or a handle is a compile error that names the part of `T` at fault.
 `offset` must be a multiple of the size of `T`'s widest scalar, as a
-file's format aligns its arrays (an error where it is a constant), and the
+file's format aligns its arrays (an error where it is a constant, as
+`12 as u64` is too), and the
 view must fit the file; both are checked once, when the view is made, and
 a view that does not fit aborts with a message naming the file, the type,
 the offset, the count and the size.

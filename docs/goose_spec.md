@@ -4656,7 +4656,10 @@ fn main() {
   its arrays; and `0 <= offset`, `0 <= count` and
   `offset + count * size <= sh.size(m)`, computed without overflow, so an
   empty view fits anywhere up to the size. A constant `offset` that is
-  not aligned is a compile error. A view's length is its `count` (§10.5).
+  not aligned is a compile error, an unsigned one or one an integer `as`
+  or `as!` converts (`12 as u64`) too: a conversion keeps the low bits an
+  alignment reads, or aborts (§6.3). A view's length is its `count`
+  (§10.5).
 * **Dynamic stacks.** `dynamic_stack<T>` is a builtin root owner (§3.4)
   whose one component, `items: T[>..]`, is an ordinary grow-only array of
   a fixed-size `T`, alone on a stack of its own: a **slot** of the dynamic

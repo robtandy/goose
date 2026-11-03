@@ -1245,6 +1245,13 @@ NODE(AsCast)
     // can be wider: it is the slot the result lands in (an i8 cast stored
     // into an i64), and the cast still wraps and checks at its own type.
     TypeExpr *totype = nullptr;
+    // Filled by typecheck where the operand is an integer constant, or an
+    // integer conversion of one, and the cast converts to an integer type:
+    // the bits of what the cast makes of it, as a release build wraps it,
+    // which a debug build keeps or aborts on (§6.3). The cast is no
+    // constant for anything else; a view's alignment check reads it (§11.4).
+    bool constint = false;
+    int64_t constbits = 0;
     AsCast(Line l, Node *_child, TypeExpr *_type, bool _unchecked)
         : Node(l, NKind), child(_child), type(_type), unchecked(_unchecked) {}
     // The cast as the source has it, which the checker's clones of it (one
