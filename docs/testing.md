@@ -110,9 +110,9 @@ Test fixtures are grouped by category; `run_tests.py` stays at the root of `test
 | `lifetimes/` | Reference roots, byte views, borrowed contents and shrinking while references are live. |
 | `codegen/` | C names, evaluation order, representations, frame/stack layout and aliasing. |
 | `optimizer/` | Inlining, tail recursion and bounds-check elimination. |
-| `runtime/` | Runtime diagnostics, reusable slot and slice pool operations and array size checks, and `runtime_trim_memory.c`, the native test of releasing unused data-stack memory. |
+| `runtime/` | Runtime diagnostics, reusable slot and slice pool operations and array size checks, and `runtime_trim_memory.c`, the native test of releasing unused data-stack memory. The aborts of addressed delivery and events: `qput_to_unknown`, `qlimit_inbox_zero`, `thread_watch_self`, `thread_watch_main`, `event_close_foreign`, `event_close_twice`, `event_close_zero`. |
 | `storage/` | Relative references, pools and serialization. |
-| `threads/` | Workers, queues, shared globals, contained workers' aborts and `runtime_threads_lifecycle.c`, the native runtime lifecycle test. Imported helpers live in `threads/spawn/`. |
+| `threads/` | Workers, queues, shared globals, contained workers' aborts and `runtime_threads_lifecycle.c`, the native runtime lifecycle test. Inboxes, `select` and events (`docs/design/inboxes_select.md` §10): `inbox_basic`, `inbox_limits`, `inbox_ended`, `thread_watch`, `select_basic`, `select_wait`, `select_flood_timer`, `reports_watched`, `exchange_credits`, and `event_signal`, whose sidecar C (`event_signal.build`, `event_signal_impl.c`) signals from threads of its own; each takes a message that must come with a timed take of a minute, asserted, so a lost wake-up fails rather than hangs. `runtime_queue_stalls.c` plays their races out. Imported helpers live in `threads/spawn/`. |
 | `stdlib/` | Standard-library modules. |
 | `goose_in_goose/` | A Goose-written compiler used as one multi-file bootstrap regression: build and run three generations, check a C fixed point and repeated self-checks of the stage-2 compiler, and compare JIT/native self-compilation. |
 | `audio/` | The `audio` module: the offline PCM mixer advanced by exact frame counts; the rejection of bad rates, PCM, parameters and output; voice and sound capacity and stale handles; and the threading rejection. |
@@ -157,7 +157,7 @@ rejects duplicate names.
 | Goose `-O2`, native C `-O2`, `GS_DEBUG=1`, selected fixtures | Exercise checked arithmetic/conversions and critical runtime paths with optimization enabled. Selection is `codegen_exec.goose` plus files with `runtime-debug` on their first line. |
 | Additional Clang C build of `codegen_exec.goose`, native `-O1`, release/debug runtime; Clang builds of `simd_versions.goose`, `stdlib_base64.goose` and `simd_mul_add.goose`, native `-O2`, with `GS_SIMD=2`, `1` and `0`; Clang builds of `vec_elemwise.goose` with `GS_VEC=1` and `0` | Keep a second C-front-end check on the central codegen coverage file without repeating the whole suite for every backend. The `simd` functions' versions (spec §7.12) exist only where clang builds for x86-64: their C must contain every version, and at each level the C may be built for, the program must print what the baseline prints. `mul_add` is the exception. Run with `modes`, `simd_mul_add` reports the rounding of each kind of call: a plain function (once on arm64, twice on x86-64), and in a `simd` function a direct call, an `inline fn` helper, a plain helper and a function value. A direct call and a function value round once in the AVX2 and AVX-512 versions on a CPU with AVX2 and FMA; the helpers do too where Goose inlines them, and at Goose `-O0`, which inlines nothing, they round as the plain function does. The C is generated at both levels. The runner asks the operating system whether the CPU has them, and accepts either rounding where it can't ask. |
 | Goose `-O0` and `-O2` through the in-process TinyCC backend, plus `GS_DEBUG=1` on the same selected fixtures, over every test and every sample | Check the generated C against a third, very different C implementation, and check that a program behaves the same whichever backend builds it. |
-| One Linux Clang ASan/UBSan job | Instrument the C++ compiler, generated C, selected debug-runtime cases, all samples and the direct runtime tests (`runtime_threads_lifecycle.c`, `runtime_trim_memory.c`). |
+| One Linux Clang ASan/UBSan job | Instrument the C++ compiler, generated C, selected debug-runtime cases, all samples and the direct runtime tests (`runtime_threads_lifecycle.c`, `runtime_trim_memory.c`, `runtime_queue_stalls.c`). |
 | Goose-in-Goose bootstrap, both profiles | Build stage 1 with the real compiler, stage 2 with stage 1, and stage 3 with stage 2. Build all three executables, compare stage-2/stage-3 C, and run two self-checks in stage 2 while stage 3 is emitted and built (the fixed point makes stage 2 the same compiler as stage 3). The baseline profile requires the same self-compiled C across host/native O0 and O2 and across JIT/native execution; the sanitize profile instruments every native stage. |
 
 Run just the bootstrap with
@@ -190,7 +190,23 @@ form too.
 The direct `test/threads/runtime_threads_lifecycle.c` regression checks allocations,
 mappings and Windows handles across worker churn, including unjoined workers,
 concurrent/repeated waits, children outliving their parents and contained
-workers that abort. The direct `test/runtime/runtime_trim_memory.c` test
+workers that abort. The runtime keeps thread records, inboxes and events'
+hint words for the next workers, so it measures allocations once the first
+eight workers alive at once have made them, and then they must stay flat
+through rounds of workers that leave messages in their inboxes, events open
+with copies pending, and watches fired or cancelled. The direct
+`test/threads/runtime_queue_stalls.c` defines `GS_QTEST_HOOK`, which the
+runtime calls at the points of its races and which is empty in every
+program, to park a thread at one of them, and so plays each race out in
+one order, every run: a claim and its wake-up, inbox first after a
+wake-up and the claim it passes on, from an inbox or across a `select`'s
+types, a deadline that meets a claim, events closed under their copies, a
+signal paused before its hint and one paused across a close and across
+70,000 reuses of its owner's record; then eight C threads signal an event
+5000 times each, each waiting for a take after its signal. It is built a
+second time with `GS_QTEST_SMALL`, 5 bits of event serial and 4 of index,
+for stale handles and the limits of open events and of serials, its
+aborts contained. The direct `test/runtime/runtime_trim_memory.c` test
 checks that releasing unused data-stack memory decommits the pages on
 Windows and drops them from the resident set on Linux and macOS, while
 keeping live partial pages and other stacks. It also checks that discarded

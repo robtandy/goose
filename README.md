@@ -365,7 +365,11 @@ compiled as its own program with its own data stacks and its own copies of the
 globals. Values are passed between threads through typed queues, one per
 type, and must be *flat*, with no references at any depth. Passing them is
 cheap because a flat Goose value is contiguous: a job or a result can carry
-real data, such as pixels, and passing it is a single `memcpy`.
+real data, such as pixels, and passing it is a single `memcpy`. A message
+can also go to one thread's inbox (`qput_to(id, v)`), `thread_watch` turns
+a worker's end into a message, and `select<E>()` waits for the next message
+of several types, including events that an I/O layer's C signals with
+`gs_event_signal`.
 
 A failed check or `abort` in a worker started with `thread_spawn_contained`
 ends only that worker. Its message goes to whoever waits for it, not to

@@ -3756,6 +3756,14 @@ locks, atomics or memory orderings.
 | `qget<T>(ms) -> T, bool` | the same, waiting at most `ms` milliseconds; else `T`'s zero value and `false` |
 | `qpoll<T>() -> T, bool` | takes one if there is one; else `T`'s zero value and `false` |
 | `qlimit<T>(n)` | lets the queue for `T` hold at most `n` messages |
+| `thread_id() -> i64` | the caller's id; -1 on main |
+| `qput_to(id, v) -> bool` | puts `v` in thread `id`'s inbox for its type; `false`, at once, if it is full or `id` has ended |
+| `qlimit_inbox<T>(n)` | lets every thread's inbox of `T` hold at most `n` messages |
+| `thread_watch(id, v)` | a copy of `v` in the caller's inbox once worker `id` has ended |
+| `select<E>() -> E` | the next message of a type one of `E`'s variants holds, in that variant |
+| `select<E>(ms) -> E, bool` | the same, waiting at most `ms` milliseconds; else `E`'s zero value and `false` |
+| `event(v) -> resource<event>` | an event of this thread, its message `v`, which C signals |
+| `event_close(e)` | closes this thread's event: later signals do nothing |
 
 Values cross between programs through **typed queues**, one per type.
 Whatever crosses, including a worker's arguments, must be **flat**: it
@@ -3838,6 +3846,133 @@ Stack overflow, `exit(code)`, and aborts on main's thread still end the
 program. A worker that a contained worker starts with `thread_spawn` is
 not contained. Files and other resources opened through `extern fn` stay
 open. Spec §11.2.
+
+### Messages to one thread
+
+Every thread has an inbox of each type beside the type's global queue.
+`qput_to(id, v)` puts `v` in the inbox of thread `id`, the id
+`thread_spawn` returned or -1 for main, and every take reads the caller's
+inbox first, then the global queue. So a job can carry its submitter's
+`thread_id()`, and each submitter gets its own replies:
+
+<!-- check-only -->
+```goose
+struct Job   { key: i64, from: i64 }
+struct Reply { key: i64, value: i64 }
+
+thread_fn lookup() {
+    loop {
+        let j = qget<Job>();                     // its inbox first, then the global queue
+        guard j.key >= 0 else { break; }         // a stop, queued behind the jobs
+        qput_to(j.from, Reply { key: j.key, value: j.key * j.key });
+    }
+}
+
+fn main() {
+    let w = thread_spawn(lookup);
+    for k in 3 { qput_to(w, Job { key: k, from: thread_id() }); }
+    var total = 0;
+    for k in 3 { total += qget<Reply>().value; }
+    qput_to(w, Job { key: -1, from: -1 });
+    thread_wait(w);
+    print(total);
+}
+```
+
+A worker's inboxes take puts before it starts. Once it has ended,
+`qput_to` returns `false`, and the messages it never took are gone with
+it; an id no `thread_spawn` returned aborts. `qlimit_inbox<T>(n)` limits
+every inbox of `T` to `n` messages, each its own, and `qlimit` still
+limits only the global queue. No put waits for room: a sender retries a
+refused put, or receivers grant each sender a number of messages and
+send credits back as they take them.
+
+`thread_watch(id, v)` puts a copy of `v` in the caller's inbox once
+worker `id` has ended, after everything it put is queued and with
+`thread_wait(id)` answering at once: at once if it has already ended,
+once however it ends, and even into a full inbox. Watching main or
+oneself aborts.
+
+Every queue is first in, first out: a message put after another, from
+whatever thread, is taken after it. Between queues there is no order, so
+two kinds of message that need one go as one type, a stop behind the
+jobs above being a job with a negative key.
+
+### Waiting for several things
+
+`select<E>()` waits for the next message of any type that one of the
+enum `E`'s variants holds, and returns it in that variant. Each variant
+holds one field, whose type is what it receives; the types differ, and
+are what `qget<T>` takes, but not resizable:
+
+<!-- check-only -->
+```goose
+struct Job    { n: i64 }
+struct Report { to: i64 }
+enum Work { Job { j: Job }, Report { r: Report } }
+
+thread_fn worker() {
+    var done = 0;
+    loop {
+        match select<Work>() {                   // a Job or a Report, whichever comes
+            Job j => {
+                guard j.j.n >= 0 else { break; } // a stop, behind the jobs
+                done += j.j.n;
+            },
+            Report r => { qput_to(r.r.to, done); },
+        }
+    }
+}
+
+fn main() {
+    let w = thread_spawn(worker);
+    for i in 4 { qput_to(w, Job { n: i }); }
+    qput_to(w, Report { to: thread_id() });
+    let sofar = qget<i64>();                     // the jobs done so far, some or all
+    qput_to(w, Job { n: -1 });
+    thread_wait(w);
+    let more, got = qget<i64>(10);               // nothing: 0 and false after 10 ms
+}
+```
+
+`select<E>(ms)` waits at most `ms` milliseconds, and returns `E`'s zero
+value and `false` if nothing came; zero or less does not wait, and a
+message already there is returned whatever the timeout, so a loop that
+waits for its next timer checks the timer every turn. Each `select` in
+the source keeps its own turn per thread: it looks first at the variant
+after the one it returned last, so a type with a message is taken within
+as many calls as `E` has variants, and a busy type starves no other. For
+a variable-size message, write the enum in variable mode, `select<E..>()`.
+
+### Events from C
+
+`event(v)` makes an event of the calling thread: a `resource<event>`
+holding a copy of `v`, which C code, an I/O layer for instance, keeps and
+signals from any thread with `gs_event_signal(e)` from `goose.h`. A
+signal makes the copy pending in the owner's inbox for `v`'s type, and
+wakes the owner, which takes it as any message:
+
+<!-- check-only -->
+```goose
+struct IoDone { file: i64 }
+extern fn read_async(fd: i64, size: i64, done: resource<event>);   // its C signals done
+
+fn main() {
+    let done = event(IoDone { file: 3 });
+    read_async(3, 65536, done);
+    let d = qget<IoDone>();                      // the completion, as a message
+    event_close(done);
+}
+```
+
+Signals that come while a copy is pending merge into it, so a burst wakes
+the owner once, and a take follows every signal. `gs_event_signal`
+returns 1 then, 0 once the event is closed by `event_close` or its
+thread's end, and -1 for a handle that never named an event. An event
+carries only its message, so each source gets its own. C may keep a
+`resource<event>` but never makes one: no `extern fn` returns one, and no
+exported function takes one. Closing another thread's event, a closed one
+or the zero handle aborts. Spec §11.2.
 
 ---
 
@@ -3991,6 +4126,9 @@ struct Mesh { vertices: resource<Buffer>, count: i64 }
   `to_bytes`, `bytes_of` and `from_bytes` reject it.
 * It owns nothing. A copy is the same name, and `buffer_free` is what
   releases the buffer.
+* `resource<event>`, an event's handle, is the runtime's kind: `event(v)`
+  makes it, and C takes it but never makes one ([Events from
+  C](#events-from-c)).
 * A binding's functions in its namespace are its handles' methods:
   `b.size()` calls `gpu::size(b)` for a `resource<gpu::Buffer>`.
 
@@ -4134,6 +4272,9 @@ standard library, written in Goose under `stdlib/` and documented in
 | `default<T>() -> T` | the value a fixed-size `T` has before anything is written to it, declared defaults applied | [8](#field-defaults) |
 | `hardware_threads()`, `thread_spawn(worker, args…)`, `thread_spawn_contained(worker, args…)`, `thread_wait(id)`, `thread_wait(id, msg)` | workers | [22](#22-threads) |
 | `qput(v)`, `qget<T>()`, `qpoll<T>()`, `qlimit<T>(n)` | the typed queues | [22](#22-threads) |
+| `thread_id()`, `qput_to(id, v)`, `qlimit_inbox<T>(n)`, `thread_watch(id, v)` | messages to one thread | [22](#messages-to-one-thread) |
+| `select<E>()`, `select<E>(ms)` | waiting for several types | [22](#waiting-for-several-things) |
+| `event(v)`, `event_close(e)` | events from C | [22](#events-from-c) |
 | `to_bytes(a)`, `to_bytes(a, out)`, `bytes_of(a)`, `from_bytes<T[>..]>(b)` | serialization | [23](#23-serialization) |
 | `embed_file(path)`, `embed_shader(…)` | a file's bytes, or a compiled shader, read at compile time | [21](#embed_file) |
 

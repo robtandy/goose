@@ -1186,6 +1186,10 @@ extern fn buffer_free(b: resource<Buffer>);
 * **C.** It crosses as a `uint64_t` (§7.10). The bits are the binding's.
 * **No ownership.** Copying one copies the name only, and only the
   binding's API releases what it names.
+* **The runtime's kinds.** `event`, where the program declares nothing of
+  the name, is the kind of an event's handle, `resource<event>`, which only
+  `event(v)` makes (§11.2). It is written only as resource's argument, and
+  C takes such a handle but never makes one (§7.10).
 
 ---
 
@@ -3316,7 +3320,15 @@ These values can cross the boundary (with layouts per C.2):
   limited arrays, and fixed-mode ADTs), by value as its packed C type;
 * `T&` to such a `T`, as a pointer;
 * `T[:]` of such a `T`, as the slice struct (`{ data, len }`);
-* a handle, `resource<U>` (§3.12), as a `uint64_t`;
+* a handle, `resource<U>` (§3.12), as a `uint64_t`; one of the runtime's
+  kinds, `resource<event>`, only by value or read-only, since C takes one
+  but never makes one: no `extern fn` returns one, by itself or in a
+  value, or takes a writable reference or slice to one, and no exported
+  function takes one. C signals an event's handle with `gs_event_signal`,
+  which `goose.h` declares (§11.2, docs/packages.md): 1 once a copy of the
+  event's message is pending and its owner awake, 0 once the event is
+  closed, -1 for a handle that never named one. Any thread may call it at
+  any time; it runs no Goose code;
 * `T[>..]&` of such a `T`, as the resizable's header plus its stack
   (`gs_rref`). C sees the elements as blocks of `T`'s packed size: it may
   write the ones there are and append whole ones at the stack top, moving
@@ -4512,6 +4524,78 @@ relative of the Linda tuple-space / coordination style.
   `qlimit<T>(n)` gives it one of `n` messages; lowering a limit below what
   the queue holds keeps the messages queued, and puts fail until fewer than
   `n` remain. A limit of zero or less aborts with a runtime diagnostic.
+* **Inboxes**: beside the global queue of each type, every thread has an
+  inbox of it. `thread_id() -> i64` is the caller's id, -1 on main, and
+  `qput_to(id, v) -> bool` puts flat `v` in thread `id`'s inbox for `v`'s
+  type, never blocking. It is `false` at once, queueing nothing, if that
+  inbox is full or the thread has ended; a call statement drops it. Every
+  take (`qget`, `qpoll`, `qget(ms)`, `select`) takes the oldest message of
+  the caller's inbox, else of the global queue, and waits for either, so a
+  program that addresses nothing behaves as before. A worker's inboxes
+  exist before it starts. An id that no `thread_spawn` has returned, or
+  one below -1, aborts `qput_to`. Main's inbox is -1's, and a thread may
+  put to its own.
+* **Inbox limits**: `qlimit_inbox<T>(n)` limits every thread's inbox of
+  `T` to `n` messages, each inbox on its own; `qlimit<T>(n)` still limits
+  only the global queue. Like `qlimit`, it is program-wide, absent until
+  called, aborts at zero or less, keeps what is queued when lowered, and
+  checks a racing put against the old limit or the new. Nothing blocks:
+  a sender retries a refused put, or receivers grant credits, which come
+  back as messages.
+* **A worker's end**, whether it returns or aborts while contained: (1)
+  its storage is released; (2) its inboxes and events are closed, their
+  messages and pending copies discarded, and the watches it made
+  cancelled; (3) it is marked ended, for `thread_wait`; (4) the watches on
+  it fire. A put or a signal made as it ends may succeed and be discarded
+  unread, as on any asynchronous queue.
+* **Watches**: `thread_watch(id, v)` puts a copy of flat `v` in the
+  caller's inbox at step 4 of worker `id`'s end: at once if it has ended,
+  exactly once if it is ending, even into a full inbox (where it counts
+  while it waits), and not at all if the watcher has ended first. Any
+  thread may watch any worker any number of times; watching main, oneself
+  or an id never issued aborts. The message finds everything the worker
+  put queued and `thread_wait(id)` answering at once.
+* **`select`**: `select<E>() -> E` blocks until it takes a message of a
+  type one of `E`'s variants holds, and returns it in that variant;
+  `select<E>(ms) -> E, bool` waits as `qget<T>(ms)` does, giving `E`'s
+  zero value and `false` on a miss, and not waiting at zero or less. Each
+  variant of `E` holds exactly one field, of any name, whose type is what
+  it receives, from the inbox first, so senders put the plain type. The
+  types are distinct and are what `qget<T>` takes, but for resizable ones
+  ("select cannot receive a resizable value yet; take it with qget"). `E`
+  may be generic, and is written `E..` for a variable-size field (§3.5). A
+  `select` takes only the message it returns, and returns a waiting one
+  whatever its timeout. User functions named `select` keep their calls
+  (§11.1), as for every builtin.
+* **Events**: `event(v) -> resource<event>` makes an event of the calling
+  thread holding a copy of flat `v`. C signals it with `gs_event_signal`
+  (§7.10) from any thread at any time, which makes the copy *pending* in
+  the owner's inbox for `v`'s type, or merges into the one pending, and
+  wakes the owner: a burst wakes it once, and every signal is followed by
+  a take. Takes find a pending copy before the global queue, by turns with
+  the inbox's queued messages, unordered with them and counted against no
+  limit. `event_close(e)` closes the caller's event: later signals return
+  0, and a pending copy stays to be taken. Closing another thread's event,
+  a closed one or the zero handle aborts.
+* **Order and waiting**: every queue, inbox or global, is first in, first
+  out: a put that returned before another started is taken first, from
+  whatever threads, so "data, then done" works across threads. Between
+  queues, an inbox comes before its type's global queue, and a `select`
+  site, per thread, starts after the variant it returned last, so a type
+  with a message is taken within as many calls as `E` has variants; two
+  kinds of message that need an order are sent as one type. A message put
+  while threads wait is taken, by one of them or one that was awake, and
+  never left with all its takers asleep; a return is a message or the
+  deadline, on a monotonic clock. With nothing ready, a take costs a check
+  of its sources and a sleep.
+
+| id | `qput_to(id, v)` | `thread_watch(id, v)` | `thread_wait(id)` |
+|---|---|---|---|
+| -1, main | main's inbox | aborts | aborts |
+| a running worker | its inbox | watches it | waits |
+| a worker that returned, or aborted while contained | `false` | `v` arrives at once | returns at once |
+| the caller's own | its own inbox | aborts | aborts |
+| never issued: below -1, or not yet returned by `thread_spawn` | aborts | aborts | aborts |
 
 ### 11.3 Dynamic stacks (future)
 
@@ -4538,6 +4622,10 @@ The language's own functions:
 | `hardware_threads() -> i64`, `thread_spawn(worker, args…) -> i64`, `thread_spawn_contained(worker, args…) -> i64`, `thread_wait(id) -> bool`, `thread_wait(id, msg) -> bool` | workers (§11.2) |
 | `qput(v) -> bool`, `qget<T>() -> T`, `qget<T>(ms) -> T, bool`, `qpoll<T>() -> T, bool` | the typed queues (§11.2) |
 | `qlimit<T>(n)` | a queue's limit of messages (§11.2) |
+| `thread_id() -> i64`, `qput_to(id, v) -> bool`, `qlimit_inbox<T>(n)` | the caller's id, a message to one thread's inbox, and inboxes' limit (§11.2) |
+| `thread_watch(id, v)` | a copy of `v` in the caller's inbox once worker `id` has ended (§11.2) |
+| `select<E>() -> E`, `select<E>(ms) -> E, bool` | the next message of the types `E`'s variants hold (§11.2) |
+| `event(v) -> resource<event>`, `event_close(e)` | an event C signals, its message `v`, and its close (§11.2) |
 | `to_bytes(a) -> u8[>..]`, `to_bytes(a, out)` | an array's image (a varint byte count, then its element region), either fresh or appended to a growable `u8` array (§3.9, `design/serialization.md`) |
 | `bytes_of(a) -> u8[:]` | the element region alone, as a view: no copy, and never writable |
 | `from_bytes<T[>..]>(b: u8[:]) -> T[>..], bool` | a *verified* array from an untrusted image; empty and `false` if it is not one. Also builds `T[>..<]` and the `T[]` family |
@@ -4765,9 +4853,10 @@ its resolution is described.
    package independent resizables (§3.4); nesting and statically bounded owner
    arrays are follow-up work ([design](design/root_structs.md)). **Two-way
    growth** arrays remain open.
-9. **Concurrency surface finalization** — queue fairness/capacity, select,
-   worker-local init, flat-type relaxation for self-contained
-   relative-reference values (send whole trees through queues).
+9. **Concurrency surface, what remains** — worker-local init, flat-type
+   relaxation for self-contained relative-reference values (send whole
+   trees through queues). Fairness, capacity and select are resolved (9,
+   below).
 10. **SIMD/alignment** — measure whether packed layouts cost real SIMD
     performance; consider opt-in aligned types if so. Related: narrow-lane
     elementwise ops (§6.1) should vectorize now that arithmetic runs at the
@@ -4784,6 +4873,14 @@ its resolution is described.
     `in pool` form already copies); track the region an offset ranges over so
     whole-region copies (and serialization moves) can be proven safe.
 ### Resolved
+
+9. **Queue fairness and capacity, select** — DONE, see §11.2
+   (`docs/design/inboxes_select.md`): `qput_to` addresses a thread's
+   inbox, which every take reads first; `qlimit_inbox` bounds inboxes, and
+   credits give backpressure without a blocking put; `select<E>` waits on
+   several types, its rotation per site starving none; `thread_watch`
+   reports a worker's end as a message; and `event(v)` lets C wake a
+   thread with `gs_event_signal`. Every queue is first in, first out.
 
 0e. **Per-array index types** — DONE, see §3.11 and §7.14
     (`docs/design/index_types.md`): `u32 in a` is an index validated once

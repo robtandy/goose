@@ -5636,19 +5636,31 @@ temporary, so a discarded answer still waits. `thread_wait(id, msg)`
 appends the message the runtime hands over to `msg`, as `to_bytes(a, out)`
 appends its image (`AppendBytes`), and then frees it (`gs_free_msg`).
 Queues are one `gs_queue` per element type, carrying one contiguous image
-per value; `main` creates them (`gs_qinit`) before anything else runs. A
-missed `qpoll` yields the all-zero image (`MinBytes`). A queue is a linked
-list of `malloc`'d nodes under a mutex, with a condition variable for its
-receivers, and a count of its messages. `gs_qput` allocates and copies
-before it takes the lock, and checks the queue's limit under the lock; a
-refusal frees the node. A timed `qget` (`gs_qwait`) waits for a deadline on
-a monotonic clock, and a miss yields the zero image, as a missed `qpoll`
-does. On POSIX the condition variable's clock is set to `CLOCK_MONOTONIC`,
-on macOS the wait is for a relative time
-(`pthread_cond_timedwait_relative_np`), and on Windows the runtime reads
-`GetTickCount64`. A value of no bytes (spec §3.4) is sent through a queue
-or a thread's arguments as no bytes, and the receiver zeroes the object C
-gives it rather than reading past the image.
+per value (`MessageImage`); `main` creates them (`gs_qinit`, which numbers
+the types in the order it is called) before anything else runs. A take
+hands its message over as a view and a token, a `gs_qmsg { data, size,
+hold }`: the generated code copies `size` bytes from `data` into its
+destination (`EmitTakenMessage`), then gives the token back with
+`gs_qdone`, which frees a node and returns an event's record where its
+copy closed it. `gs_qget` blocks, `gs_qwait(q, ms, m)` is `qget<T>(ms)`
+and, with `ms` 0, `qpoll`, and a miss leaves no bytes and no token, so the
+destination gets the all-zero image (`MinBytes`). `qput_to`,
+`thread_watch` and `event` pass the image as `qput` does, after the id;
+`thread_id` is `gs_thread_self()`. A `select` site emits two statics: the
+array of its variants' queues, variant `i`'s field type's being queue `i`,
+and its rotation, a `GS_TLS uint32_t`; `gs_qselect` returns the tag it
+took, or -1 at the deadline (`ms` below zero blocks, and a timed select's
+`ms` is clamped to zero, as `qget`'s is). The message is the variant's one
+field, so it is copied in behind the tag: into the union of a fixed-mode
+`E`, or onto the data stack after the tag for an `E..`; a miss is `E`'s
+zero value (`EmitSelect`). A value of no bytes (spec §3.4) is sent through
+a queue or a thread's arguments as no bytes, and the receiver zeroes the
+object C gives it rather than reading past the image. `event`'s type,
+`resource<event>`, is a handle whose kind is `Ast::eventkind`, a struct
+the resolver gives the name `event` where the program declares no type of
+it, which `ValidateType` refuses anywhere but as resource's argument and
+`Mangle` names `rk_event`, apart from a program's types; `RuntimeHandleIn`
+finds one in a value for the C boundary's rule (spec §7.10).
 
 ### 6.9 Generated walkers
 
@@ -6308,7 +6320,7 @@ costs nothing to check.
 ## 7. The runtime
 
 The runtime is a small amount of C99 code covering data stacks, integer
-semantics, varints, aborts, text forms, workers and queues, slice pool
+semantics, varints, aborts, text forms, workers, queues, inboxes and events, slice pool
 freelists, byte search, and the C behind `stdlib/os.goose`. It comes in two
 halves. The first half is what a program's own translation unit needs.
 `src/runtime/runtime.h` holds configuration, macros, the helpers that must
@@ -6473,6 +6485,63 @@ goes into `gs_aborted` and stays there until the first wait that asks for it
 takes it out, so that list holds only the messages no wait has taken. The
 bit is never cleared. `gs_panic`, `gs_exit`, and the fault handlers still
 end the process.
+
+**Queues, inboxes and select** (spec §11.2, `docs/design/inboxes_select.md`
+§5). A queue is a `gs_qstate`: a linked list of `malloc`'d nodes under a
+mutex, a count, a limit, and a list of the waits that take from it. Every
+thread that takes has a record (`gs_thread`), main's made with the first
+queue: its id, its inboxes, a parker, the watches it made and those on it,
+and the events it owns. A worker's record is made, or taken off a free
+list, at its spawn, under `gs_threads_mutex`, so its inboxes take puts
+before it starts, and goes back as the worker ends, to be reopened with a
+new id; records are never freed, so whoever reached one checks the id it
+expected under the record's mutex or the inbox's. Live records are found by
+id in a hash table. An inbox is a `gs_qstate` per record and type, in a
+table by type number, made by the first take, put or event that needs one;
+`qput_to` checks the inbox's owner, that it is open and its limit, links
+and claims in one critical section of its mutex. A take looks at each type
+in turn, the inbox before the global queue, skipping a queue whose count,
+read without the lock, is zero (`gs_try1`): the empty `qpoll` costs about
+half of what it did. A parker is a mutex, a condition variable, a count of
+the thread's waits and `RUNNING`, `WAITING` or `CLAIMED`. A wait becomes
+(its count, `WAITING`), joins the lists of its sources with entries on its
+own stack, looks again, and sleeps while still so (`gs_wait`, out of line
+so that a take that finds its message pays for the look alone). A put or a
+signal claims the first entry whose count still matches (`gs_claim`),
+under the queue's mutex and then the parker's, dropping stale entries, and
+signals the condition variable once both are let go, so that no put waits
+for a wake-up's system call. The woken thread leaves its lists and takes
+as any take does; if it took nothing from the global queue whose put
+claimed it, it passes the claim to another of that queue's waiters, and a
+deadline that meets a claim acts on it. Deadlines are on the monotonic
+clock, as above. A watch is in its worker's list and its watcher's, each
+under its record's mutex, and settles once, armed to fired or cancelled,
+by compare-exchange; the winner unlinks it from the other list, and a
+firing puts the message, past the inbox's limit, once the watch is dropped.
+A worker's end is the specification's four steps (`gs_thread_main`), its
+record back on the free list with step 3.
+
+**Events** (spec §11.2). Event records sit in blocks that never move and
+are never freed, found by a handle's index (bits 23 to 0) and named only
+while the handle's serial (bits 63 to 24, `GS_RES_SERIAL_BITS`,
+`GS_RES_REGION_BITS`) is the record's; serials grow by one and are never
+reused. A record's state word holds its serial, `open` and `pending`. An
+inbox's hints are blocks of 64 slots, a word whose bit `k` says that the
+event given slot `k` may have a copy pending, and, the owner's alone, the
+event and serial each slot was given. `gs_event_signal` reads the state,
+the inbox and the hint word, sets `pending` by compare-exchange from the
+state it read, which confirms the other two, sets the hint by atomic `or`
+and claims the owner's wait; a signal that a close or a reuse overtook
+finds another state, and returns 0, or -1 for a serial never handed out.
+A take clears a hint bit, then `pending` by compare-exchange from the
+serial its slot was given, and takes the copy; it alternates the inbox's
+copies with its queued messages, and starts its scan of the hints after
+the slot it last took. Only the owner gives a record back, closed with
+nothing pending: at `event_close`, at `gs_qdone` of a closed event's copy,
+or at its end. At most 2^24 events are open (`GS_E_EVENTS`), and 2^40 - 1
+serials are handed out in all. `test/threads/runtime_queue_stalls.c`
+plays each race out through `GS_QTEST_HOOK`, which parks a thread at a
+chosen point and is empty in every program (`docs/testing.md`).
 
 **Integer semantics** (§6.2): every operation runs at its type through
 `gs_add_i32`-style helpers. Under `GS_DEBUG` these are functions that check

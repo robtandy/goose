@@ -250,6 +250,21 @@ void mylib_name(gs_rref out, int64_t id) {   /* extern fn mylib_name(out: u8[>..
 }
 ```
 
+`goose.h` also declares `gs_event_signal(gs_res e)`, which an I/O layer
+calls when an operation completes: `e` is a `resource<event>` the program
+handed it, and the event's thread takes the event's message as it takes
+any (spec §11.2). It may be called from any thread, the layer's own
+included, at any time; it runs no Goose code and allocates nothing, and
+returns 1 once the message is pending and its thread awake, 0 once the
+event is closed, and -1 for a handle that never named one. C keeps such a
+handle as long as it likes, but never makes one.
+
+```c
+#include "goose.h"
+static gs_res pending_read;                     /* from extern fn read_async(..., done: resource<event>) */
+static void on_complete(void) { gs_event_signal(pending_read); }   /* on the I/O thread */
+```
+
 A package's C is self-contained: two packages that must share C share a
 repository, as `gfx`, `audio` and `ui` do. A package whose functions keep
 one state for the process, or that may only be called from the main thread,
