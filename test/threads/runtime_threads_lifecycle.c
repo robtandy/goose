@@ -502,6 +502,16 @@ static void run_contained_pool(void) {
     check_baseline(allocations, regions);
 }
 
+/* A contained worker is contained again once the wait for the batch it
+   handed its pool has ended: an abort then ends the worker alone. */
+static void waited_then_aborting_worker(uint8_t *args) {
+    gs_pool pool = gs_pool_create(2, __FILE__, __LINE__);
+    gs_pool_spawn(pool, pool_phase_task, args, sizeof(int64_t));
+    gs_pool_wait(pool);
+    gs_pool_destroy(pool);
+    gs_abort(GS_E_ASSERT, __FILE__, __LINE__);
+}
+
 #ifndef _WIN32
 static int parked;
 
@@ -571,17 +581,28 @@ static void pool_applying_worker(uint8_t *args) {
     gs_pool_destroy(solo);
 }
 
-/* A pool's tasks are not contained but where pool.apply_contained hands
-   them out, wherever they run: an abort in one that a contained worker runs
-   while it waits for the pool ends the program, as it would on any of the
-   pool's own threads, rather than returning to the worker's own handler on
-   the pool's stacks. In a process of its own, which the abort ends. */
-static void check_contained_pool_abort(void) {
+/* A contained worker that hands its pool a task and aborts before it waits
+   for it, while the task may still be writing into the worker's storage. */
+static void handing_worker(uint8_t *args) {
+    gs_pool pool = gs_pool_create(2, __FILE__, __LINE__);
+    gs_pool_spawn(pool, pool_phase_task, args, sizeof(int64_t));
+    gs_abort(GS_E_ASSERT, __FILE__, __LINE__);
+}
+
+/* Aborts a contained worker cannot contain, which end the program instead:
+   in a process of its own, which the abort ends. A pool's tasks are not
+   contained but where pool.apply_contained hands them out, wherever they
+   run: an abort in one that a contained worker runs while it waits for the
+   pool ends the program, as it would on any of the pool's own threads,
+   rather than returning to the worker's own handler on the pool's stacks.
+   Nor is a contained worker contained while its pool has tasks out, which
+   the worker's end would release the storage of under them. */
+static void check_contained_abort_ends(void (*worker)(uint8_t *), const char *what) {
     int err[2];
     check(!pipe(err), "open a pipe for the aborted program's error");
     fflush(NULL);
     pid_t child = fork();
-    check(child >= 0, "fork a program whose pool's task aborts");
+    check(child >= 0, "fork a program whose contained worker aborts");
     if (!child) {
         dup2(err[1], STDERR_FILENO);
         close(err[0]);
@@ -589,7 +610,7 @@ static void check_contained_pool_abort(void) {
         alarm(20);
         gs_rt_init(0, NULL, 1, 1, GS_MAX_STACKS);
         int64_t stamp = 5;
-        int64_t id = gs_thread_spawn(pool_applying_worker, &stamp, sizeof(stamp), 1);
+        int64_t id = gs_thread_spawn(worker, &stamp, sizeof(stamp), 1);
         gs_thread_wait(id, NULL, NULL, __FILE__, __LINE__);
         _exit(0);
     }
@@ -605,7 +626,7 @@ static void check_contained_pool_abort(void) {
     int ended = waitpid(child, &status, 0) == child && WIFEXITED(status) &&
                 WEXITSTATUS(status) == 1 && strstr(text, "goose runtime error: assert failed");
     if (!ended) fputs(text, stderr);
-    check(ended, "an abort in a pool's task ends the program, a contained worker waiting or not");
+    check(ended, what);
 }
 #endif
 
@@ -790,18 +811,27 @@ int main(void) {
     check(counter_add(&live_allocations, 0) == 0 && counter_add(&live_regions, 0) == 0,
           "stopping releases the stacks a pool keeps for the thread that waits for it");
 
-    /* Contained batches, on a pool of one worker and one of four. */
+    /* Contained batches, on a pool of one worker and one of four; then a
+       contained worker that waits for its pool's batch and aborts. */
     gs_rt_init(0, NULL, 1, 1, GS_MAX_STACKS);
     GS(0)->top[0] = 99;
     run_contained_solo();
     run_contained_pool();
+    int64_t waited = gs_thread_spawn(waited_then_aborting_worker, &stamp, sizeof(stamp), 1);
+    check(!gs_thread_wait(waited, NULL, NULL, __FILE__, __LINE__),
+          "a contained worker is contained again once it has waited for its pool");
     gs_thread_release();
     gs_rt_stop();
     check(counter_add(&live_allocations, 0) == 0 && counter_add(&live_regions, 0) == 0,
           "stopping releases what contained batches and their pools held");
 #ifndef _WIN32
     check_busy_pool_stop();
-    check_contained_pool_abort();
+    check_contained_abort_ends(pool_applying_worker,
+                               "an abort in a pool's task ends the program, a contained worker "
+                               "waiting or not");
+    check_contained_abort_ends(handing_worker,
+                               "a contained worker's abort ends the program while its pool has "
+                               "tasks out");
 #endif
     puts("runtime thread cleanup ok");
     return 0;

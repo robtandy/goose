@@ -508,6 +508,15 @@ struct gs_pool_state {
     int aborted;
     uint8_t *abort_msg;
     int64_t abort_len;
+    /* From the first task of a batch to the end of the wait for it, the
+       thread handing the pool tasks is not contained (gs_pool_submit), and
+       its gs_contain is kept here: an abort of its own meanwhile ends the
+       program, since the tasks it handed out may still be running on its
+       storage, which the end of a contained thread program, or of a
+       contained task, would release or give the next task. Only the thread
+       holding the pool reads or writes these. */
+    int handing;
+    gs_contained *handing_contain;
 };
 
 /* The pools made and not yet destroyed, under gs_threads_mutex. No
@@ -698,6 +707,13 @@ GS_API void gs_pool_submit(gs_pool pool, void (*run)(void (*)(uint8_t *), uint8_
         gs_panic("out of memory spawning pool task");
     }
     if (argsize) memcpy(t->args, args, (size_t)argsize);
+    /* The batch's first task: the thread handing it out is not contained
+       until its wait for the batch ends (gs_pool_wait). */
+    if (!pool->handing) {
+        pool->handing = 1;
+        pool->handing_contain = gs_contain;
+        gs_contain = NULL;
+    }
     gs_mutex_lock(&pool->mutex);
     pool->pending++;
     if (pool->tail) pool->tail->next = t;
@@ -734,6 +750,13 @@ GS_API void gs_pool_wait(gs_pool pool) {
         }
     }
     gs_mutex_unlock(&pool->mutex);
+    /* No task of the batch runs any more: the thread is as contained as it
+       was before it handed the batch out. */
+    if (pool->handing) {
+        pool->handing = 0;
+        gs_contain = pool->handing_contain;
+        pool->handing_contain = NULL;
+    }
 }
 
 GS_API uint8_t gs_pool_wait_contained(gs_pool pool, uint8_t **msg, int64_t *len) {
