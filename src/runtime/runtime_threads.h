@@ -175,6 +175,7 @@ static void gs_aborted_add(int64_t id, uint8_t *msg, int64_t len) {
    contained worker's, or a contained task's (gs_pool_guard). */
 static int gs_run_contained(void (*run)(void (*)(uint8_t *), uint8_t *),
                             void (*entry)(uint8_t *), uint8_t *args, gs_contained *c) {
+    c->handing = 0;
     if (gs_setjmp(c->jump)) {
         gs_contain = NULL;
         return 1;
@@ -520,14 +521,15 @@ struct gs_pool_state {
        yet (gs_pool_batch). Under the pool's lock. */
     gs_pool_batch *batches;
     /* From the first task of a batch to the end of the wait for it, the
-       thread handing the pool tasks is not contained (gs_pool_submit), and
-       its gs_contain is kept here: an abort of its own meanwhile ends the
-       program, since the tasks it handed out may still be running on its
-       storage, which the end of a contained thread program, or of a
-       contained task, would release or give the next task. Only the thread
-       holding the pool reads or writes these. */
+       pool has tasks out (handing), which the contained thread program that
+       handed them out, if one did (handed_by), counts: while it has tasks
+       out, on this pool or another, an abort of its own ends the program
+       rather than it, since those tasks may still be running on its
+       storage, which its end would release or give its next task
+       (gs_contained::handing). Only the thread holding the pool reads or
+       writes these. */
     int handing;
-    gs_contained *handing_contain;
+    gs_contained *handed_by;
 };
 
 /* The pools made and not yet destroyed, under gs_threads_mutex. No
@@ -728,12 +730,13 @@ GS_API void gs_pool_submit(gs_pool pool,
         gs_panic("out of memory spawning pool task");
     }
     if (argsize) memcpy(t->args, args, (size_t)argsize);
-    /* The batch's first task: the thread handing it out is not contained
-       until its wait for the batch ends (gs_pool_wait). */
+    /* The batch's first task: the thread program handing it out, where it
+       is contained, counts it out until the wait for the batch ends
+       (gs_pool_wait). */
     if (!pool->handing) {
         pool->handing = 1;
-        pool->handing_contain = gs_contain;
-        gs_contain = NULL;
+        pool->handed_by = gs_contain;
+        if (gs_contain) gs_contain->handing++;
     }
     gs_mutex_lock(&pool->mutex);
     if (fresh) {
@@ -776,12 +779,15 @@ GS_API void gs_pool_wait(gs_pool pool) {
         }
     }
     gs_mutex_unlock(&pool->mutex);
-    /* No task of the batch runs any more: the thread is as contained as it
-       was before it handed the batch out. */
+    /* No task of the batch runs any more. The thread program that handed
+       it out is the one waiting, whose count goes down; the record is only
+       compared, as gs_rt_stop destroys a pool whose thread program may have
+       ended without waiting for it (a long-distance return out of an
+       apply's argument). */
     if (pool->handing) {
+        if (pool->handed_by && pool->handed_by == gs_contain) gs_contain->handing--;
         pool->handing = 0;
-        gs_contain = pool->handing_contain;
-        pool->handing_contain = NULL;
+        pool->handed_by = NULL;
     }
 }
 

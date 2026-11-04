@@ -564,6 +564,22 @@ static void waited_then_aborting_worker(uint8_t *args) {
     gs_abort(GS_E_ASSERT, __FILE__, __LINE__);
 }
 
+/* Two pools with tasks out at once, handed out A then B and waited for A
+   then B: the worker is contained again once both waits have ended, and
+   not before (interleaved_handing_worker). Pools of one worker, whose
+   tasks stay queued until the worker's wait runs them. */
+static void interleaved_aborting_worker(uint8_t *args) {
+    gs_pool a = gs_pool_create(1, __FILE__, __LINE__);
+    gs_pool b = gs_pool_create(1, __FILE__, __LINE__);
+    gs_pool_spawn(a, pool_phase_task, args, sizeof(int64_t));
+    gs_pool_spawn(b, pool_phase_task, args, sizeof(int64_t));
+    gs_pool_wait(a);
+    gs_pool_wait(b);
+    gs_pool_destroy(a);
+    gs_pool_destroy(b);
+    gs_abort(GS_E_ASSERT, __FILE__, __LINE__);
+}
+
 #ifndef _WIN32
 static int parked;
 
@@ -638,6 +654,17 @@ static void pool_applying_worker(uint8_t *args) {
 static void handing_worker(uint8_t *args) {
     gs_pool pool = gs_pool_create(2, __FILE__, __LINE__);
     gs_pool_spawn(pool, pool_phase_task, args, sizeof(int64_t));
+    gs_abort(GS_E_ASSERT, __FILE__, __LINE__);
+}
+
+/* As interleaved_aborting_worker, but aborting once A's wait has ended,
+   with B's task still out. */
+static void interleaved_handing_worker(uint8_t *args) {
+    gs_pool a = gs_pool_create(1, __FILE__, __LINE__);
+    gs_pool b = gs_pool_create(1, __FILE__, __LINE__);
+    gs_pool_spawn(a, pool_phase_task, args, sizeof(int64_t));
+    gs_pool_spawn(b, pool_phase_task, args, sizeof(int64_t));
+    gs_pool_wait(a);
     gs_abort(GS_E_ASSERT, __FILE__, __LINE__);
 }
 
@@ -863,8 +890,8 @@ int main(void) {
     check(counter_add(&live_allocations, 0) == 0 && counter_add(&live_regions, 0) == 0,
           "stopping releases the stacks a pool keeps for the thread that waits for it");
 
-    /* Contained batches, on a pool of one worker and one of four; then a
-       contained worker that waits for its pool's batch and aborts. */
+    /* Contained batches, on a pool of one worker and one of four; then
+       contained workers that wait for their pools' batches and abort. */
     gs_rt_init(0, NULL, 1, 1, GS_MAX_STACKS);
     GS(0)->top[0] = 99;
     run_contained_solo();
@@ -873,6 +900,9 @@ int main(void) {
     int64_t waited = gs_thread_spawn(waited_then_aborting_worker, &stamp, sizeof(stamp), 1);
     check(!gs_thread_wait(waited, NULL, NULL, __FILE__, __LINE__),
           "a contained worker is contained again once it has waited for its pool");
+    int64_t interleaved = gs_thread_spawn(interleaved_aborting_worker, &stamp, sizeof(stamp), 1);
+    check(!gs_thread_wait(interleaved, NULL, NULL, __FILE__, __LINE__),
+          "a contained worker is contained again once its pools' interleaved waits have ended");
     gs_thread_release();
     gs_rt_stop();
     check(counter_add(&live_allocations, 0) == 0 && counter_add(&live_regions, 0) == 0,
@@ -885,6 +915,9 @@ int main(void) {
     check_contained_abort_ends(handing_worker,
                                "a contained worker's abort ends the program while its pool has "
                                "tasks out");
+    check_contained_abort_ends(interleaved_handing_worker,
+                               "a contained worker's abort ends the program while one of its "
+                               "pools has tasks out, another's wait ended");
 #endif
     puts("runtime thread cleanup ok");
     return 0;
