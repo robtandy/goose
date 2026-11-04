@@ -1028,10 +1028,8 @@ inline void CodeGen::PushSc(int kind) {
 
 inline void CodeGen::EmitRestores(const CScope &s) {
     if (s.defers.empty()) {
-        for (auto i = (int)s.saves.size() - 1; i >= 0; i--) {
-            if (s.saves[i].first.empty()) L(s.saves[i].second, ";");
-            else L(Top(s.saves[i].first), " = ", s.saves[i].second, ";");
-        }
+        for (auto i = (int)s.saves.size() - 1; i >= 0; i--)
+            L(Top(s.saves[i].first), " = ", s.saves[i].second, ";");
         return;
     }
     // A deferred body registered after k saves runs after those made later
@@ -1042,10 +1040,7 @@ inline void CodeGen::EmitRestores(const CScope &s) {
     auto di = (int)defers.size() - 1;
     for (auto k = (int)saves.size(); k >= 0; k--) {
         for (; di >= 0 && (int)defers[di].first == k; di--) EmitDeferBody(defers[di].second);
-        if (k > 0) {
-            if (saves[k - 1].first.empty()) L(saves[k - 1].second, ";");
-            else L(Top(saves[k - 1].first), " = ", saves[k - 1].second, ";");
-        }
+        if (k > 0) L(Top(saves[k - 1].first), " = ", saves[k - 1].second, ";");
     }
     assert(di < 0);
 }

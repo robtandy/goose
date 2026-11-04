@@ -67,7 +67,15 @@ var default_pool = thread_pool();           // defaults to hardware_threads()
 - `thread_pool` is a built-in resource type (`TY_POOL`) representing a pool of persistent OS worker threads, each owning a reusable block of Data Stacks.
 - A `thread_pool` variable may be declared as a local or a global, and may be borrowed by reference (`p: thread_pool&`) to pass into helper functions.
 - A `thread_pool` cannot be copied by value, reassigned, serialized, or sent through a queue.
-- When a local `thread_pool`'s owning scope exits, the compiler automatically emits `gs_pool_destroy(pool)` (after any `defer` statements registered after `pool` in that scope), which wakes all worker threads in the pool, releases their Data Stack regions, and joins the OS threads.
+- The program ends a pool itself, with `pool.close()` (or `close(pool)`), usually under `defer` right after making it:
+
+  ```goose
+  var pool = thread_pool(4);
+  defer pool.close();
+  ```
+
+  `close` wakes the pool's worker threads, joins them, and releases their Data Stack regions. The variable then holds a closed pool: closing it again does nothing, and `pool.apply(...)` on it aborts with `cannot apply on a closed thread_pool`, as does an apply whose own arguments close the pool before it hands it a chunk. `close` takes the pool's variable (`let` or `var`, local or global) or a reference to it through which it can be written; a `const thread_pool&` applies a pool but cannot close it.
+- Nothing ends a pool at its scope's exit, since no code runs at a scope exit that the programmer did not write ([ownership.md](ownership.md)). A pool the program leaves open lives until the process exits, which takes its threads and their mappings with it at once. That is cheaper than destroying the pool: all its workers unmap their Data Stacks at the same moment, which the kernel serializes (1 to 2 ms per worker that touched about 14 MB, measured on 16 threads on aarch64 Linux). A library's `goose_exit` destroys the pools its program leaves open, so that a host can start the program again.
 
 ### 3.2 Applying a function across disjoint mutable chunks: `pool.apply`
 
@@ -118,8 +126,8 @@ In `src/runtime/runtime.h`, `src/runtime/runtime_impl.h`, and `src/runtime/runti
   Each worker thread keeps `gs_regions_mapped` (the high-water mark of mapped 2 GB Data Stack regions in `gs_regions`). Before each task, `gs_pool_worker_main` resets `gs_nregions = 0`, so every `gs_reserve_region` call inside the task's thunk returns the already-mapped `gs_regions[i].base` in $O(1)$ without calling `mmap` or `munmap`.
 - **`gs_pool_submit` and `gs_pool_wait`**:
   `EmitPoolApply` dispatches all chunks via `gs_pool_submit` and calls `gs_pool_wait(pool)` before returning.
-- **`gs_pool_destroy`**:
-  Automatically emitted at scope exit for local `thread_pool` variables (`EmitRestores`), joining all worker threads and unmapping their Data Stack regions.
+- **`gs_pool_destroy` and `gs_pool_check_open`**:
+  `pool.close()` emits `gs_pool_destroy(pool)`, which joins all worker threads and unmaps their Data Stack regions, and then sets the variable to `NULL`, the closed pool, which `gs_pool_destroy` leaves alone. `pool.apply` takes the pool's variable, not its handle, as its arguments may close the pool and free what the handle points at: it reads the handle once they have run, and again in each round that builds an argument into a chunk's packet, and calls `gs_pool_check_open(pool, file, line)` on it before handing the pool anything, which aborts with `GS_E_POOLCLOSED` on a closed pool. No scope exit emits either; `gs_rt_stop` (a library's `goose_exit`) destroys the pools a program leaves open.
 
 ---
 
@@ -136,6 +144,7 @@ fn scale_chunk(chunk: i64[:], weights: const i64[:], bias: i64) {
 
 fn main() {
     var pool = thread_pool(4);
+    defer pool.close();
     let weights = [10, 20];
     var data: i64[>..] = [1, 2, 3, 4, 5, 6];
 

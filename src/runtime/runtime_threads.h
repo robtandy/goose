@@ -481,8 +481,8 @@ struct gs_pool_state {
 };
 
 /* The pools made and not yet destroyed, under gs_threads_mutex. No
-   scope's exit destroys a global's, which lives as long as its program:
-   gs_rt_stop destroys what is left. */
+   scope's exit destroys a pool, a local's or a global's: pool.close() does,
+   and gs_rt_stop destroys what is left. */
 static struct gs_pool_state *gs_live_pools;
 
 #ifdef _WIN32
@@ -590,6 +590,10 @@ GS_API void gs_pool_submit(gs_pool pool, void (*run)(void (*)(uint8_t *), uint8_
     gs_mutex_unlock(&pool->mutex);
 }
 
+GS_API void gs_pool_check_open(gs_pool pool, const char *file, int line) {
+    if (!pool) gs_abort(GS_E_POOLCLOSED, file, line);
+}
+
 GS_API void gs_pool_wait(gs_pool pool) {
     if (!pool) return;
     gs_mutex_lock(&pool->mutex);
@@ -645,8 +649,8 @@ static int gs_threads_any_live(void) {
 
 #endif  /* GS_NEED_THREADS */
 
-/* The pools the program leaves go first, a global's among them: idle, as
-   nothing of the program runs but main, so that destroying each joins its
+/* The pools the program leaves open go first, a local's or a global's: idle,
+   as nothing of the program runs but main, so that destroying each joins its
    workers and releases their regions. The records of the thread programs
    that aborted go with the program whose workers they were, so that a
    program started next in the process gets ids and thread_wait answers of

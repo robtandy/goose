@@ -239,6 +239,7 @@ R"GSRT(enum {
     GS_E_POOLTHREADS,  /* a thread_pool count of zero or less */
     GS_E_CHUNKSIZE,    /* a chunks() size of zero or less */
     GS_E_CHUNKBOUNDS,  /* chunk offsets out of bounds or not monotonically increasing */
+    GS_E_POOLCLOSED,   /* pool.apply on a thread_pool that close() ended */
 };
 
 )GSRT"
@@ -1017,7 +1018,7 @@ GS_API void gs_stack_stats(int64_t stacks);
 GS_API void gs_release_regions(void);
 /* Ends the main program, gs_rt_start's inverse, for a host that may start
    a program again in this process (goose_exit): destroys the thread pools
-   it leaves (a global's), releases its regions, and what handled faults
+   it leaves open, releases its regions, and what handled faults
    before the runtime started does again. A thread program still running,
    a task a pool has yet to finish among them, is a runtime error. */
 GS_API void gs_rt_stop(void);
@@ -1101,10 +1102,16 @@ GS_API void gs_qfree(gs_queue *q);
 
 )GSRT"
 R"GSRT(/* A thread pool's workers live from gs_pool_create to gs_pool_destroy,
-   which a local's scope exit calls; gs_rt_stop destroys the pools a
-   program leaves, a global's. */
+   which pool.close() calls, leaving the variable a closed pool: NULL, which
+   destroys as nothing. No scope's exit destroys a pool. A process's exit
+   takes the threads and regions of the pools left open with it, and
+   gs_rt_stop destroys them, for a host that starts a program again. */
 GS_API gs_pool gs_pool_create(int64_t nthreads, const char *file, int line);
 GS_API void gs_pool_destroy(gs_pool p);
+/* What pool.apply checks of the pool it reads from its variable once its
+   arguments have run, any of which may have closed it, and before it hands
+   the pool a chunk: a closed pool aborts, at the apply. */
+GS_API void gs_pool_check_open(gs_pool p, const char *file, int line);
 GS_API void gs_pool_submit(gs_pool p, void (*run)(void (*)(uint8_t *), uint8_t *),
                            void (*release)(void), void (*entry)(uint8_t *),
                            const void *args, int64_t argsize);
@@ -1421,6 +1428,7 @@ R"GSRT(static const char *gs_errmsgs[] = {
     "thread_pool count of zero or less",
     "chunk size of zero or less",
     "chunk offsets out of bounds or not monotonically increasing",
+    "cannot apply on a closed thread_pool",
 };
 
 )GSRT"
@@ -3893,8 +3901,8 @@ R"GSRT(struct gs_pool_state {
 
 )GSRT"
 R"GSRT(/* The pools made and not yet destroyed, under gs_threads_mutex. No
-   scope's exit destroys a global's, which lives as long as its program:
-   gs_rt_stop destroys what is left. */
+   scope's exit destroys a pool, a local's or a global's: pool.close() does,
+   and gs_rt_stop destroys what is left. */
 static struct gs_pool_state *gs_live_pools;
 
 )GSRT"
@@ -4010,6 +4018,11 @@ R"GSRT(GS_API void gs_pool_submit(gs_pool pool, void (*run)(void (*)(uint8_t *),
 }
 
 )GSRT"
+R"GSRT(GS_API void gs_pool_check_open(gs_pool pool, const char *file, int line) {
+    if (!pool) gs_abort(GS_E_POOLCLOSED, file, line);
+}
+
+)GSRT"
 R"GSRT(GS_API void gs_pool_wait(gs_pool pool) {
     if (!pool) return;
     gs_mutex_lock(&pool->mutex);
@@ -4069,8 +4082,8 @@ static int gs_threads_any_live(void) {
 R"GSRT(#endif  /* GS_NEED_THREADS */
 
 )GSRT"
-R"GSRT(/* The pools the program leaves go first, a global's among them: idle, as
-   nothing of the program runs but main, so that destroying each joins its
+R"GSRT(/* The pools the program leaves open go first, a local's or a global's: idle,
+   as nothing of the program runs but main, so that destroying each joins its
    workers and releases their regions. The records of the thread programs
    that aborted go with the program whose workers they were, so that a
    program started next in the process gets ids and thread_wait answers of

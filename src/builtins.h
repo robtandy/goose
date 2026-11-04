@@ -79,6 +79,7 @@ inline int RecvKindOf(TypeExpr *t) {
     F(B_THREAD_POOL,      "thread_pool",      0,  1,   "",   "",  0,              "",            0) \
     F(B_APPLY,            "apply",            3, 99,   "",   "",  0,              "",            0) \
     F(B_CHUNKS,           "chunks",           2,  2,   "",   "",  0,              "",            0) \
+    F(B_POOL_CLOSE,       "close",            1,  1,   "",   "",  0,              "",            BF_WRITE) \
     F(B_THREAD_SPAWN,     "thread_spawn",     1, 99,   "",   "i", 0,              "",            0) \
     F(B_THREAD_SPAWN_CONTAINED, "thread_spawn_contained", 1, 99, "", "i", 0,       "",            0) \
     F(B_THREAD_WAIT,      "thread_wait",      1,  2,   "",   "",  0,              "append to",   BF_OUTARG) \

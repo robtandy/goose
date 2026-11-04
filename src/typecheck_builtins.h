@@ -153,6 +153,26 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             c->spec = spec;
             return VoidVal();
         }
+        case B_POOL_CLOSE: {
+            // pool.close() ends the pool: no scope's exit does, as nothing
+            // runs there that the program did not write
+            // (docs/design/ownership.md). The variable the pool is in holds a
+            // closed pool after it, which a later close leaves as it is and
+            // an apply aborts on, so close takes the variable, or a
+            // reference to it, through which it can be written.
+            auto pv = precv ? *precv : CheckV(args[0], nullptr);
+            args[0]->exprtype = pv.type;
+            auto pt = DecayedType(pv);
+            if (pt->kind != TY_POOL)
+                Error(args[0], cat("close() requires a thread_pool, got ", TypeStr(pv.type)));
+            if (!pv.lvalue && !IsPlainRef(pv.type))
+                Error(args[0], "close() requires a thread_pool variable or a reference to one, "
+                               "not a temporary");
+            if (!pv.writable || pv.type->cq || pt->cq)
+                Error(args[0], "cannot close a thread_pool through a non-writable value "
+                               "(const, or a read-only instantiation, §9.5)");
+            return VoidVal();
+        }
         case B_THREAD_SPAWN: case B_THREAD_SPAWN_CONTAINED: {
             auto wid = Is<Ident>(args[0]);
             vector<SFunction *> workers;
