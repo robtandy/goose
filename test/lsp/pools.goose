@@ -29,6 +29,38 @@ fn main() {
     var bytes = slice_pool<u8> {};
     let s = bytes.alloc_slice(4);
     print(b.get_v() + a.first_of() + mine(pool) + i + s.len);
+    run_parallel();
+}
+
+// A thread_pool, whose apply is a builtin member, and the builtins that run
+// a worker function on the arguments after its name: pool.apply, whose
+// worker takes its chunk (and the chunk's index) first, and thread_spawn.
+
+fn scale_chunk(chunk: i64[:], idx: i64, by: i64, offset: i64) {
+    for &x in chunk { x = x * by + idx + offset; }
+}
+
+fn shift_chunk(chunk: i64[:], by: i64) {
+    for &x in chunk { x += by; }
+}
+
+thread_fn report(n: i64, total: i64) { print(n + total); }
+
+fn shift_all(pool: thread_pool&, xs: i64[:], step: i64) {
+    pool.apply(chunks(xs, 2), shift_chunk, step);
+}
+
+fn run_parallel() {
+    var pool = thread_pool(2);
+    var xs: i64[>..] = [1, 2, 3, 4];
+    let offset = 1;
+    pool.apply(chunks(xs, 2), scale_chunk, 3, offset);
+    shift_all(pool, xs, 4);
+    let first = thread_spawn(report, xs.len, 10);
+    let second = thread_spawn_contained(report, 2, offset);
+    thread_wait(first);
+    thread_wait(second);
+    print(xs);
 }
 
 // lsp: hover 14:13 "root struct Arena<T>"
@@ -72,3 +104,11 @@ fn main() {
 // lsp: complete 30:19 lacks mine
 // lsp: complete 30:19 lacks defaults
 // lsp: complete 30:19 lacks finish
+// lsp: complete 28:18 lacks apply
+// lsp: complete 57:10 has apply "apply(chunks(array, size_or_offsets), fn, args...)"
+// lsp: complete 57:10 has shift_all
+// lsp: complete 57:10 lacks push
+// lsp: complete 57:10 lacks alloc_index
+// lsp: complete 50:10 has apply "apply(chunks(array, size_or_offsets), fn, args...)"
+// lsp: complete 59:41 has len
+// lsp: complete 59:41 lacks apply

@@ -1943,6 +1943,12 @@ inline void MemberCompletions(const Located &loc, size_t dotpos, Completions &ou
             FirstParamTakes(sf->params[0].type, type))
             out.Add(sf->name, CK_METHOD, 1, FnHeader(sf), sf->doc);
     builtins(RecvKindOf(type));
+    // A thread_pool's one member, which the builtins table cannot mark as
+    // one: no BR_ kind is a pool's, and no signature there spells its
+    // arguments (B_APPLY in TypeCheck::CheckBuiltin).
+    if (type->kind == TY_POOL)
+        out.Add(builtindefs[B_APPLY].name, CK_METHOD, 2,
+                cat(builtindefs[B_APPLY].name, "(chunks(array, size_or_offsets), fn, args...)"));
 }
 
 inline bool Completion(Workspace &ws, const Json &params, JsonOut &j) {
