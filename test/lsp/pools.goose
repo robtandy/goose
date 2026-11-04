@@ -123,3 +123,17 @@ fn run_parallel() {
 // lsp: hints 60 3
 // lsp: hint 60:49 "n:"
 // lsp: hint 60:52 "total:"
+// lsp: hover 54:9 "var pool: thread_pool"
+// lsp: hover 49:14 "parameter pool: thread_pool&"
+// lsp: hover 57:10 "builtin .apply"
+// lsp: hover 50:10 "builtin .apply"
+// lsp: hover 59:17 "builtin thread_spawn"
+// lsp: hover 60:18 "builtin thread_spawn_contained"
+// lsp: hover 57:31 "fn scale_chunk(chunk: i64[:], idx: i64, by: i64, offset: i64)"
+// lsp: definition 57:31 -> 39:4
+// lsp: definition 57:10 -> none
+// lsp: definition 59:17 -> none
+// lsp: references 39:4 2
+// lsp: references 47:11 3
+// lsp: rename 47:11 reporter -> 3
+// lsp: rename 57:10 renamed -> error

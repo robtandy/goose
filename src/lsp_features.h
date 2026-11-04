@@ -205,8 +205,11 @@ inline const Call *ResolvedCall(const Located &loc, const Occurrence &occ) {
     return c ? Is<Call>(c) : nullptr;
 }
 
+// The function a checked call calls. A builtin is none: its specialization,
+// where it has one, is the worker it runs (thread_spawn's thread_fn,
+// pool.apply's fn), which an argument names, not the call's callee.
 inline const SFunction *CalleeOf(const Call *c) {
-    if (!c) return nullptr;
+    if (!c || c->builtin >= 0) return nullptr;
     if (c->spec) return c->spec->sf;
     if (!c->dispatch.empty() && c->dispatch[0]) return c->dispatch[0]->sf;
     return nullptr;
