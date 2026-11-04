@@ -935,6 +935,12 @@ inline Val TypeCheck::CheckInferredResult(Node *&n, FnSpec *tspec) {
     if (IsNonFixedLValue(v) && !IsOwnLocal(n)) n = AutoRef(n, v);
     // All of a multi-value call's results are forwarded, as they are.
     if (auto c = Is<Call>(n); c && c->rettypes.size() > 1) return v;
+    // No result owns a thread_pool, declared (ValidateType) or inferred: one
+    // by value would be a second handle to a pool in storage, or to one a
+    // defer of the function closes as it returns.
+    if (v.type && v.type->kind == TY_POOL)
+        Error(n, "thread_pool can only be owned by a local or global variable; return a "
+                 "reference instead");
     NoRelRefCopy(n, v.type);
     if (reachable && IsNonFixedRef(v)) {
         auto dies = v.Any([&](const RootAlt &a) {

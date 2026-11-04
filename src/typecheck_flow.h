@@ -2595,6 +2595,13 @@ inline void TypeCheck::CheckVarDecl(VarDecl *vd, bool global) {
             // as a single binding's does, unless the declaration binds by
             // reference (`.=`); one to a non-fixed value binds it (§4.1).
             auto rv = vd->byref || IsNonFixedRef(rets[i]) ? rets[i] : DecayRef(rets[i]);
+            // Decayed, a reference to a thread_pool is a copy of the pool, a
+            // second handle to it, as a single binding's would be. The
+            // assignments `a, b = f();` makes of its results (Parser::
+            // ParseMultiAssign) say so of theirs, which cannot bind by
+            // reference.
+            if (rv.type && rv.type->kind == TY_POOL && rv.pointee && !vd->results)
+                Error(vd->inits[0], "thread_pool cannot be copied; bind it by reference (.=) instead");
             // A decayed reference result is a copy of its pointee, while a
             // value result is built where it is received, from_bytes' array
             // included (NoRelRefCopy).
