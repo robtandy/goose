@@ -3105,9 +3105,6 @@ struct TypeCheck {
         for (auto sf : ast.functions)
             if (sf->isthread && !sf->specs.empty() && !sf->specs[0]->failed)
                 CheckRoot([&] { CheckThreadGlobals(sf->specs[0]); });
-        for (auto sp : ast.fnspecs)
-            if (sp->poolentry && !sp->failed)
-                CheckRoot([&] { CheckThreadGlobals(sp); });
         // NOTE: in this compilation model, code no call reaches would never be
         // typechecked at all. That is right for generic functions (they need a
         // caller's types), but silently skipping plain dead code makes for a
@@ -3121,6 +3118,12 @@ struct TypeCheck {
             auto sf = ast.functions[i];
             CheckRoot([&] { CheckUnreached(sf); });
         }
+        // A pool.apply worker is specialized where its apply is checked, which
+        // for an export or other code no call reaches is the loop above, so
+        // the workers' programs are checked for globals once all of them exist.
+        for (auto sp : ast.fnspecs)
+            if (sp->poolentry && !sp->failed)
+                CheckRoot([&] { CheckThreadGlobals(sp); });
         auto exportcount = 0;
         for (auto sf : ast.functions) {
             if (!sf->isexport) continue;
