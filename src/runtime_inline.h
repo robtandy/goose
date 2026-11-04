@@ -1108,7 +1108,9 @@ R"GSRT(/* A thread pool's workers live from gs_pool_create to gs_pool_destroy,
    gs_rt_stop destroys them, for a host that starts a program again. */
 GS_API gs_pool gs_pool_create(int64_t nthreads, const char *file, int line);
 GS_API void gs_pool_destroy(gs_pool p);
-/* pool.apply's first step: a closed pool aborts, at the apply. */
+/* What pool.apply checks of the pool it reads from its variable once its
+   arguments have run, any of which may have closed it, and before it hands
+   the pool a chunk: a closed pool aborts, at the apply. */
 GS_API void gs_pool_check_open(gs_pool p, const char *file, int line);
 GS_API void gs_pool_submit(gs_pool p, void (*run)(void (*)(uint8_t *), uint8_t *),
                            void (*release)(void), void (*entry)(uint8_t *),

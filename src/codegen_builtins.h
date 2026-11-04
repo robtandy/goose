@@ -1215,10 +1215,17 @@ inline void CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
     usesthreads = true;
     auto sp = c->spec;
     auto thunk = EnsureThreadThunk(sp);
-    auto pv = GenXD(an[0], ast.pooltype);
+    // The pool's slot, not its handle: the arguments run after it, and one
+    // of them may close the pool, which frees what the handle points at and
+    // leaves a closed pool in the slot. So the handle is read from the slot,
+    // and checked, once they have run, before the pool is handed anything.
+    auto pool = RecvLoc(an[0]);
     auto poolvar = T();
-    L("gs_pool ", poolvar, " = ", pv, ";");
-    L("gs_pool_check_open(", poolvar, ", ", LocArgs(c->line), ");");
+    auto livepool = [&]() {
+        L(poolvar, " = ", pool.s, ";");
+        L("gs_pool_check_open(", poolvar, ", ", LocArgs(c->line), ");");
+    };
+    L("gs_pool ", poolvar, ";");
     auto cc = Is<Call>(an[1]);
     auto lv = GenLoc(cc->args[0]);
     if (lv.t->kind == TY_REF) DerefLoc(lv);
@@ -1251,6 +1258,11 @@ inline void CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
             extra_vals[j] = ev;
         }
     }
+    livepool();
+    // The extra arguments not evaluated above are built into each chunk's
+    // packet, so they run again for each chunk: the pool is read again after
+    // them, before the chunk is handed to it.
+    auto builtinloop = std::find(extra_vals.begin(), extra_vals.end(), "") != extra_vals.end();
     MarkFlush("*");
     if (byoffsets) {
         L("if (", offs, ".len == 1) {");
@@ -1340,6 +1352,7 @@ inline void CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
         }
         L("*", szp, " = ", Top(stk), " - (uint8_t *)(", szp, " + 1);");
     }
+    if (builtinloop) livepool();
     L("gs_pool_spawn(", poolvar, ", ", thunk, ", ", pkt, ", ", Top(stk), " - ", pkt, ");");
     PopSc();
     ind--;
