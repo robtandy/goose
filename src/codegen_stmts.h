@@ -704,12 +704,10 @@ inline void CodeGen::BindLocal(VarDef *d, Node *init, bool forlocal) {
         return;
     }
     if (!init) {
-        if (t->kind == TY_POOL) {
-            L(VarCT(d), " ", name, " = NULL;");
-            SaveBase(forlocal, "", cat("gs_pool_destroy(", name, ")"));
-        } else {
-            L(VarCT(d), " ", name, ";");
-        }
+        // A thread_pool assigned later is a closed one until then. Nothing
+        // destroys one at its scope's exit: pool.close() does, where the
+        // program writes it (docs/design/parallel_blocks.md §3.1).
+        L(VarCT(d), " ", name, t->kind == TY_POOL ? " = NULL;" : ";");
         return;
     }
     if (PrefVar(d)) {
@@ -730,7 +728,6 @@ inline void CodeGen::BindLocal(VarDef *d, Node *init, bool forlocal) {
         ((Is<StructLit>(init) || Is<ArrayLit>(init)) && HasRelRef(t))) {
         L(CT(t), " ", name, ";");
         GenAny(init, Dst { DK_LVALUE, name, t });
-        if (t->kind == TY_POOL) SaveBase(forlocal, "", cat("gs_pool_destroy(", name, ")"));
         return;
     }
     if (IsStaticLimited(t)) {

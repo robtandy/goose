@@ -5,6 +5,8 @@
 // - Supports both uniform chunking `chunks(arr, size)` and prefix-sum offset
 //   chunking `chunks(arr, offsets)` (demonstrated with a full parallel Hash
 //   Join where both Build and Probe run in parallel via pool.apply).
+// - The program ends the pool itself, with `defer pool.close();`: nothing
+//   ends it at its scope's exit.
 
 import std;
 
@@ -142,6 +144,7 @@ fn write_join_matches(
 
 fn main() {
     var pool = thread_pool(4);
+    defer pool.close();
     var weights: i64[>..] = [2, 3, 5];
     var cfg = Config { scale: 10, bias: 1 };
 

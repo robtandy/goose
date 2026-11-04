@@ -10,8 +10,9 @@ struct Stop { n: i64 }
 
 var calls: i64;
 var seen: i64[>..] = [];
-// No scope's exit destroys a global's pool: goose_exit does, joining its
-// workers, and the next start makes a new one.
+// No scope's exit destroys a pool, a global's or a local's: goose_exit
+// destroys those the program leaves open, joining their workers, and the next
+// start makes a new one.
 var pool = thread_pool(2);
 
 // Never gets its Stop: a worker that runs for as long as the program does.
@@ -29,6 +30,8 @@ export fn bump() -> i64 {
     calls += 1;
     seen.push(0);
     pool.apply(chunks(seen, 1), number);
+    var mine = thread_pool(1);  // left open, for goose_exit to destroy
+    mine.apply(chunks(seen, 1), number);
     qput(Note { n: calls });    // left in the queue, for goose_exit to free
     return seen[seen.len - 1];
 }

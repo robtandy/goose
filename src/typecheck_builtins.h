@@ -154,7 +154,9 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             return VoidVal();
         }
         case B_POOL_CLOSE: {
-            // pool.close() ends the pool. The variable the pool is in holds a
+            // pool.close() ends the pool: no scope's exit does, as nothing
+            // runs there that the program did not write
+            // (docs/design/ownership.md). The variable the pool is in holds a
             // closed pool after it, which a later close leaves as it is and
             // an apply aborts on, so close takes the variable, or a
             // reference to it, through which it can be written.

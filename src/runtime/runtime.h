@@ -935,7 +935,7 @@ GS_API void gs_stack_stats(int64_t stacks);
 GS_API void gs_release_regions(void);
 /* Ends the main program, gs_rt_start's inverse, for a host that may start
    a program again in this process (goose_exit): destroys the thread pools
-   it leaves (a global's), releases its regions, and what handled faults
+   it leaves open, releases its regions, and what handled faults
    before the runtime started does again. A thread program still running,
    a task a pool has yet to finish among them, is a runtime error. */
 GS_API void gs_rt_stop(void);
@@ -1010,8 +1010,10 @@ GS_API void gs_qlimit(gs_queue *q, int64_t n, const char *file, int line);
 GS_API void gs_qfree(gs_queue *q);
 
 /* A thread pool's workers live from gs_pool_create to gs_pool_destroy,
-   which a local's scope exit calls; gs_rt_stop destroys the pools a
-   program leaves, a global's. */
+   which pool.close() calls, leaving the variable a closed pool: NULL, which
+   destroys as nothing. No scope's exit destroys a pool. A process's exit
+   takes the threads and regions of the pools left open with it, and
+   gs_rt_stop destroys them, for a host that starts a program again. */
 GS_API gs_pool gs_pool_create(int64_t nthreads, const char *file, int line);
 GS_API void gs_pool_destroy(gs_pool p);
 /* pool.apply's first step: a closed pool aborts, at the apply. */

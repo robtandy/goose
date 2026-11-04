@@ -1792,6 +1792,33 @@ def main():
         else:
             r.ok(f"member parameters {f.name}")
     r.show_task(member_params)
+    # No code runs at a scope exit that the program did not write
+    # (docs/design/ownership.md): a thread_pool is destroyed where the
+    # program closes it, and nowhere else. kept and main leave a pool open,
+    # deferred closes its pool on both of its exits and end_pool the one it
+    # is given; main's only close is the global's.
+    def pool_scope_exits():
+        f = HERE / "threads" / "pool_close.goose"
+        cfile = gendir / "pool_close-exits.c"
+        code, out, err = r.goose("-O0", "-o", cfile, f)
+        if code != 0:
+            r.fail(f"pool scope exits {f.name}", out + err)
+            return
+        text = cfile.read_text()
+        def body(name):
+            match = re.search(rf"^static [^\n;]*\b{name}_g\w*\([^\n]*\) \{{\n(.*?)^\}}\n",
+                              text, re.MULTILINE | re.DOTALL)
+            return match[1] if match else ""
+        bodies = {name: body(name) for name in ("kept", "deferred", "end_pool", "main")}
+        destroys = {name: b.count("gs_pool_destroy(") for name, b in bodies.items()}
+        if ("gs_pool_create(" not in bodies["kept"] or "gs_pool_create(" not in bodies["main"]
+                or destroys != {"kept": 0, "deferred": 2, "end_pool": 1, "main": 1}
+                or not re.search(r"gs_pool_destroy\([^;]*\bshared_g\w*\);", bodies["main"])):
+            r.fail(f"pool scope exits {f.name}", f"gs_pool_destroy calls: {destroys}\n" +
+                   "\n".join(bodies.values()))
+        else:
+            r.ok(f"pool scope exits {f.name}")
+    r.show_task(pool_scope_exits)
     # Root descriptors expose ordinary component metadata to top caching and
     # loop-view hoisting, even when Goose leaves the helper out of line.
     def root_owner_caches():
