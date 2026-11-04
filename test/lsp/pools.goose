@@ -64,6 +64,16 @@ fn run_parallel() {
     pool.close();
 }
 
+// pool.apply_contained, which may take a message buffer ahead of the name.
+fn check_chunk(chunk: i64[:], idx: i64, limit: i64, scale: i64) {
+    for &x in chunk { assert(x < limit); x = x * scale + idx; }
+}
+
+fn try_parallel(pool: thread_pool&, xs: i64[:], why: u8[>..]&) -> bool {
+    let ok = pool.apply_contained(chunks(xs, 2), why, check_chunk, 100, 2);
+    ok && pool.apply_contained(chunks(xs, 1), shift_chunk, 3)
+}
+
 // lsp: hover 14:13 "root struct Arena<T>"
 // lsp: hover 25:13 "root struct Arena<T>"
 // lsp: hover 27:16 "root struct slot_pool<T>"
@@ -145,3 +155,19 @@ fn run_parallel() {
 // lsp: references 47:11 3
 // lsp: rename 47:11 reporter -> 3
 // lsp: rename 57:10 renamed -> error
+// lsp: complete 73:19 has apply_contained "apply_contained(chunks(array, size_or_offsets), [msg, ]fn, args...) -> bool"
+// lsp: complete 57:10 has apply_contained
+// lsp: complete 73:19 has apply
+// lsp: complete 28:18 lacks apply_contained
+// lsp: complete 59:41 lacks apply_contained
+// lsp: hover 73:19 "builtin .apply_contained -> bool"
+// lsp: hover 74:16 "builtin .apply_contained -> bool"
+// lsp: definition 73:19 -> none
+// lsp: hover 73:55 "fn check_chunk(chunk: i64[:], idx: i64, limit: i64, scale: i64)"
+// lsp: definition 73:55 -> 68:4
+// lsp: hint 73:11 ": bool"
+// lsp: hint 73:68 "limit:"
+// lsp: hint 73:73 "scale:"
+// lsp: hints 73 3
+// lsp: hint 74:60 "by:"
+// lsp: hints 74 1
