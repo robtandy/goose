@@ -298,6 +298,9 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             auto v = DecayRef(av);
             if (ClassOf(v.type) == SC_ROOT)
                 Error(c, "root owners cannot be copied; bind a reference instead");
+            // A second handle to the pool, left dangling when either closes it.
+            if (v.type->kind == TY_POOL)
+                Error(c, "thread_pool cannot be copied; pass it by reference (thread_pool&) instead");
             if (v.type->kind == TY_SLICE)
                 Error(c, "copy takes a value or a reference, not a slice");
             if (!av.lvalue && !IsPlainRef(av.type))

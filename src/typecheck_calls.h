@@ -4002,6 +4002,9 @@ inline Val TypeCheck::CheckFunValCall(Call *c, const FnValBind &fb, TypeExpr *ex
             DestScope rd(*this, dest);
             v = CheckValue(c->fvbody->tail, nullptr);
             NoRelRefCopy(c->fvbody->tail, v.type);
+            // The result is a copy of the tail (TempCopy, below), which of a
+            // thread_pool in storage is a second handle to its pool.
+            if (v.type && v.type->kind == TY_POOL) RequireCopyable(v, c->fvbody->tail, v.type);
         }
     }
     // Storage provenance is supplied independently of a destination type:

@@ -1957,7 +1957,7 @@ struct TypeCheck {
     bool UserRefOf(Node *n);
     bool IsOwnLocal(Node *n);
     bool ImplicitCopy(const Val &v, Node *n, TypeExpr *dt);
-    [[noreturn]] void ImplicitCopyError(Node *n);
+    [[noreturn]] void ImplicitCopyError(Node *n, TypeExpr *t = nullptr);
     void RequireCopyable(const Val &v, Node *n, TypeExpr *dt) {
         if (ClassOf(dt) == SC_ROOT && (v.lvalue || IsPlainRef(v.type)))
             Error(n, "root owners cannot be copied; bind a reference instead");
