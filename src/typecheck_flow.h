@@ -2647,7 +2647,10 @@ inline void TypeCheck::CheckVarDecl(VarDecl *vd, bool global) {
                                            " binds by reference without it (§4.1)"));
             } else {
                 v = CheckValue(vd->inits[i], ann, false, false, !ann);
-                if (v.type && v.type->kind == TY_POOL && (v.lvalue || IsPlainRef(v.type)))
+                // The pool a reference points at copies too, loaded from it
+                // (Val::pointee) for an un-annotated binding.
+                if (v.type && v.type->kind == TY_POOL &&
+                    (v.lvalue || v.pointee || IsPlainRef(v.type)))
                     Error(vd->inits[i],
                           "thread_pool cannot be copied; pass it by reference (thread_pool&) instead");
                 // An un-annotated binding of a non-fixed lvalue is a

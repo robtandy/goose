@@ -856,6 +856,10 @@ inline bool TypeCheck::UserRefOf(Node *n) {
 // final expression.
 inline bool TypeCheck::ImplicitCopy(const Val &v, Node *n, TypeExpr *dt) {
     if (!reachable) return false;
+    // A thread_pool is fixed-size, but a copy of one in storage is a second
+    // handle to the pool, which close() through either would leave dangling
+    // in the other (RequireCopyable).
+    if (dt->kind == TY_POOL) return v.lvalue || v.pointee || IsPlainRef(v.type);
     if (IsRefOrSlice(dt) || dt->kind == TY_VOID) return false;
     if (ClassOf(dt) == SC_FIXED) return false;
     auto src = IsPlainRef(v.type) ? v.type->ref->sub : v.type;
@@ -866,9 +870,13 @@ inline bool TypeCheck::ImplicitCopy(const Val &v, Node *n, TypeExpr *dt) {
     return true;
 }
 
-inline void TypeCheck::ImplicitCopyError(Node *n) {
+// The copied value's type is t where the caller knows it, else n's.
+inline void TypeCheck::ImplicitCopyError(Node *n, TypeExpr *t) {
     auto u = Is<Unary>(n);
     auto what = ExprStr(u && u->op == T_BITAND ? u->child : n);
+    if (!t) t = n->exprtype;
+    if (t && (IsPlainRef(t) ? LoadType(t->ref->sub) : t)->kind == TY_POOL)
+        Error(n, "thread_pool cannot be copied; pass it by reference (thread_pool&) instead");
     Error(n, cat(what, " is not fixed-size and is not copied implicitly (§4.1): pass copy(",
                  what, ") for a copy, or bind it by reference"));
 }
@@ -894,7 +902,7 @@ inline void TypeCheck::CheckBranchCopy(const Val &v, Node *n, TypeExpr *dt, Val 
     out.implicitcopy = v.implicitcopy;
     out.refcopies = v.refcopies;
     if (!ImplicitCopy(v, n, dt)) return;
-    if (argpath != n && joinpath != n) ImplicitCopyError(n);
+    if (argpath != n && joinpath != n) ImplicitCopyError(n, dt);
     if (!out.implicitcopy) out.implicitcopy = n;
 }
 

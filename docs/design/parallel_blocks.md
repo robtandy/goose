@@ -66,7 +66,7 @@ var default_pool = thread_pool();           // defaults to hardware_threads()
 
 - `thread_pool` is a built-in resource type (`TY_POOL`) representing a pool of persistent OS worker threads, each owning a reusable block of Data Stacks.
 - A `thread_pool` variable may be declared as a local or a global, and may be borrowed by reference (`p: thread_pool&`) to pass into helper functions.
-- A `thread_pool` cannot be copied by value, reassigned, serialized, or sent through a queue.
+- A `thread_pool` cannot be copied by value, reassigned, serialized, or sent through a queue. That covers `copy(pool)`, an un-annotated binding of a reference to a pool, an `if`, `match` or block whose value is a pool variable, and an array of pools: each pool is in one variable, which `close` leaves closed, so no second handle can outlive the close.
 - The program ends a pool itself, with `pool.close()` (or `close(pool)`), usually under `defer` right after making it:
 
   ```goose
