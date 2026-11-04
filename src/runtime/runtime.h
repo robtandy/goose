@@ -1024,13 +1024,29 @@ GS_API void gs_pool_destroy(gs_pool p);
    arguments have run, any of which may have closed it, and before it hands
    the pool a chunk: a closed pool aborts, at the apply. */
 GS_API void gs_pool_check_open(gs_pool p, const char *file, int line);
-/* Hands the pool a task: run(entry, args), args a copy of argsize bytes,
-   on whichever of its workers takes it. run runs the task whole, releasing
-   what it holds, and leaves the program state that is the thread's own as
-   it found it, for the thread waiting for the pool runs tasks too. */
-GS_API void gs_pool_submit(gs_pool p, void (*run)(void (*)(uint8_t *), uint8_t *),
-                           void (*entry)(uint8_t *), const void *args, int64_t argsize);
+/* Hands the pool a task: run(entry, args, contain), args a copy of argsize
+   bytes, on whichever of its workers takes it. run runs the task whole,
+   releasing what it holds, and leaves the program state that is the
+   thread's own as it found it, for the thread waiting for the pool runs
+   tasks too. A contained task (pool.apply_contained) is handed its pool as
+   contain, for gs_pool_guard, and any other NULL. */
+GS_API void gs_pool_submit(gs_pool p, void (*run)(void (*)(uint8_t *), uint8_t *, gs_pool),
+                           void (*entry)(uint8_t *), const void *args, int64_t argsize,
+                           int contained);
 GS_API void gs_pool_wait(gs_pool p);
+/* pool.apply_contained's wait, for a batch of contained tasks: as
+   gs_pool_wait, then whether none of them aborted. Where one did, the tasks
+   no worker had started by then were skipped, and where `msg` is not NULL,
+   it and `len` are set to the first abort's message, which the caller frees
+   with gs_free_msg, or to NULL and no bytes. The pool takes tasks again. */
+GS_API uint8_t gs_pool_wait_contained(gs_pool p, uint8_t **msg, int64_t *len);
+/* Runs run(entry, args), the task a pool's worker took, on the calling
+   thread: where contain is the task's pool, an abort in it returns here,
+   ending the task alone, and the pool keeps the first such message of the
+   batch for gs_pool_wait_contained. Where contain is NULL, an abort in it
+   ends the program. */
+GS_API void gs_pool_guard(gs_pool contain, void (*run)(void (*)(uint8_t *), uint8_t *),
+                          void (*entry)(uint8_t *), uint8_t *args);
 
 #ifndef GS_RUNTIME_OBJECT
 
@@ -1105,16 +1121,19 @@ static int64_t gs_thread_spawn(void (*entry)(uint8_t *), const void *args, int64
 /* A pool's task, as a worker's thread program, on whichever of the pool's
    workers takes it: the thread waiting for the pool among them, whose own
    stack block and globals instance the task starts without, as on a thread
-   of its own, and gets back once the task's are released. A pool's task is
-   never contained, so nothing ends it early but the end of the process. */
-static void gs_pool_run(void (*entry)(uint8_t *), uint8_t *args) {
+   of its own, and gets back once the task's are released. A contained task
+   (gs_pool_spawn_contained) that aborts returns to gs_pool_guard, whose
+   caller this is, so that its storage is released here as on a return, and
+   the thread runs on with its own; nothing ends any other task early but
+   the end of the process. */
+static void gs_pool_run(void (*entry)(uint8_t *), uint8_t *args, gs_pool contain) {
     gs_stack *stks = gs_stks;
     int64_t nstks = gs_nstks;
     void *gl = gs_gl;
     gs_stks = NULL;
     gs_nstks = 0;
     gs_gl = NULL;
-    gs_thread_run(entry, args);
+    gs_pool_guard(contain, gs_thread_run, entry, args);
     gs_thread_release();
     gs_stks = stks;
     gs_nstks = nstks;
@@ -1122,7 +1141,13 @@ static void gs_pool_run(void (*entry)(uint8_t *), uint8_t *args) {
 }
 
 static void gs_pool_spawn(gs_pool p, void (*entry)(uint8_t *), const void *args, int64_t argsize) {
-    gs_pool_submit(p, gs_pool_run, entry, args, argsize);
+    gs_pool_submit(p, gs_pool_run, entry, args, argsize, 0);
+}
+
+/* A task of pool.apply_contained, waited for with gs_pool_wait_contained. */
+static void gs_pool_spawn_contained(gs_pool p, void (*entry)(uint8_t *), const void *args,
+                                    int64_t argsize) {
+    gs_pool_submit(p, gs_pool_run, entry, args, argsize, 1);
 }
 #endif
 
