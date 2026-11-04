@@ -3,8 +3,10 @@
    contained workers that abort, whose messages the runtime keeps until a
    wait takes them; and under thread pools run phase after phase, across
    programs started and stopped in turn, both the pools a program destroys
-   and those it leaves for the stop. Small limits make a region registry
-   that leaks entries fail quickly. */
+   and those it leaves for the stop. A pool's last worker is the thread
+   that waits for it, which runs tasks on stacks the pool keeps for it and
+   finds its own as it left them, alone in a pool of one worker. Small
+   limits make a region registry that leaks entries fail quickly. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -183,6 +185,37 @@ static void check_baseline(long allocations, long regions) {
     check(gs_nregions == 1 && GS(0)->top[0] == 99, "main storage survives worker exit");
 }
 
+/* Whether a task runs on main's thread, the one that waits for the pools
+   here, rather than on a thread of a pool's own. */
+#ifdef _WIN32
+static DWORD main_thread;
+static void note_main_thread(void) { main_thread = GetCurrentThreadId(); }
+static int on_main_thread(void) { return GetCurrentThreadId() == main_thread; }
+#else
+static pthread_t main_thread;
+static void note_main_thread(void) { main_thread = pthread_self(); }
+static int on_main_thread(void) { return pthread_equal(pthread_self(), main_thread); }
+#endif
+
+/* A pool's task starts as a worker's thread program does, with no stack
+   block or globals instance until it opens its own. One that main runs
+   while it waits for a pool runs as one of the pool's workers, not as main:
+   on a registry of the pool's, which exercise_stacks finds empty, under a
+   worker's id. */
+static void check_task_start(void) {
+    check(!gs_stks && !gs_nstks && !gs_gl,
+          "a pool's task starts with no stack block or globals instance");
+    if (on_main_thread())
+        check(gs_current_thread_id >= 0, "the thread waiting for a pool runs its tasks as a worker");
+}
+
+/* What main holds once a wait for a pool returns: its own registry, stack
+   block and id again, whatever tasks it ran meanwhile. */
+static void check_main_kept(void) {
+    check(gs_current_thread_id == -1 && gs_nregions == 1 && gs_nstks == 1 && GS(0)->top[0] == 99,
+          "the thread waiting for a pool gets its own storage back");
+}
+
 /* The pools the runtime lists as live, newest first. */
 static int live_pools(void) {
     int n = 0;
@@ -195,14 +228,16 @@ static int live_pools(void) {
 
 /* A pool's first phase, one task for each of its workers: each waits until
    all have started, so that every worker runs one and maps its stacks. */
-#define POOL_THREADS 3
-static int pool_arrived, pool_phases;
+#define POOL_WORKERS 4
+static int pool_arrived, pool_phases, pool_on_main;
 
 static void pool_barrier_task(uint8_t *args) {
+    check_task_start();
     exercise_stacks(args);
     gs_mutex_lock(&test_mutex);
+    pool_on_main += on_main_thread();
     int phase = pool_phases;
-    if (++pool_arrived == POOL_THREADS) {
+    if (++pool_arrived == POOL_WORKERS) {
         pool_arrived = 0;
         ++pool_phases;
         gs_cond_broadcast(&test_cond);
@@ -211,27 +246,91 @@ static void pool_barrier_task(uint8_t *args) {
     gs_mutex_unlock(&test_mutex);
 }
 
+/* A phase's task after the first, on whichever worker takes it. */
+static void pool_phase_task(uint8_t *args) {
+    check_task_start();
+    exercise_stacks(args);
+}
+
 /* Phases as pool.apply runs them: tasks handed to the pool, then waited
-   for. The phases after the first, of more tasks than workers, run on the
-   stacks it mapped, and leave the pool holding what it held after it. */
+   for. A pool's workers are its threads and the thread waiting for it, so
+   that main runs one of the first phase's tasks. The phases after the
+   first, of more tasks than workers, run on the stacks it mapped, and leave
+   the pool holding what it held after it. */
 static void run_pool(gs_pool pool, int64_t seed) {
-    for (int i = 0; i < POOL_THREADS; ++i) {
+    check(pool->nthreads == POOL_WORKERS - 1,
+          "a pool's workers are its threads and the thread that waits for it");
+    pool_on_main = 0;
+    for (int i = 0; i < POOL_WORKERS; ++i) {
         int64_t stamp = seed + i;
         gs_pool_spawn(pool, pool_barrier_task, &stamp, sizeof(stamp));
     }
     gs_pool_wait(pool);
+    check(pool_on_main == 1, "the thread waiting for a pool runs a task as its last worker");
+    check_main_kept();
     long allocations = counter_add(&live_allocations, 0);
     long regions = counter_add(&live_regions, 0);
     for (int phase = 1; phase < 4; ++phase) {
-        for (int i = 0; i < 3 * POOL_THREADS; ++i) {
-            int64_t stamp = seed + phase * 3 * POOL_THREADS + i;
-            gs_pool_spawn(pool, exercise_stacks, &stamp, sizeof(stamp));
+        for (int i = 0; i < 3 * POOL_WORKERS; ++i) {
+            int64_t stamp = seed + phase * 3 * POOL_WORKERS + i;
+            gs_pool_spawn(pool, pool_phase_task, &stamp, sizeof(stamp));
         }
         gs_pool_wait(pool);
+        check_main_kept();
         check(counter_add(&live_allocations, 0) == allocations,
               "a pool's tasks release their records, arguments and stack blocks");
         check(counter_add(&live_regions, 0) == regions, "a pool's workers reuse their mappings");
     }
+}
+
+/* A pool of one worker has no thread of its own: the thread that waits for
+   it runs every task, in the order the pool was handed them, each on the
+   stacks the pool keeps for that thread, which stay mapped from task to
+   task and from wait to wait. A task that opens no stack block or globals
+   instance releases none, main's least of all. Destroying the pool runs
+   the tasks it has not, which no thread would, then releases those
+   stacks. */
+static int64_t solo_order[8];
+static int solo_ran;
+
+static void solo_task(uint8_t *args) {
+    check(on_main_thread(), "a pool of one worker runs its tasks on the thread waiting for it");
+    check_task_start();
+    int64_t stamp;
+    memcpy(&stamp, args, sizeof(stamp));
+    if (stamp % 2 == 0) exercise_stacks(args);
+    solo_order[solo_ran++] = stamp;
+}
+
+static void run_solo_pool(void) {
+    long allocations = counter_add(&live_allocations, 0);
+    long regions = counter_add(&live_regions, 0);
+    gs_pool solo = gs_pool_create(1, __FILE__, __LINE__);
+    check(solo->nthreads == 0, "a pool of one worker has no thread of its own");
+    for (int round = 0; round < 3; ++round) {
+        solo_ran = 0;
+        for (int i = 0; i < 8; ++i) {
+            int64_t stamp = round * 8 + i;
+            gs_pool_spawn(solo, solo_task, &stamp, sizeof(stamp));
+        }
+        check(solo_ran == 0, "a pool of one worker runs nothing until it is waited for");
+        gs_pool_wait(solo);
+        check(solo_ran == 8, "waiting for a pool of one worker runs all its tasks");
+        for (int i = 0; i < 8; ++i)
+            check(solo_order[i] == round * 8 + i, "in the order the pool was handed them");
+        check_main_kept();
+        check(counter_add(&live_regions, 0) == regions + GS_MAX_STACKS,
+              "the thread waiting for a pool reuses the stacks the pool keeps for it");
+    }
+    solo_ran = 0;
+    for (int i = 0; i < 3; ++i) {
+        int64_t stamp = 24 + i;
+        gs_pool_spawn(solo, solo_task, &stamp, sizeof(stamp));
+    }
+    gs_pool_destroy(solo);
+    check(solo_ran == 3, "destroying a pool of one worker runs the tasks it has not");
+    check_main_kept();
+    check_baseline(allocations, regions);
 }
 
 #ifndef _WIN32
@@ -262,7 +361,7 @@ static void check_busy_pool_stop(void) {
         close(err[1]);
         alarm(20);  /* a stop that waits for the task never returns */
         gs_rt_init(0, NULL, 1, 1, GS_MAX_STACKS);
-        gs_pool busy = gs_pool_create(POOL_THREADS, __FILE__, __LINE__);
+        gs_pool busy = gs_pool_create(POOL_WORKERS, __FILE__, __LINE__);
         gs_pool_create(1, __FILE__, __LINE__);
         int64_t stamp = 7;
         gs_pool_spawn(busy, parked_task, &stamp, sizeof(stamp));
@@ -288,6 +387,57 @@ static void check_busy_pool_stop(void) {
     if (!refused) fputs(text, stderr);
     check(refused, "stopping while a pool's task runs is a runtime error");
 }
+
+static void aborting_task(uint8_t *args) {
+    (void)args;
+    gs_abort(GS_E_ASSERT, __FILE__, __LINE__);
+}
+
+/* A contained worker applying a pool of one worker, which runs the task on
+   the worker's thread. */
+static void pool_applying_worker(uint8_t *args) {
+    gs_pool solo = gs_pool_create(1, __FILE__, __LINE__);
+    gs_pool_spawn(solo, aborting_task, args, sizeof(int64_t));
+    gs_pool_wait(solo);
+    gs_pool_destroy(solo);
+}
+
+/* A pool's tasks are never contained, wherever they run: an abort in one
+   that a contained worker runs while it waits for the pool ends the
+   program, as it would on any of the pool's own threads, rather than
+   returning to the worker's own handler on the pool's stacks. In a process
+   of its own, which the abort ends. */
+static void check_contained_pool_abort(void) {
+    int err[2];
+    check(!pipe(err), "open a pipe for the aborted program's error");
+    fflush(NULL);
+    pid_t child = fork();
+    check(child >= 0, "fork a program whose pool's task aborts");
+    if (!child) {
+        dup2(err[1], STDERR_FILENO);
+        close(err[0]);
+        close(err[1]);
+        alarm(20);
+        gs_rt_init(0, NULL, 1, 1, GS_MAX_STACKS);
+        int64_t stamp = 5;
+        int64_t id = gs_thread_spawn(pool_applying_worker, &stamp, sizeof(stamp), 1);
+        gs_thread_wait(id, NULL, NULL, __FILE__, __LINE__);
+        _exit(0);
+    }
+    close(err[1]);
+    char text[512];
+    size_t n = 0;
+    ssize_t got;
+    while (n < sizeof(text) - 1 && (got = read(err[0], text + n, sizeof(text) - 1 - n)) > 0)
+        n += (size_t)got;
+    text[n] = 0;
+    close(err[0]);
+    int status;
+    int ended = waitpid(child, &status, 0) == child && WIFEXITED(status) &&
+                WEXITSTATUS(status) == 1 && strstr(text, "goose runtime error: assert failed");
+    if (!ended) fputs(text, stderr);
+    check(ended, "an abort in a pool's task ends the program, a contained worker waiting or not");
+}
 #endif
 
 int main(void) {
@@ -295,6 +445,7 @@ int main(void) {
     struct sigaction before;
     check(!sigaction(SIGSEGV, NULL, &before), "read the fault handling the runtime will find");
 #endif
+    note_main_thread();
     /* Main's one stack, in its one region; a worker's GS_MAX_STACKS. */
     gs_rt_init(0, NULL, 1, 1, GS_MAX_STACKS);
     check(gs_hardware_threads() >= 1, "hardware_threads() reports at least one worker");
@@ -431,11 +582,11 @@ int main(void) {
         long all_allocations = 0, all_regions = 0;
         for (int k = 0; k < 3; ++k) {
             long a = counter_add(&live_allocations, 0), m = counter_add(&live_regions, 0);
-            pools[k] = gs_pool_create(POOL_THREADS, __FILE__, __LINE__);
+            pools[k] = gs_pool_create(POOL_WORKERS, __FILE__, __LINE__);
             run_pool(pools[k], cycle * 64 + k * 16);
             held_allocations[k] = counter_add(&live_allocations, 0) - a;
             held_regions[k] = counter_add(&live_regions, 0) - m;
-            check(held_regions[k] == POOL_THREADS * GS_MAX_STACKS,
+            check(held_regions[k] == POOL_WORKERS * GS_MAX_STACKS,
                   "each worker of a pool keeps its stacks mapped between tasks");
             check(live_pools() == k + 1 && gs_live_pools == pools[k], "a pool made is live");
             all_allocations += held_allocations[k];
@@ -445,7 +596,7 @@ int main(void) {
         check(live_pools() == 2, "a pool destroyed is not live");
         check_baseline(allocations + all_allocations - held_allocations[cycle],
                        regions + all_regions - held_regions[cycle]);
-        gs_pool_create(POOL_THREADS, __FILE__, __LINE__);
+        gs_pool_create(POOL_WORKERS, __FILE__, __LINE__);
         gs_thread_release();
         gs_rt_stop();
         check(!gs_live_pools, "stopping destroys the pools left");
@@ -453,8 +604,25 @@ int main(void) {
               "stopping releases the pools' records and their workers' registries");
         check(counter_add(&live_regions, 0) == 0, "stopping releases the pools' worker stacks");
     }
+
+    /* A pool of one worker, run and destroyed; then one the program leaves
+       open holding the stacks its tasks mapped on main, for the stop to
+       release. */
+    gs_rt_init(0, NULL, 1, 1, GS_MAX_STACKS);
+    GS(0)->top[0] = 99;
+    run_solo_pool();
+    gs_pool left = gs_pool_create(1, __FILE__, __LINE__);
+    solo_ran = 0;
+    gs_pool_spawn(left, solo_task, &stamp, sizeof(stamp));
+    gs_pool_wait(left);
+    check(solo_ran == 1, "a pool left open ran its task");
+    gs_thread_release();
+    gs_rt_stop();
+    check(counter_add(&live_allocations, 0) == 0 && counter_add(&live_regions, 0) == 0,
+          "stopping releases the stacks a pool keeps for the thread that waits for it");
 #ifndef _WIN32
     check_busy_pool_stop();
+    check_contained_pool_abort();
 #endif
     puts("runtime thread cleanup ok");
     return 0;

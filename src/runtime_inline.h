@@ -1105,16 +1105,23 @@ R"GSRT(/* A thread pool's workers live from gs_pool_create to gs_pool_destroy,
    which pool.close() calls, leaving the variable a closed pool: NULL, which
    destroys as nothing. No scope's exit destroys a pool. A process's exit
    takes the threads and regions of the pools left open with it, and
-   gs_rt_stop destroys them, for a host that starts a program again. */
+   gs_rt_stop destroys them, for a host that starts a program again. A pool
+   of nthreads workers has a thread fewer of its own: the thread waiting
+   for it in gs_pool_wait is the last, running tasks there on stacks the
+   pool keeps for it, as is the thread that destroys it, for any task the
+   pool has yet to run. */
 GS_API gs_pool gs_pool_create(int64_t nthreads, const char *file, int line);
 GS_API void gs_pool_destroy(gs_pool p);
 /* What pool.apply checks of the pool it reads from its variable once its
    arguments have run, any of which may have closed it, and before it hands
    the pool a chunk: a closed pool aborts, at the apply. */
 GS_API void gs_pool_check_open(gs_pool p, const char *file, int line);
+/* Hands the pool a task: run(entry, args), args a copy of argsize bytes,
+   on whichever of its workers takes it. run runs the task whole, releasing
+   what it holds, and leaves the program state that is the thread's own as
+   it found it, for the thread waiting for the pool runs tasks too. */
 GS_API void gs_pool_submit(gs_pool p, void (*run)(void (*)(uint8_t *), uint8_t *),
-                           void (*release)(void), void (*entry)(uint8_t *),
-                           const void *args, int64_t argsize);
+                           void (*entry)(uint8_t *), const void *args, int64_t argsize);
 GS_API void gs_pool_wait(gs_pool p);
 
 )GSRT"
@@ -1199,8 +1206,28 @@ R"GSRT(static int64_t gs_thread_spawn(void (*entry)(uint8_t *), const void *args
 }
 
 )GSRT"
+R"GSRT(/* A pool's task, as a worker's thread program, on whichever of the pool's
+   workers takes it: the thread waiting for the pool among them, whose own
+   stack block and globals instance the task starts without, as on a thread
+   of its own, and gets back once the task's are released. A pool's task is
+   never contained, so nothing ends it early but the end of the process. */
+static void gs_pool_run(void (*entry)(uint8_t *), uint8_t *args) {
+    gs_stack *stks = gs_stks;
+    int64_t nstks = gs_nstks;
+    void *gl = gs_gl;
+    gs_stks = NULL;
+    gs_nstks = 0;
+    gs_gl = NULL;
+    gs_thread_run(entry, args);
+    gs_thread_release();
+    gs_stks = stks;
+    gs_nstks = nstks;
+    gs_gl = gl;
+}
+
+)GSRT"
 R"GSRT(static void gs_pool_spawn(gs_pool p, void (*entry)(uint8_t *), const void *args, int64_t argsize) {
-    gs_pool_submit(p, gs_thread_run, gs_thread_release, entry, args, argsize);
+    gs_pool_submit(p, gs_pool_run, entry, args, argsize);
 }
 #endif
 
@@ -3866,16 +3893,22 @@ GS_API void gs_qfree(gs_queue *q) {
 )GSRT"
 R"GSRT(/* ---------------------------------------------------------------------------
    Reusable thread pools and scoped parallel blocks (docs/design/parallel_blocks.md).
-   Each worker thread in a pool keeps its Data Stack region reservations mapped
-   across tasks and across consecutive parallel(pool) { ... } blocks, rewinding
-   gs_nregions = 0 before each task so gs_reserve_region reuses the mapped base
-   pointers in O(1). */
+   A pool of n workers is n - 1 threads of its own and the thread that waits
+   for it, which runs tasks in gs_pool_wait, where it is blocked anyway. So a
+   pool as large as the machine has cores starts no thread more than there
+   are cores: the thread handing out the tasks would still hold a core as it
+   woke that last one, which then waited behind another thread until the
+   kernel balanced it, a scheduler tick later. Each worker keeps its Data
+   Stack region reservations mapped across tasks and across consecutive
+   parallel(pool) { ... } blocks, rewinding gs_nregions = 0 before each task
+   so gs_reserve_region reuses the mapped base pointers in O(1): a pool
+   thread in its own registry, and the thread that waits in one the pool
+   keeps for it, its own holding the storage of the program that waits. */
 
 )GSRT"
 R"GSRT(typedef struct gs_pool_task {
     struct gs_pool_task *next;
     void (*run)(void (*)(uint8_t *), uint8_t *);
-    void (*release)(void);
     void (*entry)(uint8_t *args);
     uint8_t *args;
 } gs_pool_task;
@@ -3890,6 +3923,7 @@ R"GSRT(struct gs_pool_state {
     gs_pool_task *head;
     gs_pool_task *tail;
     int64_t pending;
+    /* The pool's own threads, one fewer than its workers. */
     int64_t nthreads;
     int stop;
     #ifdef _WIN32
@@ -3897,6 +3931,15 @@ R"GSRT(struct gs_pool_state {
     #else
         pthread_t *threads;
     #endif
+    /* The worker the thread waiting for the pool is (gs_pool_run_caller):
+       the registry of the regions its tasks reserve, gs_workerregions
+       entries, the first caller_regions_mapped of them mapped and kept from
+       task to task as a pool thread keeps its own, and its worker id. Only
+       the thread holding the pool waits for it, so no two threads run on
+       this registry at once. */
+    gs_region *caller_regions;
+    long caller_regions_mapped;
+    int64_t caller_thread_id;
 };
 
 )GSRT"
@@ -3904,6 +3947,68 @@ R"GSRT(/* The pools made and not yet destroyed, under gs_threads_mutex. No
    scope's exit destroys a pool, a local's or a global's: pool.close() does,
    and gs_rt_stop destroys what is left. */
 static struct gs_pool_state *gs_live_pools;
+
+)GSRT"
+R"GSRT(/* The task at the head of the pool's queue, unlinked, or NULL where the
+   queue is empty. Under the pool's lock. */
+static gs_pool_task *gs_pool_take(struct gs_pool_state *pool) {
+    gs_pool_task *t = pool->head;
+    if (t) {
+        pool->head = t->next;
+        if (!pool->head) pool->tail = NULL;
+    }
+    return t;
+}
+
+)GSRT"
+R"GSRT(/* A task a worker took, run whole (gs_pool_submit), and its record freed. */
+static void gs_pool_run_task(gs_pool_task *t) {
+    t->run(t->entry, t->args);
+    free(t->args);
+    free(t);
+}
+
+)GSRT"
+R"GSRT(/* A worker has run a task: the last the pool had outstanding wakes the
+   thread waiting for them. Under the pool's lock. */
+static void gs_pool_finished(struct gs_pool_state *pool) {
+    if (--pool->pending == 0 && !pool->head)
+        gs_cond_broadcast(&pool->done_cond);
+}
+
+)GSRT"
+R"GSRT(/* Runs a task on the thread waiting for the pool, as the worker that thread
+   is meanwhile: on the registry and the id the pool keeps for that worker,
+   in place of the thread's own, whose regions hold the storage of the
+   program waiting and must not be rewound. The count goes to zero before a
+   registry goes in or out, so the fault handler never reads past what the
+   one in place holds. As on the pool's threads, the task is not contained,
+   a contained worker waiting or not (§11.2): an abort in it ends the
+   program, and never returns to the worker's own handler with the pool's
+   registry in place and the pool's threads still running tasks on the
+   worker's storage. The task's run gives back what else the program
+   waiting keeps per thread, its stack block and globals (gs_pool_spawn). */
+static void gs_pool_run_caller(struct gs_pool_state *pool, gs_pool_task *t) {
+    gs_region *regions = gs_regions;
+    long nregions = gs_nregions, mapped = gs_regions_mapped, cap = gs_regions_cap;
+    int64_t id = gs_current_thread_id;
+    gs_contained *contain = gs_contain;
+    gs_nregions = 0;
+    gs_regions = pool->caller_regions;
+    gs_regions_mapped = pool->caller_regions_mapped;
+    gs_regions_cap = (long)gs_workerregions;
+    gs_current_thread_id = pool->caller_thread_id;
+    gs_contain = NULL;
+    gs_pool_run_task(t);
+    pool->caller_regions_mapped = gs_regions_mapped;
+    gs_nregions = 0;
+    gs_regions = regions;
+    gs_regions_mapped = mapped;
+    gs_regions_cap = cap;
+    gs_current_thread_id = id;
+    gs_contain = contain;
+    gs_nregions = nregions;
+}
 
 )GSRT"
 R"GSRT(#ifdef _WIN32
@@ -3924,26 +4029,18 @@ R"GSRT(    for (;;) {
         gs_mutex_lock(&pool->mutex);
         while (!pool->head && !pool->stop)
             gs_cond_wait(&pool->work_cond, &pool->mutex);
-        if (!pool->head && pool->stop) {
-            gs_mutex_unlock(&pool->mutex);
-            break;
-        }
-        gs_pool_task *t = pool->head;
-        pool->head = t->next;
-        if (!pool->head) pool->tail = NULL;
+        gs_pool_task *t = gs_pool_take(pool);
         gs_mutex_unlock(&pool->mutex);
+        /* Stopped, with nothing left to run. */
+        if (!t) break;
 
 )GSRT"
 R"GSRT(        gs_nregions = 0;
-        t->run(t->entry, t->args);
-        t->release();
-        free(t->args);
-        free(t);
+        gs_pool_run_task(t);
 
 )GSRT"
 R"GSRT(        gs_mutex_lock(&pool->mutex);
-        if (--pool->pending == 0 && !pool->head)
-            gs_cond_broadcast(&pool->done_cond);
+        gs_pool_finished(pool);
         gs_mutex_unlock(&pool->mutex);
     }
 
@@ -3957,21 +4054,26 @@ R"GSRT(    gs_release_regions();
 }
 
 )GSRT"
-R"GSRT(GS_API gs_pool gs_pool_create(int64_t nthreads, const char *file, int line) {
+R"GSRT(/* nthreads workers: as many threads of the pool's own but one, the thread
+   that waits for the pool being the last (gs_pool_wait). */
+GS_API gs_pool gs_pool_create(int64_t nthreads, const char *file, int line) {
     if (nthreads <= 0) gs_abort(GS_E_POOLTHREADS, file, line);
     struct gs_pool_state *pool = (struct gs_pool_state *)calloc(1, sizeof(struct gs_pool_state));
     if (!pool) gs_panic("out of memory creating thread pool");
     gs_mutex_init(&pool->mutex);
     gs_cond_init(&pool->work_cond);
     gs_cond_init(&pool->done_cond);
-    pool->nthreads = nthreads;
+    pool->nthreads = nthreads - 1;
+    size_t slots = (size_t)(pool->nthreads > 0 ? pool->nthreads : 1);
     #ifdef _WIN32
-        pool->threads = (HANDLE *)calloc((size_t)nthreads, sizeof(HANDLE));
+        pool->threads = (HANDLE *)calloc(slots, sizeof(HANDLE));
     #else
-        pool->threads = (pthread_t *)calloc((size_t)nthreads, sizeof(pthread_t));
+        pool->threads = (pthread_t *)calloc(slots, sizeof(pthread_t));
     #endif
-    if (!pool->threads) gs_panic("out of memory creating thread pool");
-    for (int64_t i = 0; i < nthreads; i++) {
+    pool->caller_regions = (gs_region *)calloc(
+        (size_t)(gs_workerregions > 0 ? gs_workerregions : 1), sizeof(gs_region));
+    if (!pool->threads || !pool->caller_regions) gs_panic("out of memory creating thread pool");
+    for (int64_t i = 0; i < pool->nthreads; i++) {
         #ifdef _WIN32
             pool->threads[i] = (HANDLE)_beginthreadex(NULL, 0,
                 (unsigned (__stdcall *)(void *))gs_pool_worker_main, pool, 0, NULL);
@@ -3982,6 +4084,7 @@ R"GSRT(GS_API gs_pool gs_pool_create(int64_t nthreads, const char *file, int lin
         #endif
     }
     gs_mutex_lock(&gs_threads_mutex);
+    pool->caller_thread_id = gs_numthreads++;
     pool->next = gs_live_pools;
     if (gs_live_pools) gs_live_pools->prev = pool;
     gs_live_pools = pool;
@@ -3991,8 +4094,7 @@ R"GSRT(GS_API gs_pool gs_pool_create(int64_t nthreads, const char *file, int lin
 
 )GSRT"
 R"GSRT(GS_API void gs_pool_submit(gs_pool pool, void (*run)(void (*)(uint8_t *), uint8_t *),
-                           void (*release)(void), void (*entry)(uint8_t *),
-                           const void *args, int64_t argsize) {
+                           void (*entry)(uint8_t *), const void *args, int64_t argsize) {
     if (!pool) gs_panic("null thread pool");
     if (argsize < 0 || (uint64_t)argsize > SIZE_MAX)
         gs_panic("invalid thread argument size");
@@ -4000,7 +4102,6 @@ R"GSRT(GS_API void gs_pool_submit(gs_pool pool, void (*run)(void (*)(uint8_t *),
     if (!t) gs_panic("out of memory spawning pool task");
     t->next = NULL;
     t->run = run;
-    t->release = release;
     t->entry = entry;
     t->args = (uint8_t *)malloc(argsize ? (size_t)argsize : 1);
     if (!t->args) {
@@ -4023,20 +4124,37 @@ R"GSRT(GS_API void gs_pool_check_open(gs_pool pool, const char *file, int line) 
 }
 
 )GSRT"
-R"GSRT(GS_API void gs_pool_wait(gs_pool pool) {
+R"GSRT(/* The thread waiting is the pool's last worker meanwhile: it runs the tasks
+   no pool thread has taken yet, then waits for those still running. Only
+   the thread holding the pool hands it tasks, and that is this one, so none
+   comes in while it waits. */
+GS_API void gs_pool_wait(gs_pool pool) {
     if (!pool) return;
     gs_mutex_lock(&pool->mutex);
-    while (pool->pending > 0 || pool->head)
-        gs_cond_wait(&pool->done_cond, &pool->mutex);
+    for (;;) {
+        gs_pool_task *t = gs_pool_take(pool);
+        if (t) {
+            gs_mutex_unlock(&pool->mutex);
+            gs_pool_run_caller(pool, t);
+            gs_mutex_lock(&pool->mutex);
+            gs_pool_finished(pool);
+        } else if (pool->pending > 0) {
+            gs_cond_wait(&pool->done_cond, &pool->mutex);
+        } else {
+            break;
+        }
+    }
     gs_mutex_unlock(&pool->mutex);
 }
 
 )GSRT"
 R"GSRT(GS_API void gs_pool_destroy(gs_pool pool) {
     if (!pool) return;
+    /* What the pool was handed and has not finished goes first, the thread
+       destroying it running what no pool thread has taken: a pool of one
+       worker has no thread of its own that would. */
+    gs_pool_wait(pool);
     gs_mutex_lock(&pool->mutex);
-    while (pool->pending > 0 || pool->head)
-        gs_cond_wait(&pool->done_cond, &pool->mutex);
     pool->stop = 1;
     gs_cond_broadcast(&pool->work_cond);
     gs_mutex_unlock(&pool->mutex);
@@ -4048,6 +4166,11 @@ R"GSRT(GS_API void gs_pool_destroy(gs_pool pool) {
             pthread_join(pool->threads[i], NULL);
         #endif
     }
+    /* The regions the waiting thread's tasks reserved, which no thread's
+       registry holds between tasks, unmapped as a registry's are. */
+    for (long i = pool->caller_regions_mapped; i > 0; i--)
+        gs_release_region(&pool->caller_regions[i - 1]);
+    free(pool->caller_regions);
     /* Unlisted once its workers have ended, their regions released. */
     gs_mutex_lock(&gs_threads_mutex);
     if (pool->prev) pool->prev->next = pool->next;

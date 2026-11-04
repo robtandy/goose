@@ -1013,16 +1013,23 @@ GS_API void gs_qfree(gs_queue *q);
    which pool.close() calls, leaving the variable a closed pool: NULL, which
    destroys as nothing. No scope's exit destroys a pool. A process's exit
    takes the threads and regions of the pools left open with it, and
-   gs_rt_stop destroys them, for a host that starts a program again. */
+   gs_rt_stop destroys them, for a host that starts a program again. A pool
+   of nthreads workers has a thread fewer of its own: the thread waiting
+   for it in gs_pool_wait is the last, running tasks there on stacks the
+   pool keeps for it, as is the thread that destroys it, for any task the
+   pool has yet to run. */
 GS_API gs_pool gs_pool_create(int64_t nthreads, const char *file, int line);
 GS_API void gs_pool_destroy(gs_pool p);
 /* What pool.apply checks of the pool it reads from its variable once its
    arguments have run, any of which may have closed it, and before it hands
    the pool a chunk: a closed pool aborts, at the apply. */
 GS_API void gs_pool_check_open(gs_pool p, const char *file, int line);
+/* Hands the pool a task: run(entry, args), args a copy of argsize bytes,
+   on whichever of its workers takes it. run runs the task whole, releasing
+   what it holds, and leaves the program state that is the thread's own as
+   it found it, for the thread waiting for the pool runs tasks too. */
 GS_API void gs_pool_submit(gs_pool p, void (*run)(void (*)(uint8_t *), uint8_t *),
-                           void (*release)(void), void (*entry)(uint8_t *),
-                           const void *args, int64_t argsize);
+                           void (*entry)(uint8_t *), const void *args, int64_t argsize);
 GS_API void gs_pool_wait(gs_pool p);
 
 #ifndef GS_RUNTIME_OBJECT
@@ -1095,8 +1102,27 @@ static int64_t gs_thread_spawn(void (*entry)(uint8_t *), const void *args, int64
     return gs_thread_start(gs_thread_run, gs_thread_release, entry, args, argsize, contained);
 }
 
+/* A pool's task, as a worker's thread program, on whichever of the pool's
+   workers takes it: the thread waiting for the pool among them, whose own
+   stack block and globals instance the task starts without, as on a thread
+   of its own, and gets back once the task's are released. A pool's task is
+   never contained, so nothing ends it early but the end of the process. */
+static void gs_pool_run(void (*entry)(uint8_t *), uint8_t *args) {
+    gs_stack *stks = gs_stks;
+    int64_t nstks = gs_nstks;
+    void *gl = gs_gl;
+    gs_stks = NULL;
+    gs_nstks = 0;
+    gs_gl = NULL;
+    gs_thread_run(entry, args);
+    gs_thread_release();
+    gs_stks = stks;
+    gs_nstks = nstks;
+    gs_gl = gl;
+}
+
 static void gs_pool_spawn(gs_pool p, void (*entry)(uint8_t *), const void *args, int64_t argsize) {
-    gs_pool_submit(p, gs_thread_run, gs_thread_release, entry, args, argsize);
+    gs_pool_submit(p, gs_pool_run, entry, args, argsize);
 }
 #endif
 
