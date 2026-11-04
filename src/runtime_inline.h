@@ -1088,6 +1088,8 @@ R"GSRT(typedef struct gs_qstate *gs_queue;
 
 )GSRT"
 R"GSRT(typedef struct gs_pool_state *gs_pool;
+/* What one pool.apply_contained knows of its tasks (gs_pool_submit). */
+typedef struct gs_pool_batch gs_pool_batch;
 
 )GSRT"
 R"GSRT(GS_API void gs_qinit(gs_queue *q);
@@ -1116,28 +1118,36 @@ GS_API void gs_pool_destroy(gs_pool p);
    arguments have run, any of which may have closed it, and before it hands
    the pool a chunk: a closed pool aborts, at the apply. */
 GS_API void gs_pool_check_open(gs_pool p, const char *file, int line);
-/* Hands the pool a task: run(entry, args, contain), args a copy of argsize
+/* Hands the pool a task: run(entry, args, batch), args a copy of argsize
    bytes, on whichever of its workers takes it. run runs the task whole,
    releasing what it holds, and leaves the program state that is the
    thread's own as it found it, for the thread waiting for the pool runs
-   tasks too. A contained task (pool.apply_contained) is handed its pool as
-   contain, for gs_pool_guard, and any other NULL. */
-GS_API void gs_pool_submit(gs_pool p, void (*run)(void (*)(uint8_t *), uint8_t *, gs_pool),
+   tasks too. A contained task (pool.apply_contained) is one of the batch
+   at *batch, which the apply's first task makes (*batch is NULL until
+   then) and its gs_pool_wait_contained frees, and run is handed the batch,
+   for gs_pool_guard. Any other task passes NULL for batch, and run is
+   handed NULL. */
+GS_API void gs_pool_submit(gs_pool p,
+                           void (*run)(void (*)(uint8_t *), uint8_t *, gs_pool_batch *),
                            void (*entry)(uint8_t *), const void *args, int64_t argsize,
-                           int contained);
+                           gs_pool_batch **batch);
 GS_API void gs_pool_wait(gs_pool p);
-/* pool.apply_contained's wait, for a batch of contained tasks: as
-   gs_pool_wait, then whether none of them aborted. Where one did, the tasks
-   no worker had started by then were skipped, and where `msg` is not NULL,
-   it and `len` are set to the first abort's message, which the caller frees
-   with gs_free_msg, or to NULL and no bytes. The pool takes tasks again. */
-GS_API uint8_t gs_pool_wait_contained(gs_pool p, uint8_t **msg, int64_t *len);
+/* pool.apply_contained's wait for its batch, NULL where it handed out no
+   task: as gs_pool_wait, then whether none of the batch's tasks aborted.
+   Where one did, those of them no worker had started by then were skipped,
+   and where `msg` is not NULL, it and `len` are set to the first abort's
+   message, which the caller frees with gs_free_msg, or to NULL and no
+   bytes. The batch is freed. Each apply has a batch of its own, so that one
+   an argument of an apply makes on the same pool, between its tasks, keeps
+   to its own tasks' aborts. */
+GS_API uint8_t gs_pool_wait_contained(gs_pool p, gs_pool_batch *batch, uint8_t **msg,
+                                      int64_t *len);
 /* Runs run(entry, args), the task a pool's worker took, on the calling
-   thread: where contain is the task's pool, an abort in it returns here,
-   ending the task alone, and the pool keeps the first such message of the
-   batch for gs_pool_wait_contained. Where contain is NULL, an abort in it
-   ends the program. */
-GS_API void gs_pool_guard(gs_pool contain, void (*run)(void (*)(uint8_t *), uint8_t *),
+   thread: where batch is the task's, an abort in it returns here, ending
+   the task alone, and the batch keeps the first such message for
+   gs_pool_wait_contained. Where batch is NULL, an abort in it ends the
+   program. */
+GS_API void gs_pool_guard(gs_pool_batch *batch, void (*run)(void (*)(uint8_t *), uint8_t *),
                           void (*entry)(uint8_t *), uint8_t *args);
 
 )GSRT"
@@ -1230,14 +1240,14 @@ R"GSRT(/* A pool's task, as a worker's thread program, on whichever of the pool'
    caller this is, so that its storage is released here as on a return, and
    the thread runs on with its own; nothing ends any other task early but
    the end of the process. */
-static void gs_pool_run(void (*entry)(uint8_t *), uint8_t *args, gs_pool contain) {
+static void gs_pool_run(void (*entry)(uint8_t *), uint8_t *args, gs_pool_batch *batch) {
     gs_stack *stks = gs_stks;
     int64_t nstks = gs_nstks;
     void *gl = gs_gl;
     gs_stks = NULL;
     gs_nstks = 0;
     gs_gl = NULL;
-    gs_pool_guard(contain, gs_thread_run, entry, args);
+    gs_pool_guard(batch, gs_thread_run, entry, args);
     gs_thread_release();
     gs_stks = stks;
     gs_nstks = nstks;
@@ -1246,14 +1256,15 @@ static void gs_pool_run(void (*entry)(uint8_t *), uint8_t *args, gs_pool contain
 
 )GSRT"
 R"GSRT(static void gs_pool_spawn(gs_pool p, void (*entry)(uint8_t *), const void *args, int64_t argsize) {
-    gs_pool_submit(p, gs_pool_run, entry, args, argsize, 0);
+    gs_pool_submit(p, gs_pool_run, entry, args, argsize, NULL);
 }
 
 )GSRT"
-R"GSRT(/* A task of pool.apply_contained, waited for with gs_pool_wait_contained. */
-static void gs_pool_spawn_contained(gs_pool p, void (*entry)(uint8_t *), const void *args,
-                                    int64_t argsize) {
-    gs_pool_submit(p, gs_pool_run, entry, args, argsize, 1);
+R"GSRT(/* A task of pool.apply_contained, one of the apply's batch at *batch, which
+   its gs_pool_wait_contained waits for. */
+static void gs_pool_spawn_contained(gs_pool p, gs_pool_batch **batch, void (*entry)(uint8_t *),
+                                    const void *args, int64_t argsize) {
+    gs_pool_submit(p, gs_pool_run, entry, args, argsize, batch);
 }
 #endif
 
@@ -3939,11 +3950,28 @@ R"GSRT(/* ----------------------------------------------------------------------
 )GSRT"
 R"GSRT(typedef struct gs_pool_task {
     struct gs_pool_task *next;
-    void (*run)(void (*)(uint8_t *), uint8_t *, gs_pool);
+    void (*run)(void (*)(uint8_t *), uint8_t *, gs_pool_batch *);
     void (*entry)(uint8_t *args);
     uint8_t *args;
-    int contained;
+    gs_pool_batch *batch;   /* A contained task's (pool.apply_contained); else NULL. */
 } gs_pool_task;
+
+)GSRT"
+R"GSRT(/* What one pool.apply_contained knows of its tasks (gs_pool_spawn_contained):
+   whether one of them has aborted, after which those no worker has started
+   are skipped (gs_pool_take), and the first abort's message, which the
+   apply's gs_pool_wait_contained takes as it frees the batch. Each apply has
+   a batch of its own, as an argument of an apply may make another on the
+   same pool between the apply's tasks, and the inner apply's wait runs the
+   outer one's tasks too. The pool lists the batches no wait has freed yet,
+   and frees those left when it is destroyed. Under the pool's lock. */
+struct gs_pool_batch {
+    struct gs_pool_batch *prev, *next;
+    struct gs_pool_state *pool;
+    int aborted;
+    uint8_t *msg;
+    int64_t len;
+};
 
 )GSRT"
 R"GSRT(struct gs_pool_state {
@@ -3972,14 +4000,9 @@ R"GSRT(struct gs_pool_state {
     gs_region *caller_regions;
     long caller_regions_mapped;
     int64_t caller_thread_id;
-    /* The batch of contained tasks the pool was handed
-       (gs_pool_spawn_contained): whether one of them has aborted, after
-       which those no worker has started are skipped (gs_pool_take), and the
-       first abort's message, which gs_pool_wait_contained takes. Under the
-       pool's lock. */
-    int aborted;
-    uint8_t *abort_msg;
-    int64_t abort_len;
+    /* The batches of contained tasks no gs_pool_wait_contained has freed
+       yet (gs_pool_batch). Under the pool's lock. */
+    gs_pool_batch *batches;
     /* From the first task of a batch to the end of the wait for it, the
        thread handing the pool tasks is not contained (gs_pool_submit), and
        its gs_contain is kept here: an abort of its own meanwhile ends the
@@ -4007,25 +4030,25 @@ static gs_pool_task *gs_pool_take(struct gs_pool_state *pool, int *skip) {
     if (t) {
         pool->head = t->next;
         if (!pool->head) pool->tail = NULL;
-        *skip = t->contained && pool->aborted;
+        *skip = t->batch && t->batch->aborted;
     }
     return t;
 }
 
 )GSRT"
 R"GSRT(/* A task a worker took, run whole (gs_pool_submit) unless it is skipped,
-   and its record freed. A contained task is handed its pool, which keeps
+   and its record freed. A contained task is handed its batch, which keeps
    what an abort in it says (gs_pool_guard). */
-static void gs_pool_run_task(struct gs_pool_state *pool, gs_pool_task *t, int skip) {
-    if (!skip) t->run(t->entry, t->args, t->contained ? pool : NULL);
+static void gs_pool_run_task(gs_pool_task *t, int skip) {
+    if (!skip) t->run(t->entry, t->args, t->batch);
     free(t->args);
     free(t);
 }
 
 )GSRT"
-R"GSRT(GS_API void gs_pool_guard(gs_pool contain, void (*run)(void (*)(uint8_t *), uint8_t *),
+R"GSRT(GS_API void gs_pool_guard(gs_pool_batch *batch, void (*run)(void (*)(uint8_t *), uint8_t *),
                           void (*entry)(uint8_t *), uint8_t *args) {
-    if (!contain) {
+    if (!batch) {
         run(entry, args);
         return;
     }
@@ -4035,15 +4058,16 @@ R"GSRT(GS_API void gs_pool_guard(gs_pool contain, void (*run)(void (*)(uint8_t *
        waiting for the pool, putting that thread's own back. */
     gs_contained c;
     if (!gs_run_contained(run, entry, args, &c)) return;
-    gs_mutex_lock(&contain->mutex);
-    if (contain->aborted) {
+    struct gs_pool_state *pool = batch->pool;
+    gs_mutex_lock(&pool->mutex);
+    if (batch->aborted) {
         free(c.msg);
     } else {
-        contain->aborted = 1;
-        contain->abort_msg = c.msg;
-        contain->abort_len = c.len;
+        batch->aborted = 1;
+        batch->msg = c.msg;
+        batch->len = c.len;
     }
-    gs_mutex_unlock(&contain->mutex);
+    gs_mutex_unlock(&pool->mutex);
 }
 
 )GSRT"
@@ -4079,7 +4103,7 @@ static void gs_pool_run_caller(struct gs_pool_state *pool, gs_pool_task *t) {
     gs_regions_cap = (long)gs_workerregions;
     gs_current_thread_id = pool->caller_thread_id;
     gs_contain = NULL;
-    gs_pool_run_task(pool, t, 0);
+    gs_pool_run_task(t, 0);
     pool->caller_regions_mapped = gs_regions_mapped;
     gs_nregions = 0;
     gs_regions = regions;
@@ -4117,7 +4141,7 @@ R"GSRT(    for (;;) {
 
 )GSRT"
 R"GSRT(        gs_nregions = 0;
-        gs_pool_run_task(pool, t, skip);
+        gs_pool_run_task(t, skip);
 
 )GSRT"
 R"GSRT(        gs_mutex_lock(&pool->mutex);
@@ -4174,18 +4198,27 @@ GS_API gs_pool gs_pool_create(int64_t nthreads, const char *file, int line) {
 }
 
 )GSRT"
-R"GSRT(GS_API void gs_pool_submit(gs_pool pool, void (*run)(void (*)(uint8_t *), uint8_t *, gs_pool),
+R"GSRT(GS_API void gs_pool_submit(gs_pool pool,
+                           void (*run)(void (*)(uint8_t *), uint8_t *, gs_pool_batch *),
                            void (*entry)(uint8_t *), const void *args, int64_t argsize,
-                           int contained) {
+                           gs_pool_batch **batch) {
     if (!pool) gs_panic("null thread pool");
     if (argsize < 0 || (uint64_t)argsize > SIZE_MAX)
         gs_panic("invalid thread argument size");
+    /* A contained apply's first task makes its batch. */
+    gs_pool_batch *fresh = NULL;
+    if (batch && !*batch) {
+        fresh = (gs_pool_batch *)calloc(1, sizeof(gs_pool_batch));
+        if (!fresh) gs_panic("out of memory spawning pool task");
+        fresh->pool = pool;
+        *batch = fresh;
+    }
     gs_pool_task *t = (gs_pool_task *)malloc(sizeof(gs_pool_task));
     if (!t) gs_panic("out of memory spawning pool task");
     t->next = NULL;
     t->run = run;
     t->entry = entry;
-    t->contained = contained;
+    t->batch = batch ? *batch : NULL;
     t->args = (uint8_t *)malloc(argsize ? (size_t)argsize : 1);
     if (!t->args) {
         free(t);
@@ -4200,6 +4233,11 @@ R"GSRT(GS_API void gs_pool_submit(gs_pool pool, void (*run)(void (*)(uint8_t *),
         gs_contain = NULL;
     }
     gs_mutex_lock(&pool->mutex);
+    if (fresh) {
+        fresh->next = pool->batches;
+        if (pool->batches) pool->batches->prev = fresh;
+        pool->batches = fresh;
+    }
     pool->pending++;
     if (pool->tail) pool->tail->next = t;
     else pool->head = t;
@@ -4226,7 +4264,7 @@ GS_API void gs_pool_wait(gs_pool pool) {
         gs_pool_task *t = gs_pool_take(pool, &skip);
         if (t) {
             gs_mutex_unlock(&pool->mutex);
-            if (skip) gs_pool_run_task(pool, t, 1);
+            if (skip) gs_pool_run_task(t, 1);
             else gs_pool_run_caller(pool, t);
             gs_mutex_lock(&pool->mutex);
             gs_pool_finished(pool);
@@ -4247,25 +4285,29 @@ GS_API void gs_pool_wait(gs_pool pool) {
 }
 
 )GSRT"
-R"GSRT(GS_API uint8_t gs_pool_wait_contained(gs_pool pool, uint8_t **msg, int64_t *len) {
+R"GSRT(GS_API uint8_t gs_pool_wait_contained(gs_pool pool, gs_pool_batch *batch, uint8_t **msg,
+                                      int64_t *len) {
     if (msg) {
         *msg = NULL;
         *len = 0;
     }
-    if (!pool) return 1;
+    /* Every task the pool has runs out, the batch's among them. */
     gs_pool_wait(pool);
+    if (!batch) return 1;
+    pool = batch->pool;
     gs_mutex_lock(&pool->mutex);
-    uint8_t returned = !pool->aborted;
+    uint8_t returned = !batch->aborted;
     if (msg) {
-        *msg = pool->abort_msg;
-        *len = pool->abort_len;
+        *msg = batch->msg;
+        *len = batch->len;
     } else {
-        free(pool->abort_msg);
+        free(batch->msg);
     }
-    pool->aborted = 0;
-    pool->abort_msg = NULL;
-    pool->abort_len = 0;
+    if (batch->prev) batch->prev->next = batch->next;
+    else pool->batches = batch->next;
+    if (batch->next) batch->next->prev = batch->prev;
     gs_mutex_unlock(&pool->mutex);
+    free(batch);
     return returned;
 }
 
@@ -4304,9 +4346,15 @@ R"GSRT(GS_API void gs_pool_destroy(gs_pool pool) {
         pthread_cond_destroy(&pool->work_cond);
         pthread_cond_destroy(&pool->done_cond);
     #endif
-    /* An abort's message no wait took: a contained batch an argument of its
-       apply closed the pool under. */
-    free(pool->abort_msg);
+    /* The batches no wait freed, and the messages no wait took: one whose
+       pool an argument of its apply closed, or one whose wait a
+       long-distance return out of such an argument left out. */
+    while (pool->batches) {
+        gs_pool_batch *b = pool->batches;
+        pool->batches = b->next;
+        free(b->msg);
+        free(b);
+    }
     free(pool->threads);
     free(pool);
 }

@@ -1234,6 +1234,13 @@ inline vector<string> CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
         L("gs_pool_check_open(", poolvar, ", ", LocArgs(c->line), ");");
     };
     L("gs_pool ", poolvar, ";");
+    // apply_contained's batch of tasks, of its own (gs_pool_batch), which
+    // its first task makes and its wait frees.
+    string batch;
+    if (contained) {
+        batch = T();
+        L("gs_pool_batch *", batch, " = NULL;");
+    }
     auto cc = Is<Call>(an[1]);
     auto lv = GenLoc(cc->args[0]);
     if (lv.t->kind == TY_REF) DerefLoc(lv);
@@ -1366,8 +1373,11 @@ inline vector<string> CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
         L("*", szp, " = ", Top(stk), " - (uint8_t *)(", szp, " + 1);");
     }
     if (builtinloop) livepool();
-    L(contained ? "gs_pool_spawn_contained(" : "gs_pool_spawn(", poolvar, ", ", thunk, ", ", pkt,
-      ", ", Top(stk), " - ", pkt, ");");
+    if (contained)
+        L("gs_pool_spawn_contained(", poolvar, ", &", batch, ", ", thunk, ", ", pkt, ", ",
+          Top(stk), " - ", pkt, ");");
+    else
+        L("gs_pool_spawn(", poolvar, ", ", thunk, ", ", pkt, ", ", Top(stk), " - ", pkt, ");");
     PopSc();
     ind--;
     L("}");
@@ -1380,14 +1390,15 @@ inline vector<string> CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
     // wait.
     auto ok = T();
     if (!c->pool_has_why) {
-        L("uint8_t ", ok, " = gs_pool_wait_contained(", poolvar, ", NULL, NULL);");
+        L("uint8_t ", ok, " = gs_pool_wait_contained(", poolvar, ", ", batch, ", NULL, NULL);");
         MarkReload("*");
         return { ok };
     }
     auto m = T(), n = T();
     L("uint8_t *", m, ";");
     L("int64_t ", n, ";");
-    L("uint8_t ", ok, " = gs_pool_wait_contained(", poolvar, ", &", m, ", &", n, ");");
+    L("uint8_t ", ok, " = gs_pool_wait_contained(", poolvar, ", ", batch, ", &", m, ", &", n,
+      ");");
     MarkReload("*");
     L("if (", m, ") {");
     ind++;

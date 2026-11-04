@@ -334,15 +334,16 @@ static void run_solo_pool(void) {
     check_baseline(allocations, regions);
 }
 
-/* The tasks of pool.apply_contained (gs_pool_spawn_contained). An abort in
-   one ends that task alone, which releases its stack block and globals
-   instance as a return does, wherever it runs: the thread waiting for the
-   pool gets its own storage back. The wait for the batch says whether one
-   aborted and takes the first abort's message; the batch's tasks no worker
-   had started by then are skipped, and the pool runs the next batch, of
-   either kind, as before. */
+/* The tasks of pool.apply_contained (gs_pool_spawn_contained), each apply
+   a batch of its own. An abort in one ends that task alone, which releases
+   its stack block and globals instance as a return does, wherever it runs:
+   the thread waiting for the pool gets its own storage back. The wait for
+   the batch says whether one aborted and takes the first abort's message;
+   the batch's tasks no worker had started by then are skipped, and the pool
+   runs the next batch, of either kind, as before. */
 static int contained_ran, contained_started;
 static gs_pool contained_pool;
+static gs_pool_batch *contained_batch;
 
 /* What a task's thunk opens, a stack block and a globals instance; those
    stamped 1 modulo 4 then abort. */
@@ -376,11 +377,13 @@ static void run_contained_solo(void) {
     int64_t len;
     for (int round = 0; round < 3; ++round) {
         contained_ran = 0;
+        gs_pool_batch *batch = NULL;
         for (int i = 0; i < 8; ++i) {
             int64_t stamp = round * 8 + i;
-            gs_pool_spawn_contained(solo, contained_task, &stamp, sizeof(stamp));
+            gs_pool_spawn_contained(solo, &batch, contained_task, &stamp, sizeof(stamp));
         }
-        check(!gs_pool_wait_contained(solo, &msg, &len),
+        check(batch && batch->pool == solo, "a contained apply's first task makes its batch");
+        check(!gs_pool_wait_contained(solo, batch, &msg, &len),
               "a contained batch in which a task aborts waits false");
         check(took_message(msg, len, "assert failed ("), "the wait takes the abort's message");
         check(contained_ran == 2 && solo_order[0] == round * 8 && solo_order[1] == round * 8 + 1,
@@ -392,18 +395,23 @@ static void run_contained_solo(void) {
               "an aborted task's stacks stay mapped for the next task");
     }
     contained_ran = 0;
+    gs_pool_batch *returned = NULL;
     for (int i = 0; i < 8; ++i) {
         int64_t stamp = 4 * i;
-        gs_pool_spawn_contained(solo, contained_task, &stamp, sizeof(stamp));
+        gs_pool_spawn_contained(solo, &returned, contained_task, &stamp, sizeof(stamp));
     }
-    check(gs_pool_wait_contained(solo, &msg, &len) && !msg && len == 0 && contained_ran == 8,
+    check(gs_pool_wait_contained(solo, returned, &msg, &len) && !msg && len == 0 &&
+          contained_ran == 8,
           "after an abort, a contained batch whose tasks return all runs and waits true");
+    check(gs_pool_wait_contained(solo, NULL, &msg, &len) && !msg && len == 0,
+          "an apply that handed out no task waits true");
     contained_ran = 0;
+    gs_pool_batch *unasked = NULL;
     for (int i = 0; i < 8; ++i) {
         int64_t stamp = 4 * i + 1;
-        gs_pool_spawn_contained(solo, contained_task, &stamp, sizeof(stamp));
+        gs_pool_spawn_contained(solo, &unasked, contained_task, &stamp, sizeof(stamp));
     }
-    check(!gs_pool_wait_contained(solo, NULL, NULL) && contained_ran == 1,
+    check(!gs_pool_wait_contained(solo, unasked, NULL, NULL) && contained_ran == 1,
           "a wait that asks for no message still says the batch aborted");
     contained_ran = 0;
     for (int i = 0; i < 8; ++i) {
@@ -446,7 +454,7 @@ static void contained_barrier_task(uint8_t *args) {
     }
     for (;;) {
         gs_mutex_lock(&contained_pool->mutex);
-        int aborted = contained_pool->aborted;
+        int aborted = contained_batch->aborted;
         gs_mutex_unlock(&contained_pool->mutex);
         if (aborted) break;
         gs_cond_wait_until(&test_cond, &test_mutex, gs_qclock_ns() + 1000000);
@@ -465,9 +473,11 @@ static void run_contained_pool(void) {
     int64_t len;
     for (int round = 0; round < 3; ++round) {
         contained_ran = contained_started = 0;
+        contained_batch = NULL;
         for (int64_t stamp = 0; stamp < 3 * POOL_WORKERS; ++stamp)
-            gs_pool_spawn_contained(contained_pool, contained_barrier_task, &stamp, sizeof(stamp));
-        check(!gs_pool_wait_contained(contained_pool, &msg, &len),
+            gs_pool_spawn_contained(contained_pool, &contained_batch, contained_barrier_task,
+                                    &stamp, sizeof(stamp));
+        check(!gs_pool_wait_contained(contained_pool, contained_batch, &msg, &len),
               "a contained batch whose tasks abort on every worker waits false");
         check(took_message(msg, len, "assert failed ("),
               "the wait takes the first abort's message, not a later one's");
@@ -481,11 +491,13 @@ static void run_contained_pool(void) {
               "each worker keeps the stacks of the task that aborted on it mapped");
     }
     contained_ran = 0;
+    contained_batch = NULL;
     for (int64_t i = 0; i < 3 * POOL_WORKERS; ++i) {
         int64_t stamp = POOL_WORKERS + i;
-        gs_pool_spawn_contained(contained_pool, contained_barrier_task, &stamp, sizeof(stamp));
+        gs_pool_spawn_contained(contained_pool, &contained_batch, contained_barrier_task, &stamp,
+                                sizeof(stamp));
     }
-    check(gs_pool_wait_contained(contained_pool, &msg, &len) && !msg &&
+    check(gs_pool_wait_contained(contained_pool, contained_batch, &msg, &len) && !msg &&
           contained_ran == 3 * POOL_WORKERS,
           "the pool's workers run the next batch whole after an abort on each");
     contained_ran = 0;
@@ -498,6 +510,46 @@ static void run_contained_pool(void) {
           "and a plain batch");
     gs_pool_destroy(contained_pool);
     contained_pool = NULL;
+    check_main_kept();
+    check_baseline(allocations, regions);
+}
+
+/* An apply an argument of another makes on the same pool, between the
+   other's tasks, has a batch of its own: on a pool of one worker, its wait
+   runs the outer apply's task handed out before it, which aborts. The outer
+   batch has that abort, the inner one's tasks all run and its wait says
+   none aborted, and the outer one's later task is skipped, its wait taking
+   the abort's message. A batch whose wait never comes, as where a
+   long-distance return leaves an apply's argument, goes with its pool. */
+static void run_interleaved_batches(void) {
+    long allocations = counter_add(&live_allocations, 0);
+    long regions = counter_add(&live_regions, 0);
+    gs_pool solo = gs_pool_create(1, __FILE__, __LINE__);
+    long held = counter_add(&live_allocations, 0);
+    uint8_t *msg;
+    int64_t len;
+    contained_ran = 0;
+    gs_pool_batch *outer = NULL, *inner = NULL;
+    int64_t stamp = 1;
+    gs_pool_spawn_contained(solo, &outer, contained_task, &stamp, sizeof(stamp));
+    for (int i = 0; i < 4; ++i) {
+        stamp = 4 * i;
+        gs_pool_spawn_contained(solo, &inner, contained_task, &stamp, sizeof(stamp));
+    }
+    check(inner != outer, "each apply has a batch of its own");
+    check(gs_pool_wait_contained(solo, inner, &msg, &len) && !msg && contained_ran == 5,
+          "an apply between another's tasks keeps to its own tasks' aborts");
+    stamp = 2;
+    gs_pool_spawn_contained(solo, &outer, contained_task, &stamp, sizeof(stamp));
+    check(!gs_pool_wait_contained(solo, outer, &msg, &len) && contained_ran == 5,
+          "the other's wait says its batch aborted, and its later task is skipped");
+    check(took_message(msg, len, "assert failed ("), "the other's wait takes its abort's message");
+    check(counter_add(&live_allocations, 0) == held, "both batches are freed");
+    gs_pool_batch *left = NULL;
+    stamp = 5;
+    gs_pool_spawn_contained(solo, &left, contained_task, &stamp, sizeof(stamp));
+    gs_pool_wait(solo);
+    gs_pool_destroy(solo);
     check_main_kept();
     check_baseline(allocations, regions);
 }
@@ -817,6 +869,7 @@ int main(void) {
     GS(0)->top[0] = 99;
     run_contained_solo();
     run_contained_pool();
+    run_interleaved_batches();
     int64_t waited = gs_thread_spawn(waited_then_aborting_worker, &stamp, sizeof(stamp), 1);
     check(!gs_thread_wait(waited, NULL, NULL, __FILE__, __LINE__),
           "a contained worker is contained again once it has waited for its pool");
