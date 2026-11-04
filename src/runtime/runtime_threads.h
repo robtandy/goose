@@ -463,6 +463,8 @@ typedef struct gs_pool_task {
 } gs_pool_task;
 
 struct gs_pool_state {
+    /* The live pools' list (gs_live_pools), under gs_threads_mutex. */
+    struct gs_pool_state *prev, *next;
     gs_mutex mutex;
     gs_cond work_cond;
     gs_cond done_cond;
@@ -477,6 +479,11 @@ struct gs_pool_state {
         pthread_t *threads;
     #endif
 };
+
+/* The pools made and not yet destroyed, under gs_threads_mutex. No
+   scope's exit destroys a global's, which lives as long as its program:
+   gs_rt_stop destroys what is left. */
+static struct gs_pool_state *gs_live_pools;
 
 #ifdef _WIN32
 static DWORD WINAPI gs_pool_worker_main(LPVOID p)
@@ -548,6 +555,11 @@ GS_API gs_pool gs_pool_create(int64_t nthreads, const char *file, int line) {
                 gs_panic("cannot create pool thread");
         #endif
     }
+    gs_mutex_lock(&gs_threads_mutex);
+    pool->next = gs_live_pools;
+    if (gs_live_pools) gs_live_pools->prev = pool;
+    gs_live_pools = pool;
+    gs_mutex_unlock(&gs_threads_mutex);
     return pool;
 }
 
@@ -602,6 +614,12 @@ GS_API void gs_pool_destroy(gs_pool pool) {
             pthread_join(pool->threads[i], NULL);
         #endif
     }
+    /* Unlisted once its workers have ended, their regions released. */
+    gs_mutex_lock(&gs_threads_mutex);
+    if (pool->prev) pool->prev->next = pool->next;
+    else gs_live_pools = pool->next;
+    if (pool->next) pool->next->prev = pool->prev;
+    gs_mutex_unlock(&gs_threads_mutex);
     #ifndef _WIN32
         pthread_mutex_destroy(&pool->mutex);
         pthread_cond_destroy(&pool->work_cond);
@@ -611,18 +629,42 @@ GS_API void gs_pool_destroy(gs_pool pool) {
     free(pool);
 }
 
+/* Whether a thread program still runs, under gs_threads_mutex: a worker
+   thread_spawn started, or a task a pool was handed and has not finished,
+   queued or running. An idle pool's workers run none. */
+static int gs_threads_any_live(void) {
+    if (gs_threads) return 1;
+    for (struct gs_pool_state *p = gs_live_pools; p; p = p->next) {
+        gs_mutex_lock(&p->mutex);
+        int busy = p->pending > 0;
+        gs_mutex_unlock(&p->mutex);
+        if (busy) return 1;
+    }
+    return 0;
+}
+
 #endif  /* GS_NEED_THREADS */
 
-/* The records of the thread programs that aborted go with the program
-   whose workers they were, so that a program started next in the process
-   gets ids and thread_wait answers of its own; then main's part
-   (gs_rt_release). */
+/* The pools the program leaves go first, a global's among them: idle, as
+   nothing of the program runs but main, so that destroying each joins its
+   workers and releases their regions. The records of the thread programs
+   that aborted go with the program whose workers they were, so that a
+   program started next in the process gets ids and thread_wait answers of
+   its own; then main's part (gs_rt_release). */
 GS_API void gs_rt_stop(void) {
 #if GS_NEED_THREADS
     gs_mutex_lock(&gs_threads_mutex);
-    if (gs_threads) {
+    if (gs_threads_any_live()) {
         gs_mutex_unlock(&gs_threads_mutex);
         gs_panic("goose_exit: a thread program is still running");
+    }
+    /* Not under the lock, which a pool's workers take as they start, and
+       gs_pool_destroy to unlist the pool. */
+    while (gs_live_pools) {
+        gs_pool p = gs_live_pools;
+        gs_mutex_unlock(&gs_threads_mutex);
+        gs_pool_destroy(p);
+        gs_mutex_lock(&gs_threads_mutex);
     }
     for (int64_t i = 0; i < gs_naborted; i++) free(gs_aborted[i].msg);
     free(gs_aborted);

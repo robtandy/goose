@@ -1,8 +1,10 @@
 /* Direct runtime regression: bounded resource use under repeated worker
    creation, including workers nobody joins, concurrent/repeated waits and
    contained workers that abort, whose messages the runtime keeps until a
-   wait takes them. Small limits make a region registry that leaks
-   entries fail quickly. */
+   wait takes them; and under thread pools run phase after phase, across
+   programs started and stopped in turn, both the pools a program destroys
+   and those it leaves for the stop. Small limits make a region registry
+   that leaks entries fail quickly. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,6 +15,7 @@
 #include <windows.h>
 #else
 #include <sys/mman.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
@@ -180,6 +183,113 @@ static void check_baseline(long allocations, long regions) {
     check(gs_nregions == 1 && GS(0)->top[0] == 99, "main storage survives worker exit");
 }
 
+/* The pools the runtime lists as live, newest first. */
+static int live_pools(void) {
+    int n = 0;
+    for (struct gs_pool_state *p = gs_live_pools, *before = NULL; p; before = p, p = p->next) {
+        check(p->prev == before, "the live pools' list links both ways");
+        ++n;
+    }
+    return n;
+}
+
+/* A pool's first phase, one task for each of its workers: each waits until
+   all have started, so that every worker runs one and maps its stacks. */
+#define POOL_THREADS 3
+static int pool_arrived, pool_phases;
+
+static void pool_barrier_task(uint8_t *args) {
+    exercise_stacks(args);
+    gs_mutex_lock(&test_mutex);
+    int phase = pool_phases;
+    if (++pool_arrived == POOL_THREADS) {
+        pool_arrived = 0;
+        ++pool_phases;
+        gs_cond_broadcast(&test_cond);
+    }
+    while (phase == pool_phases) gs_cond_wait(&test_cond, &test_mutex);
+    gs_mutex_unlock(&test_mutex);
+}
+
+/* Phases as pool.apply runs them: tasks handed to the pool, then waited
+   for. The phases after the first, of more tasks than workers, run on the
+   stacks it mapped, and leave the pool holding what it held after it. */
+static void run_pool(gs_pool pool, int64_t seed) {
+    for (int i = 0; i < POOL_THREADS; ++i) {
+        int64_t stamp = seed + i;
+        gs_pool_spawn(pool, pool_barrier_task, &stamp, sizeof(stamp));
+    }
+    gs_pool_wait(pool);
+    long allocations = counter_add(&live_allocations, 0);
+    long regions = counter_add(&live_regions, 0);
+    for (int phase = 1; phase < 4; ++phase) {
+        for (int i = 0; i < 3 * POOL_THREADS; ++i) {
+            int64_t stamp = seed + phase * 3 * POOL_THREADS + i;
+            gs_pool_spawn(pool, exercise_stacks, &stamp, sizeof(stamp));
+        }
+        gs_pool_wait(pool);
+        check(counter_add(&live_allocations, 0) == allocations,
+              "a pool's tasks release their records, arguments and stack blocks");
+        check(counter_add(&live_regions, 0) == regions, "a pool's workers reuse their mappings");
+    }
+}
+
+#ifndef _WIN32
+static int parked;
+
+/* A task that never ends. */
+static void parked_task(uint8_t *args) {
+    (void)args;
+    gs_mutex_lock(&test_mutex);
+    parked = 1;
+    gs_cond_broadcast(&test_cond);
+    for (;;) gs_cond_wait(&test_cond, &test_mutex);
+}
+
+/* Stopping while a pool still has a task to finish is the runtime error a
+   running worker is, rather than a wait for the task or the pool destroyed
+   under it: in a process of its own, which the error ends. An idle pool,
+   newer and so listed first, does not hide the busy one. */
+static void check_busy_pool_stop(void) {
+    int err[2];
+    check(!pipe(err), "open a pipe for the stopped program's error");
+    fflush(NULL);
+    pid_t child = fork();
+    check(child >= 0, "fork a program to stop mid-task");
+    if (!child) {
+        dup2(err[1], STDERR_FILENO);
+        close(err[0]);
+        close(err[1]);
+        alarm(20);  /* a stop that waits for the task never returns */
+        gs_rt_init(0, NULL, 1, 1, GS_MAX_STACKS);
+        gs_pool busy = gs_pool_create(POOL_THREADS, __FILE__, __LINE__);
+        gs_pool_create(1, __FILE__, __LINE__);
+        int64_t stamp = 7;
+        gs_pool_spawn(busy, parked_task, &stamp, sizeof(stamp));
+        gs_mutex_lock(&test_mutex);
+        while (!parked) gs_cond_wait(&test_cond, &test_mutex);
+        gs_mutex_unlock(&test_mutex);
+        gs_thread_release();
+        gs_rt_stop();
+        _exit(0);
+    }
+    close(err[1]);
+    char text[512];
+    size_t n = 0;
+    ssize_t got;
+    while (n < sizeof(text) - 1 && (got = read(err[0], text + n, sizeof(text) - 1 - n)) > 0)
+        n += (size_t)got;
+    text[n] = 0;
+    close(err[0]);
+    int status;
+    int refused = waitpid(child, &status, 0) == child && WIFEXITED(status) &&
+                  WEXITSTATUS(status) == 1 &&
+                  strstr(text, "goose_exit: a thread program is still running");
+    if (!refused) fputs(text, stderr);
+    check(refused, "stopping while a pool's task runs is a runtime error");
+}
+#endif
+
 int main(void) {
 #ifndef _WIN32
     struct sigaction before;
@@ -304,6 +414,48 @@ int main(void) {
     gs_rt_stop();
     check(counter_add(&live_allocations, 0) == 0 && counter_add(&live_regions, 0) == 0,
           "the program started again ends as cleanly");
+
+    /* Pools over programs started and stopped in turn, each pool run
+       through its phases. The program destroys one, as a local's scope exit
+       does: the oldest, the middle or the newest of those live. The stop
+       destroys those it leaves, as it leaves a global's, joining their
+       workers and releasing their stacks; among them one made just before
+       it, whose workers may not have started. */
+    for (int cycle = 0; cycle < 3; ++cycle) {
+        gs_rt_init(0, NULL, 1, 1, GS_MAX_STACKS);
+        GS(0)->top[0] = 99;
+        allocations = counter_add(&live_allocations, 0);
+        regions = counter_add(&live_regions, 0);
+        gs_pool pools[3];
+        long held_allocations[3], held_regions[3];
+        long all_allocations = 0, all_regions = 0;
+        for (int k = 0; k < 3; ++k) {
+            long a = counter_add(&live_allocations, 0), m = counter_add(&live_regions, 0);
+            pools[k] = gs_pool_create(POOL_THREADS, __FILE__, __LINE__);
+            run_pool(pools[k], cycle * 64 + k * 16);
+            held_allocations[k] = counter_add(&live_allocations, 0) - a;
+            held_regions[k] = counter_add(&live_regions, 0) - m;
+            check(held_regions[k] == POOL_THREADS * GS_MAX_STACKS,
+                  "each worker of a pool keeps its stacks mapped between tasks");
+            check(live_pools() == k + 1 && gs_live_pools == pools[k], "a pool made is live");
+            all_allocations += held_allocations[k];
+            all_regions += held_regions[k];
+        }
+        gs_pool_destroy(pools[cycle]);
+        check(live_pools() == 2, "a pool destroyed is not live");
+        check_baseline(allocations + all_allocations - held_allocations[cycle],
+                       regions + all_regions - held_regions[cycle]);
+        gs_pool_create(POOL_THREADS, __FILE__, __LINE__);
+        gs_thread_release();
+        gs_rt_stop();
+        check(!gs_live_pools, "stopping destroys the pools left");
+        check(counter_add(&live_allocations, 0) == 0,
+              "stopping releases the pools' records and their workers' registries");
+        check(counter_add(&live_regions, 0) == 0, "stopping releases the pools' worker stacks");
+    }
+#ifndef _WIN32
+    check_busy_pool_stop();
+#endif
     puts("runtime thread cleanup ok");
     return 0;
 }
