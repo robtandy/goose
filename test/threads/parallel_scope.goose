@@ -7,6 +7,11 @@
 //   Join where both Build and Probe run in parallel via pool.apply).
 // - The program ends the pool itself, with `defer pool.close();`: nothing
 //   ends it at its scope's exit.
+// - A pool of n workers is n - 1 threads of its own and the thread applying
+//   it, which runs chunks while it waits for them: everything runs on a pool
+//   of four workers and again on a pool of one, which has no thread of its
+//   own, so that main runs every chunk, on stacks the pool keeps for it, and
+//   finds its own data as it left them. Both print the same.
 
 import std;
 
@@ -142,9 +147,7 @@ fn write_join_matches(
     }
 }
 
-fn main() {
-    var pool = thread_pool(4);
-    defer pool.close();
+fn run_all(pool: thread_pool&) {
     var weights: i64[>..] = [2, 3, 5];
     var cfg = Config { scale: 10, bias: 1 };
 
@@ -212,4 +215,16 @@ fn main() {
     // Join Phase 2 (Parallel Probe Write): write matches into variable-sized disjoint chunks
     pool.apply(chunks(joined, offsets), write_join_matches, ht, probe, step, num_parts, slots_per_part);
     print("joined rows: ", joined);
+}
+
+fn main() {
+    var pool = thread_pool(4);
+    defer pool.close();
+    print("four workers:");
+    run_all(pool);
+
+    var solo = thread_pool(1);
+    defer solo.close();
+    print("one worker:");
+    run_all(solo);
 }
