@@ -210,6 +210,7 @@ enum {
     GS_E_POOLTHREADS,  /* a thread_pool count of zero or less */
     GS_E_CHUNKSIZE,    /* a chunks() size of zero or less */
     GS_E_CHUNKBOUNDS,  /* chunk offsets out of bounds or not monotonically increasing */
+    GS_E_POOLCLOSED,   /* pool.apply on a thread_pool that close() ended */
 };
 
 /* A place in the program's source: where a standard library function
@@ -1013,6 +1014,8 @@ GS_API void gs_qfree(gs_queue *q);
    program leaves, a global's. */
 GS_API gs_pool gs_pool_create(int64_t nthreads, const char *file, int line);
 GS_API void gs_pool_destroy(gs_pool p);
+/* pool.apply's first step: a closed pool aborts, at the apply. */
+GS_API void gs_pool_check_open(gs_pool p, const char *file, int line);
 GS_API void gs_pool_submit(gs_pool p, void (*run)(void (*)(uint8_t *), uint8_t *),
                            void (*release)(void), void (*entry)(uint8_t *),
                            const void *args, int64_t argsize);

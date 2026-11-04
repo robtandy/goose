@@ -590,6 +590,10 @@ GS_API void gs_pool_submit(gs_pool pool, void (*run)(void (*)(uint8_t *), uint8_
     gs_mutex_unlock(&pool->mutex);
 }
 
+GS_API void gs_pool_check_open(gs_pool pool, const char *file, int line) {
+    if (!pool) gs_abort(GS_E_POOLCLOSED, file, line);
+}
+
 GS_API void gs_pool_wait(gs_pool pool) {
     if (!pool) return;
     gs_mutex_lock(&pool->mutex);

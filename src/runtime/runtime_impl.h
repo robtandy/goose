@@ -29,6 +29,7 @@ static const char *gs_errmsgs[] = {
     "thread_pool count of zero or less",
     "chunk size of zero or less",
     "chunk offsets out of bounds or not monotonically increasing",
+    "cannot apply on a closed thread_pool",
 };
 
 /* Ends the process with `code`, its streams flushed: exit() and every

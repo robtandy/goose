@@ -239,6 +239,7 @@ R"GSRT(enum {
     GS_E_POOLTHREADS,  /* a thread_pool count of zero or less */
     GS_E_CHUNKSIZE,    /* a chunks() size of zero or less */
     GS_E_CHUNKBOUNDS,  /* chunk offsets out of bounds or not monotonically increasing */
+    GS_E_POOLCLOSED,   /* pool.apply on a thread_pool that close() ended */
 };
 
 )GSRT"
@@ -1105,6 +1106,8 @@ R"GSRT(/* A thread pool's workers live from gs_pool_create to gs_pool_destroy,
    program leaves, a global's. */
 GS_API gs_pool gs_pool_create(int64_t nthreads, const char *file, int line);
 GS_API void gs_pool_destroy(gs_pool p);
+/* pool.apply's first step: a closed pool aborts, at the apply. */
+GS_API void gs_pool_check_open(gs_pool p, const char *file, int line);
 GS_API void gs_pool_submit(gs_pool p, void (*run)(void (*)(uint8_t *), uint8_t *),
                            void (*release)(void), void (*entry)(uint8_t *),
                            const void *args, int64_t argsize);
@@ -1421,6 +1424,7 @@ R"GSRT(static const char *gs_errmsgs[] = {
     "thread_pool count of zero or less",
     "chunk size of zero or less",
     "chunk offsets out of bounds or not monotonically increasing",
+    "cannot apply on a closed thread_pool",
 };
 
 )GSRT"
@@ -4007,6 +4011,11 @@ R"GSRT(GS_API void gs_pool_submit(gs_pool pool, void (*run)(void (*)(uint8_t *),
     pool->tail = t;
     gs_cond_signal(&pool->work_cond);
     gs_mutex_unlock(&pool->mutex);
+}
+
+)GSRT"
+R"GSRT(GS_API void gs_pool_check_open(gs_pool pool, const char *file, int line) {
+    if (!pool) gs_abort(GS_E_POOLCLOSED, file, line);
 }
 
 )GSRT"

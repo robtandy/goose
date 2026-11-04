@@ -142,6 +142,16 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
         case B_APPLY:
             EmitPoolApply(c, an);
             return {};
+        case B_POOL_CLOSE: {
+            // The pool's workers joined and their regions released, and the
+            // variable left holding a closed pool, which destroys as nothing.
+            usesthreads = true;
+            auto lv = GenLoc(an[0]);
+            if (lv.t->kind == TY_REF) DerefLoc(lv);
+            L("gs_pool_destroy(", lv.s, ");");
+            L(lv.s, " = NULL;");
+            return {};
+        }
         case B_EMBED_SHADER:
         case B_EMBED_FILE: {
             auto &blob = *c->shaderblob;
@@ -1208,6 +1218,7 @@ inline void CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
     auto pv = GenXD(an[0], ast.pooltype);
     auto poolvar = T();
     L("gs_pool ", poolvar, " = ", pv, ";");
+    L("gs_pool_check_open(", poolvar, ", ", LocArgs(c->line), ");");
     auto cc = Is<Call>(an[1]);
     auto lv = GenLoc(cc->args[0]);
     if (lv.t->kind == TY_REF) DerefLoc(lv);
