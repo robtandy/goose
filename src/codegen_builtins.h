@@ -168,19 +168,19 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
                 return { t };
             }
             // thread_wait(id, msg): the abort's message, which this wait takes
-            // if no wait has, appended to msg.
-            auto id = GenX(an[0]);
+            // if no wait has, appended to msg. msg is resolved in its turn,
+            // before the wait, so that a check on the way to it aborts before
+            // the wait has taken the message.
+            auto id = T();
+            L("int64_t ", id, " = ", GenX(an[0]), ";");
+            auto out = RecvLoc(an[1]);
+            ReachMessageBuffer(out);
             auto m = T(), n = T();
             L("uint8_t *", m, ";");
             L("int64_t ", n, ";");
             L("uint8_t ", t, " = gs_thread_wait(", id, ", &", m, ", &", n, ", ", LocArgs(ln),
               ");");
-            L("if (", m, ") {");
-            ind++;
-            AppendBytes(RecvLoc(an[1]), m, n, ln);
-            L("gs_free_msg(", m, ");");
-            ind--;
-            L("}");
+            AppendMessage(out, m, n, ln);
             return { t };
         }
         case B_THREAD_SPAWN: case B_THREAD_SPAWN_CONTAINED: return EmitThreadSpawn(c, an);
@@ -1266,7 +1266,10 @@ inline vector<string> CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
     // member operation's receiver is: the arguments after it may rebind a
     // reference it is reached through. It grows once the tasks have ended.
     Loc why;
-    if (c->pool_has_why) why = RecvLoc(an[2]);
+    if (c->pool_has_why) {
+        why = RecvLoc(an[2]);
+        ReachMessageBuffer(why);
+    }
     size_t first_extra = c->pool_has_idx ? 2 : 1;
     size_t nextra = an.size() - fi - 1;
     vector<string> extra_vals(nextra);
@@ -1400,12 +1403,7 @@ inline vector<string> CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
     L("uint8_t ", ok, " = gs_pool_wait_contained(", poolvar, ", ", batch, ", &", m, ", &", n,
       ");");
     MarkReload("*");
-    L("if (", m, ") {");
-    ind++;
-    AppendBytes(why, m, n, c->line);
-    L("gs_free_msg(", m, ");");
-    ind--;
-    L("}");
+    AppendMessage(why, m, n, c->line);
     return { ok };
 }
 
@@ -1585,14 +1583,26 @@ inline void CodeGen::PayloadOf(Node *n, string &src, string &sz) {
 
 // `n` bytes at `src` appended to a growable u8 array, in the two shapes
 // format appends text to: a resizable writes at its stack top, a limited
-// array copies under a capacity check.
-inline void CodeGen::AppendBytes(const Loc &lv, const string &src, const string &n, Line ln) {
+// array copies under a capacity check. Where `owned` names a message the
+// caller frees once the bytes are in, a capacity check that fails frees it
+// first (AppendMessage).
+inline void CodeGen::AppendBytes(const Loc &lv, const string &src, const string &n, Line ln,
+                                 const string &owned) {
     auto v = ArrayView(lv);
     if (lv.t->arr->akind == A_LIMITED) {
         auto ol = T();
         L("int64_t ", ol, " = ", v.len, ";");
-        L("if (", ol, " + ", n, " > ", LimitedCap(lv), ") gs_abort(GS_E_CAPACITY, ",
-          LocArgs(ln), ");");
+        if (owned.empty()) {
+            L("if (", ol, " + ", n, " > ", LimitedCap(lv), ") gs_abort(GS_E_CAPACITY, ",
+              LocArgs(ln), ");");
+        } else {
+            L("if (", ol, " + ", n, " > ", LimitedCap(lv), ") {");
+            ind++;
+            L("gs_free_msg(", owned, ");");
+            L("gs_abort(GS_E_CAPACITY, ", LocArgs(ln), ");");
+            ind--;
+            L("}");
+        }
         L(CopyFn(), "(", ElemAddr(v, ol), ", ", src, ", (size_t)", n, ");");
         L(v.lenlv, " = (", LenCast(lv), ")(", ol, " + ", n, ");");
         return;
@@ -1600,6 +1610,31 @@ inline void CodeGen::AppendBytes(const Loc &lv, const string &src, const string 
     L(CopyFn(), "(", Top(lv.stk), ", ", src, ", (size_t)", n, ");");
     Bump(lv.stk, n);
     L(v.lenlv, " += ", n, ";");
+}
+
+// An abort's message the runtime handed over, `n` bytes at `m`, or NULL
+// where there is none (thread_wait(id, msg), apply_contained's), appended
+// to the growable u8 array at lv, then freed. A limited array too small for
+// it frees it as its capacity check aborts, which a contained thread
+// program returns from, past the free after the append.
+inline void CodeGen::AppendMessage(const Loc &lv, const string &m, const string &n, Line ln) {
+    L("if (", m, ") {");
+    ind++;
+    AppendBytes(lv, m, n, ln, m);
+    L("gs_free_msg(", m, ");");
+    ind--;
+    L("}");
+}
+
+// The checks on the way to a message buffer, such as the index into an
+// array of limited buffers, made where the buffer is resolved, before the
+// message is handed over: the append evaluates the path again, and no
+// later operand can shrink an array the buffer is in (ForOperands), so that
+// only its capacity check can fail there (AppendMessage). A resizable
+// buffer is never an element, and a reference to one is read as it is
+// resolved (RecvLoc).
+inline void CodeGen::ReachMessageBuffer(const Loc &lv) {
+    if (lv.t->arr->akind == A_LIMITED) L("(void)(", ArrayView(lv).len, ");");
 }
 
 // The destination a resizable or variable builtin result is built at, in the

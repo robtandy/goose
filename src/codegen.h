@@ -1407,7 +1407,10 @@ struct CodeGen {
     vector<string> EmitStr(Call *c, vector<Node *> &an, Dst d0, Line ln);
     void EmitLeCheck(Line ln);
     void PayloadOf(Node *n, string &src, string &sz);
-    void AppendBytes(const Loc &lv, const string &src, const string &n, Line ln);
+    void AppendBytes(const Loc &lv, const string &src, const string &n, Line ln,
+                     const string &owned = "");
+    void AppendMessage(const Loc &lv, const string &m, const string &n, Line ln);
+    void ReachMessageBuffer(const Loc &lv);
     vector<string> EmitBytesOf(Call *c, vector<Node *> &an, Line ln);
     vector<string> EmitToBytes(vector<Node *> &an, Dst d0, Line ln);
     vector<string> EmitFromBytes(Call *c, vector<Node *> &an, Dst d0, Line ln);

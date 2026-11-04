@@ -293,17 +293,20 @@ inline Val TypeCheck::ContainerRead(LVal lv) {
 // A condition and a scrutinee are read before the construct's parts run, so
 // they hold nothing over them: a match binder is a variable in scope, which
 // the scans see. A `for` walks its sequence in place, so that is held while
-// the body runs (HoldForSequence).
+// the body runs (HoldForSequence). apply_contained's message buffer, after
+// the pool and the chunks, is appended to once its later operands have run,
+// so it is held as a member's receiver is.
 template<typename F> void TypeCheck::ForOperands(Node *n, F f) {
     if (auto c = Is<Call>(n)) {
         auto builtin = c->builtin >= 0;
         auto member = builtin && (BuiltinByKind(c->builtin).flags & BF_MEMBER);
         auto render = builtin && (c->builtin == B_PRINT || c->builtin == B_STR ||
                                   c->builtin == B_FORMAT);
-        auto first = true;
+        auto out = c->builtin == B_APPLY_CONTAINED && c->pool_has_why ? 2 : -1;
+        auto at = 0;
         auto kind = [&]() {
-            auto k = member && first ? HK_RECEIVER : render ? HK_NONE : HK_VALUE;
-            first = false;
+            auto k = (member && !at) || at == out ? HK_RECEIVER : render ? HK_NONE : HK_VALUE;
+            at++;
             return k;
         };
         if (auto d = Is<Dot>(c->callee)) f(d->obj, kind());
