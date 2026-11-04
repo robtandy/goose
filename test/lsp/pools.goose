@@ -32,9 +32,9 @@ fn main() {
     run_parallel();
 }
 
-// A thread_pool, whose apply is a builtin member, and the builtins that run
-// a worker function on the arguments after its name: pool.apply, whose
-// worker takes its chunk (and the chunk's index) first, and thread_spawn.
+// A thread_pool, whose apply and close are builtin members, and the builtins
+// that run a worker function on the arguments after its name: pool.apply,
+// whose worker takes its chunk (and its index) first, and thread_spawn.
 
 fn scale_chunk(chunk: i64[:], idx: i64, by: i64, offset: i64) {
     for &x in chunk { x = x * by + idx + offset; }
@@ -61,6 +61,7 @@ fn run_parallel() {
     thread_wait(first);
     thread_wait(second);
     print(xs);
+    pool.close();
 }
 
 // lsp: hover 14:13 "root struct Arena<T>"
@@ -110,6 +111,11 @@ fn run_parallel() {
 // lsp: complete 57:10 lacks push
 // lsp: complete 57:10 lacks alloc_index
 // lsp: complete 50:10 has apply "apply(chunks(array, size_or_offsets), fn, args...)"
+// lsp: complete 57:10 has close "close()"
+// lsp: complete 50:10 has close "close()"
+// lsp: complete 64:10 has close "close()"
+// lsp: complete 28:18 lacks close
+// lsp: complete 59:41 lacks close
 // lsp: complete 59:41 has len
 // lsp: complete 59:41 lacks apply
 // lsp: hint 54:13 ": thread_pool"
@@ -127,11 +133,13 @@ fn run_parallel() {
 // lsp: hover 49:14 "parameter pool: thread_pool&"
 // lsp: hover 57:10 "builtin .apply"
 // lsp: hover 50:10 "builtin .apply"
+// lsp: hover 64:10 "builtin .close"
 // lsp: hover 59:17 "builtin thread_spawn"
 // lsp: hover 60:18 "builtin thread_spawn_contained"
 // lsp: hover 57:31 "fn scale_chunk(chunk: i64[:], idx: i64, by: i64, offset: i64)"
 // lsp: definition 57:31 -> 39:4
 // lsp: definition 57:10 -> none
+// lsp: definition 64:10 -> none
 // lsp: definition 59:17 -> none
 // lsp: references 39:4 2
 // lsp: references 47:11 3
