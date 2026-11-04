@@ -1131,6 +1131,9 @@ NODE(Call)
     bool nobc = false;
     // apply: the worker fn takes `(chunk, idx, ...)` rather than `(chunk, ...)`.
     bool pool_has_idx = false;
+    // apply_contained: a message buffer follows the chunks, ahead of the
+    // worker fn, `(chunks(...), why, fn, ...)`.
+    bool pool_has_why = false;
     TypeExpr *qtype = nullptr;  // qlimit<T>: T, which names the queue (§11.2).
     const string *shaderblob = nullptr;  // embed_shader's compiled blob or embed_file's bytes, in Ast::shaders.
     Call(Line l, Node *_callee) : Node(l, NKind), callee(_callee) {}

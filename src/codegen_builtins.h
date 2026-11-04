@@ -139,9 +139,7 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
             L("gs_pool ", t, " = gs_pool_create(", n, ", ", LocArgs(ln), ");");
             return { t };
         }
-        case B_APPLY:
-            EmitPoolApply(c, an);
-            return {};
+        case B_APPLY: case B_APPLY_CONTAINED: return EmitPoolApply(c, an);
         case B_POOL_CLOSE: {
             // The pool's workers joined and their regions released, and the
             // variable left holding a closed pool, which destroys as nothing.
@@ -1211,10 +1209,20 @@ inline vector<string> CodeGen::EmitThreadSpawn(Call *c, vector<Node *> &an) {
     return { id };
 }
 
-inline void CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
+// pool.apply(chunks(data, size_or_offsets), fn, args...): a task per chunk,
+// each with its packet, handed to the pool, then waited for.
+// pool.apply_contained hands out contained tasks and waits for them with
+// gs_pool_wait_contained: its result is whether every task returned, and
+// the first abort's message is appended to its message buffer, where it has
+// one (Call::pool_has_why), as thread_wait(id, msg) appends a worker's.
+inline vector<string> CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
     usesthreads = true;
     auto sp = c->spec;
     auto thunk = EnsureThreadThunk(sp);
+    auto contained = c->builtin == B_APPLY_CONTAINED;
+    // The worker's name: after the chunks, and after the message buffer
+    // where there is one. Its extra arguments follow it.
+    size_t fi = c->pool_has_why ? 3 : 2;
     // The pool's slot, not its handle: the arguments run after it, and one
     // of them may close the pool, which frees what the handle points at and
     // leaves a closed pool in the slot. So the handle is read from the slot,
@@ -1247,14 +1255,19 @@ inline void CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
         L("int64_t ", csz, " = ", csx, ";");
         L("if (", csz, " <= 0) gs_abort(GS_E_CHUNKSIZE, ", LocArgs(cc->line), ");");
     }
+    // The message buffer, resolved in its turn among the arguments, as a
+    // member operation's receiver is: the arguments after it may rebind a
+    // reference it is reached through. It grows once the tasks have ended.
+    Loc why;
+    if (c->pool_has_why) why = RecvLoc(an[2]);
     size_t first_extra = c->pool_has_idx ? 2 : 1;
-    size_t nextra = an.size() - 3;
+    size_t nextra = an.size() - fi - 1;
     vector<string> extra_vals(nextra);
     for (size_t j = 0; j < nextra; j++) {
         auto pt = sp->argtypes[first_extra + j];
         if (!IsResz(pt) && !IsBytesT(pt) && FixedSize(pt) > 0 && !HasRelRef(pt)) {
             auto ev = T();
-            FixedLocal(pt, ev, GenXD(an[3 + j], pt));
+            FixedLocal(pt, ev, GenXD(an[fi + 1 + j], pt));
             extra_vals[j] = ev;
         }
     }
@@ -1305,7 +1318,7 @@ inline void CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
             continue;
         }
         if (!IsResz(pt)) {
-            GenConstruct(an[3 + j], stk, pt);
+            GenConstruct(an[fi + 1 + j], stk, pt);
             continue;
         }
         auto szp = T(), cntp = T();
@@ -1318,11 +1331,11 @@ inline void CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
             L("uint8_t *", pp, " = ", Top(stk), ";");
             Bump(stk, pre);
             L(CT(pt), " ", h, ";");
-            GenConstruct(an[3 + j], stk, pt, h);
+            GenConstruct(an[fi + 1 + j], stk, pt, h);
             L("*", cntp, " = ", FoTailHdr(pt, h), ".len;");
             L("GS_MEMCPY(", pp, ", &", h, ", ", pre, ");");
         } else {
-            GenConstruct(an[3 + j], stk, pt, cat("(*", cntp, ")"));
+            GenConstruct(an[fi + 1 + j], stk, pt, cat("(*", cntp, ")"));
         }
         L("*", szp, " = ", Top(stk), " - (uint8_t *)(", szp, " + 1);");
     }
@@ -1353,12 +1366,36 @@ inline void CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
         L("*", szp, " = ", Top(stk), " - (uint8_t *)(", szp, " + 1);");
     }
     if (builtinloop) livepool();
-    L("gs_pool_spawn(", poolvar, ", ", thunk, ", ", pkt, ", ", Top(stk), " - ", pkt, ");");
+    L(contained ? "gs_pool_spawn_contained(" : "gs_pool_spawn(", poolvar, ", ", thunk, ", ", pkt,
+      ", ", Top(stk), " - ", pkt, ");");
     PopSc();
     ind--;
     L("}");
-    L("gs_pool_wait(", poolvar, ");");
+    if (!contained) {
+        L("gs_pool_wait(", poolvar, ");");
+        MarkReload("*");
+        return {};
+    }
+    // Emitted here, not returned as text: a discarded result would drop the
+    // wait.
+    auto ok = T();
+    if (!c->pool_has_why) {
+        L("uint8_t ", ok, " = gs_pool_wait_contained(", poolvar, ", NULL, NULL);");
+        MarkReload("*");
+        return { ok };
+    }
+    auto m = T(), n = T();
+    L("uint8_t *", m, ";");
+    L("int64_t ", n, ";");
+    L("uint8_t ", ok, " = gs_pool_wait_contained(", poolvar, ", &", m, ", &", n, ");");
     MarkReload("*");
+    L("if (", m, ") {");
+    ind++;
+    AppendBytes(why, m, n, c->line);
+    L("gs_free_msg(", m, ");");
+    ind--;
+    L("}");
+    return { ok };
 }
 
 // The worker's entry thunk, by name; its body follows once every thread

@@ -1446,7 +1446,7 @@ struct CodeGen {
     unordered_map<FnSpec *, string> thunks;
 
     vector<string> EmitThreadSpawn(Call *c, vector<Node *> &an);
-    void EmitPoolApply(Call *c, vector<Node *> &an);
+    vector<string> EmitPoolApply(Call *c, vector<Node *> &an);
     string EnsureThreadThunk(FnSpec *sp);
     void EmitThreadThunk(FnSpec *sp, int64_t stacks);
     // The image of a resizable value at a scratch stack's top: [int64 count]
