@@ -170,11 +170,11 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
             // thread_wait(id, msg): the abort's message, which this wait takes
             // if no wait has, appended to msg. msg is resolved in its turn,
             // before the wait, so that a check on the way to it aborts before
-            // the wait has taken the message.
+            // the wait has taken the message (PinMessageBuffer).
             auto id = T();
             L("int64_t ", id, " = ", GenX(an[0]), ";");
             auto out = RecvLoc(an[1]);
-            ReachMessageBuffer(out);
+            PinMessageBuffer(out);
             auto m = T(), n = T();
             L("uint8_t *", m, ";");
             L("int64_t ", n, ";");
@@ -1268,7 +1268,7 @@ inline vector<string> CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
     Loc why;
     if (c->pool_has_why) {
         why = RecvLoc(an[2]);
-        ReachMessageBuffer(why);
+        PinMessageBuffer(why);
     }
     size_t first_extra = c->pool_has_idx ? 2 : 1;
     size_t nextra = an.size() - fi - 1;
@@ -1626,15 +1626,16 @@ inline void CodeGen::AppendMessage(const Loc &lv, const string &m, const string 
     L("}");
 }
 
-// The checks on the way to a message buffer, such as the index into an
-// array of limited buffers, made where the buffer is resolved, before the
-// message is handed over: the append evaluates the path again, and no
-// later operand can shrink an array the buffer is in (ForOperands), so that
-// only its capacity check can fail there (AppendMessage). A resizable
-// buffer is never an element, and a reference to one is read as it is
-// resolved (RecvLoc).
-inline void CodeGen::ReachMessageBuffer(const Loc &lv) {
-    if (lv.t->arr->akind == A_LIMITED) L("(void)(", ArrayView(lv).len, ");");
+// A message buffer's address, taken where the buffer is resolved, before
+// the message is handed over, so that the checks on the way to it, such as
+// the index into an array of limited buffers, are made there and not again
+// in the append, where only its capacity check can fail (AppendMessage).
+// A later operand may shrink an array the buffer is in only where that is
+// a limited array, whose slots stay storage (§5.3), and no other
+// (ForOperands). A resizable buffer is never an element, and a reference to
+// one is read as it is resolved (RecvLoc).
+inline void CodeGen::PinMessageBuffer(Loc &lv) {
+    if (lv.t->arr->akind == A_LIMITED) PinLoc(lv);
 }
 
 // The destination a resizable or variable builtin result is built at, in the

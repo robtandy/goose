@@ -5,13 +5,24 @@
 // pool.apply_contained in a task of another (§11.2,
 // docs/design/parallel_blocks.md §3.3). A limited buffer too small for the
 // message fails its capacity check (§9.3) with the message in hand, and
-// frees it then; the bounds check on the way to an element of an array of
-// buffers is made where the buffer is resolved, among the arguments, before
-// any message is handed over. The sanitizer profile's leak check sees a
-// message that is not freed.
+// frees it then. The bounds check on the way to an element of an array of
+// buffers is made once, where the buffer is resolved, among the arguments,
+// before any message is handed over, and the append writes where it found
+// the buffer: also where a later argument has popped the limited array
+// the buffer is in, whose slots stay storage (§5.3). The sanitizer
+// profile's leak check sees a message that is not freed.
 
 fn refuse(chunk: i64[:]) {
     assert(chunk.len == 0);
+}
+
+fn refuse_n(chunk: i64[:], n: i64) {
+    assert(chunk.len == n);
+}
+
+fn shrink(xs: u8[..256][..2]&) -> i64 {
+    xs.pop();
+    0
 }
 
 // Pools of one worker, which the abort leaves open, start no thread.
@@ -29,6 +40,15 @@ thread_fn indexed_applier(k: i64) {
     var data: i64[>..]    = [0, 0];
     var bufs: u8[..64][2] = [[], []];
     print("not reached ", pool.apply_contained(chunks(data, 1), bufs[k], refuse));
+}
+
+thread_fn popped_applier(k: i64) {
+    var pool = thread_pool(1);
+    defer pool.close();
+    var data: i64[>..]       = [0, 0];
+    var bufs: u8[..256][..2] = [[], []];
+    let ok = pool.apply_contained(chunks(data, 1), bufs[k], refuse_n, shrink(bufs));
+    print("  popped: ", ok, " ", bufs.len);
 }
 
 thread_fn job() { assert(false); }
@@ -71,6 +91,9 @@ fn main() {
         why.clear();
         let ai = thread_wait(thread_spawn_contained(indexed_applier, 5), why);
         print("worker's apply_contained, indexed: ", ai, " ", why[..located(why)]);
+        why.clear();
+        let ap = thread_wait(thread_spawn_contained(popped_applier, 1), why);
+        print("worker's apply_contained, popped: ", ap, " ", why.len);
         why.clear();
         let w = thread_wait(thread_spawn_contained(waiter), why);
         print("worker's thread_wait: ", w, " ", why[..located(why)]);
