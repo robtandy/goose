@@ -1,14 +1,18 @@
 // A library for the C host test/threads/host_exit.c (run_tests.py's
 // host_exit task): the host starts it with goose_init, calls its exports,
 // ends it with goose_exit and starts it again, each start running main over
-// fresh globals and an empty queue; and once ends it while a worker still
-// runs, which is a runtime error. As a fixture, main runs once.
+// fresh globals, a fresh thread pool and an empty queue; and once ends it
+// while a worker still runs, which is a runtime error. As a fixture, main
+// runs once.
 
 struct Note { n: i64 }
 struct Stop { n: i64 }
 
 var calls: i64;
 var seen: i64[>..] = [];
+// No scope's exit destroys a global's pool: goose_exit does, joining its
+// workers, and the next start makes a new one.
+var pool = thread_pool(2);
 
 // Never gets its Stop: a worker that runs for as long as the program does.
 thread_fn parked() {
@@ -16,11 +20,17 @@ thread_fn parked() {
     print("parked: ", s.n);
 }
 
+// Each of seen's elements its place in it, counted from 1.
+fn number(chunk: i64[:], idx: i64) {
+    chunk[0] = idx + 1;
+}
+
 export fn bump() -> i64 {
     calls += 1;
-    seen.push(calls);
+    seen.push(0);
+    pool.apply(chunks(seen, 1), number);
     qput(Note { n: calls });    // left in the queue, for goose_exit to free
-    return calls;
+    return seen[seen.len - 1];
 }
 
 export fn park() {
