@@ -1543,7 +1543,8 @@ inline void WriteInlayHint(JsonOut &j, const TextIndex &t, size_t offset, const 
 // The hints in the requested range: the type of each `let` or `var`
 // without one written, after its name, where the specializations agree on
 // it; and the parameter's name before each argument of a call resolved to
-// a function, but for an argument that is that name itself.
+// a function, or passed to the worker function a builtin runs, but for an
+// argument that is that name itself.
 inline bool InlayHints(Workspace &ws, const Json &params, JsonOut &j) {
     Located loc;
     if (!Locate(ws, params, loc, false)) return false;
@@ -1583,13 +1584,32 @@ inline bool InlayHints(Workspace &ws, const Json &params, JsonOut &j) {
         auto c = SpecializedCall(an, span.call);
         if (!c) continue;
         auto sf = c->spec->sf;
-        // A UFCS call's object is the first parameter's argument. A call
-        // checked in place, in a global's initializer, has the defaults of
-        // the parameters it leaves out after the arguments written.
-        size_t first = Is<Dot>(span.call->callee) ? 1 : 0;
+        // The arguments, a UFCS call's object first (Call::ArgNodes), are
+        // the parameters' in order. A builtin that runs a worker function
+        // (Call::spec) takes arguments of its own first, the worker's name
+        // last of them, and passes the worker the rest: thread_spawn's from
+        // its first parameter on, pool.apply(chunks(...), fn, args...)'s
+        // from the one after the chunk and its index, which apply passes
+        // itself. A call checked in place, in a global's initializer, has
+        // the defaults of the parameters it leaves out after the arguments
+        // written.
+        size_t own = 0, param = 0;
+        if (c->builtin == B_THREAD_SPAWN || c->builtin == B_THREAD_SPAWN_CONTAINED) {
+            own = 1;
+        } else if (c->builtin == B_APPLY) {
+            own = 3;
+            param = c->pool_has_idx ? 2 : 1;
+        } else if (c->builtin >= 0) {
+            continue;
+        }
+        size_t recv = Is<Dot>(span.call->callee) ? 1 : 0;
         auto written = span.call->args.size() - (size_t)span.call->ndefaults;
-        for (size_t i = 0; i < written && i + first < sf->params.size(); i++) {
-            auto &p = sf->params[i + first];
+        for (size_t i = 0; i < written; i++) {
+            auto at = i + recv;     // In Call::ArgNodes.
+            if (at < own) continue;
+            auto pidx = at - own + param;
+            if (pidx >= sf->params.size()) break;
+            auto &p = sf->params[pidx];
             auto arg = span.call->args[i];
             if (auto id = Is<Ident>(arg); id && LeafOf(id->name) == p.name) continue;
             auto start = StartOf(f, arg);

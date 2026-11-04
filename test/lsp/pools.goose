@@ -112,3 +112,14 @@ fn run_parallel() {
 // lsp: complete 50:10 has apply "apply(chunks(array, size_or_offsets), fn, args...)"
 // lsp: complete 59:41 has len
 // lsp: complete 59:41 lacks apply
+// lsp: hint 54:13 ": thread_pool"
+// lsp: hints 57 1
+// lsp: hint 57:44 "by:"
+// lsp: hints 50 1
+// lsp: hint 50:44 "by:"
+// lsp: hints 59 3
+// lsp: hint 59:38 "n:"
+// lsp: hint 59:46 "total:"
+// lsp: hints 60 3
+// lsp: hint 60:49 "n:"
+// lsp: hint 60:52 "total:"
