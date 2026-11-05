@@ -119,6 +119,22 @@ fn main() {
     let pif: f32 = PI;
     print(wrap_angle(waf[0]) == -pif, " ", wrap_angle(waf[1]) == -pif, " ", abs(wrap_angle(waf[2]) - (7.0 - pif * 2.0)) < 1e-5,
           " ", abs(wrap_angle(waf[3]) + (7.0 - pif * 2.0)) < 1e-5);   // true true true true
+    // Large angles of either sign, at both widths: what comes back is x
+    // less a whole number of turns, exactly, however large x is. Taking
+    // TAU * floor((x + PI) / TAU) instead is many turns off there (121.7 for
+    // 1e18, -57.7 for 1e9 at f32), and 0.0 for 1e300 is no whole turn off.
+    var wl: f64[>..] = [1e18, -1e18, 1e300, -1.7976931348623157e308];
+    var wlf: f32[>..] = [1e9, -1e9, 3e38, -3e38];
+    var inr = true;
+    for i in wl.len {
+        let w = wrap_angle(wl[i]);
+        let wf = wrap_angle(wlf[i]);
+        inr = inr && w >= -PI && w < PI && wf >= -pif && wf < pif;
+    }
+    print(wrap_angle(wl[0]), " ", wrap_angle(wl[1]), " ", wrap_angle(wl[2]), " ", wrap_angle(wl[3]));
+    // -0.1695396601122212 0.1695396601122212 -0.7234267005270212 -0.5806531521201137
+    print(wrap_angle(wlf[0]), " ", wrap_angle(wlf[1]), " ", wrap_angle(wlf[2]), " ", wrap_angle(wlf[3]), " ",
+          inr);   // -2.1173978 2.1173978 0.28006744 -0.28006744 true
     // Every wrapped value lies in [-PI, PI), at both widths.
     var ok = true;
     for i in 0..2000 {

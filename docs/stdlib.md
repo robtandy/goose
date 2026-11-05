@@ -923,7 +923,8 @@ fn wrap_angle(x: f64) -> f64                                   // into [-PI, PI)
   undefined, give 0 below the edge, 1 above it and NaN at it.
 - `wrap_angle(x)` adds or takes whole turns to bring radians into
   `[-PI, PI)`, as a floored remainder would: `PI` wraps to `-PI`, and `-0.0`
-  stays `-0.0`. The f32 form's bounds are `PI` rounded to f32.
+  stays `-0.0`. However large `x` is, the result is exactly `x` less a
+  whole number of turns. The f32 form's bounds are `PI` rounded to f32.
 
 Each gives NaN for a NaN argument, and `fract` and `wrap_angle` give NaN
 for an infinity. `NAN`'s sign is unspecified.
