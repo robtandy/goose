@@ -4602,13 +4602,18 @@ outlives it, and the rules below keep the tasks from racing.
   was handed once it returns.
 * **Evaluation.** The pool, the array `chunks()` names and its chunk size,
   offsets or task count (below), the message buffer of `apply_contained`
-  and every argument of a fixed-size type are evaluated once, in that
-  order, before any task is handed out. An
-  argument of any other type is built for each task as the task is handed
-  out: it is evaluated once per task, in order, after the tasks before it
-  are out. The apply reads the pool from its variable after the arguments,
-  any of which may close it, and aborts on a closed pool before it hands it
-  a task.
+  and every argument of a fixed-size type whose values take at least one
+  byte are evaluated once, in that order, before any task is handed out.
+  Every other argument is built for each task as the task is handed out:
+  it is evaluated once per task, in order, after the tasks before it are
+  out, and not at all where there is no task. Such an argument is one of a
+  variable-size or resizable type, or one of a fixed-size type whose values
+  take no bytes: a zero-length array `T[0]`, or a variant type with no
+  bytes of its own (Appendix C.2). A limited array of capacity 0 keeps its
+  length field and an empty struct takes a byte, so an argument of either
+  is evaluated once. The apply reads the pool from its variable after the
+  arguments, any of which may close it, and aborts on a closed pool before
+  it hands it a task.
 * **Tasks.** A task runs `fn` as a thread program runs a `thread_fn`
   (above): on data stacks of its own, whichever thread runs it, with its
   own copies of the globals that `fn` and what it calls use, taken from the

@@ -3902,12 +3902,14 @@ and nothing writes what they read.
 Each task is a thread program, as a `thread_fn` worker is: it runs on data
 stacks of its own, with its own copies of the globals it uses, taken as
 the task is handed out, so a task's writes to a global are its own. An
-argument of a fixed-size type is evaluated once; any other is built again
-for each task. A pool of `n` workers is `n - 1` threads and the thread that
-applies it, which runs tasks while it waits, so `thread_pool(1)` starts no
-thread. A worker keeps its data stacks from one task to the next, so a
-task's scratch arrays cost no system call once the worker has run one
-task.
+argument of a fixed-size type is evaluated once, before the first task is
+handed out, unless its values take no bytes (a `T[0]`, or a variant type
+without a payload). Such an argument, like one of any other type, is
+evaluated again for each task, as the task is handed out. A pool of `n`
+workers is `n - 1` threads and the thread that applies it, which runs
+tasks while it waits, so `thread_pool(1)` starts no thread. A worker keeps
+its data stacks from one task to the next, so a task's scratch arrays cost
+no system call once the worker has run one task.
 
 A pool lives in a local or global variable and nowhere else. It is never
 copied, assigned or returned: a function takes a `thread_pool&`, and a

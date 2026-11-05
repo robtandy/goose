@@ -5742,27 +5742,30 @@ pointed at. Up front, in order, it evaluates the array's elements and
 length (`ArrayView`), or the output's location (`RecvLoc`) and the task
 count; the chunk size, checked against zero (`GS_E_CHUNKSIZE`, as the
 task count is), or the offsets slice; the message buffer, whose address it
-takes there (`PinMessageBuffer`); and every extra argument of a fixed size,
-into a C local. A growable apply then asks the pool for its output slots
-(`gs_pool_outs_new`). The loop over the chunks computes each chunk's
-slice, checking an offsets pair before it uses it (`GS_E_CHUNKBOUNDS`),
-and builds the task's packet on a scratch stack (`BytesTemp`): the chunk,
-or the address of the task's output slot; the index, where the worker
-takes it; the extra arguments, a fixed one copied from its local and any
-other constructed into the packet as `thread_spawn` builds its own, so
-that it is evaluated once per task; and the images of the globals the
-worker's program uses (`ThreadGlobals`). Where a packet constructed an
-argument, the pool is read and checked again, and the task goes to
-`gs_pool_spawn`, or to `gs_pool_spawn_contained` with the apply's batch.
-The loop and the wait after it are a sync point for every cached stack
-top, as a call that reaches every stack is (`MarkFlush`, `MarkReload`,
-§6.10). `gs_pool_wait` ends a plain apply. A contained one ends with
-`gs_pool_wait_contained`, whose answer is the call's value and which hands
-over the first abort's message where there is a buffer. Then, for a
-growable output, the slots' elements are appended to the output in task
-order, at its stack top as an append writes them, if every task returned
-(`AppendPoolOuts`, which frees the slots), and last the message is
-appended to the buffer and freed (`AppendMessage`, as
+takes there (`PinMessageBuffer`); and, into a C local, every extra argument
+whose fixed size is one byte or more (`FixedSize(pt) > 0`). A growable apply
+then asks the pool for its output slots (`gs_pool_outs_new`). The loop over
+the chunks computes each chunk's slice, checking an offsets pair before it
+uses it (`GS_E_CHUNKBOUNDS`), and builds the task's packet on a scratch
+stack (`BytesTemp`): the chunk, or the address of the task's output slot;
+the index, where the worker takes it; the extra arguments, each one held
+in a local copied from it, and any other constructed into the packet as
+`thread_spawn` builds its own, so that it is evaluated once per task: one
+of a variable-size or resizable type, and one of a fixed-size type whose
+values take no bytes, a `T[0]` or a variant type with no payload (spec
+§11.2; `threads/pool_arg_evaluation.goose` counts them); and the images of
+the globals the worker's program uses (`ThreadGlobals`). Where a packet
+constructed an argument, the pool is read and checked again, and the task
+goes to `gs_pool_spawn`, or to `gs_pool_spawn_contained` with the apply's
+batch. The loop and the wait after it are a sync point for every cached
+stack top, as a call that reaches every stack is (`MarkFlush`,
+`MarkReload`, §6.10). `gs_pool_wait` ends a plain apply. A contained one
+ends with `gs_pool_wait_contained`, whose answer is the call's value and
+which hands over the first abort's message where there is a buffer. Then,
+for a growable output, the slots' elements are appended to the output in
+task order, at its stack top as an append writes them, if every task
+returned (`AppendPoolOuts`, which frees the slots), and last the message
+is appended to the buffer and freed (`AppendMessage`, as
 `thread_wait(id, msg)` appends its message).
 
 ### 6.9 Generated walkers
