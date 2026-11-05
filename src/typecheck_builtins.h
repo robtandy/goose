@@ -58,18 +58,19 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
         }
         case B_CHUNKS:
             Error(c, "chunks(array, size_or_offsets) can only be used as the first argument of "
-                     "pool.apply()");
-        case B_APPLY: {
+                     "pool.apply() or pool.apply_contained()");
+        case B_APPLY: case B_APPLY_CONTAINED: {
             auto pv = CheckV(args[0], nullptr);
             args[0]->exprtype = pv.type;
             if (DecayedType(pv)->kind != TY_POOL)
-                Error(args[0], cat("apply() requires a thread_pool receiver, got ",
+                Error(args[0], cat(d.name, "() requires a thread_pool receiver, got ",
                                    TypeStr(pv.type)));
             auto cc = Is<Call>(args[1]);
             auto cid = cc ? Is<Ident>(cc->callee) : nullptr;
             if (!cc || cc->trailing || !cc->tyargs.empty() || !cid || cid->name != "chunks" ||
                 !cid->ns.empty() || cc->args.size() != 2)
-                Error(args[1], "apply()'s second argument must be chunks(array, size_or_offsets)");
+                Error(args[1], cat(d.name, "()'s second argument must be chunks(array, "
+                                           "size_or_offsets)"));
             cc->builtin = B_CHUNKS;
             auto iv = CheckV(cc->args[0], nullptr);
             NoUntypedEmptyArray(iv, cc->args[0], "chunks()");
@@ -120,21 +121,46 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             auto chunktype = ast.SliceOf(elem, cc->line);
             cc->exprtype = chunktype;
 
-            auto wid = Is<Ident>(args[2]);
-            vector<SFunction *> fns;
-            auto wvd = wid ? LookupVar(wid->name, wid->ns) : nullptr;
-            if (wid && !(wvd && !wvd->isglobal) && !ScopeNameKind(wid->name))
-                for (auto sf : ast.LookupFunctions(wid->name, wid->ns)) fns.push_back(sf);
+            // The top-level fns an argument names: a variable in scope, a
+            // type parameter or a nested function of the name hides them.
+            auto fnsnamed = [&](Node *a) {
+                vector<SFunction *> fns;
+                auto id = Is<Ident>(a);
+                auto vd = id ? LookupVar(id->name, id->ns) : nullptr;
+                if (id && !(vd && !vd->isglobal) && !ScopeNameKind(id->name))
+                    for (auto sf : ast.LookupFunctions(id->name, id->ns)) fns.push_back(sf);
+                return fns;
+            };
+            // apply_contained may take a message buffer after the chunks,
+            // ahead of the worker's name, which the first aborting task's
+            // message is appended to, as thread_wait(id, msg) appends a
+            // contained worker's (§11.2). An argument there that names a
+            // top-level fn is the worker. The buffer grows once the tasks
+            // have ended, not while one of them writes its chunk, but a
+            // buffer that is the array chunks() partitions is a mistake.
+            auto has_why = d.kind == B_APPLY_CONTAINED && args.size() >= 4 &&
+                           fnsnamed(args[2]).empty();
+            c->pool_has_why = has_why;
+            size_t fi = has_why ? 3 : 2;    // The worker's name.
+            if (has_why) {
+                auto wv = CheckByteOut(c, args[2], "apply_contained(chunks(...), msg, fn, ...)");
+                if (wv.Has(data_root))
+                    Error(args[2], cat("apply_contained()'s message cannot alias ",
+                                       data_root->name,
+                                       ", which is mutably partitioned by chunks()"));
+            }
+            auto wid = Is<Ident>(args[fi]);
+            auto fns = fnsnamed(args[fi]);
             if (fns.size() > 1)
-                Error(args[2], cat("ambiguous apply() function ", wid->name,
-                                   ": more than one fn has that name"));
+                Error(args[fi], cat("ambiguous ", d.name, "() function ", wid->name,
+                                    ": more than one fn has that name"));
             if (fns.empty())
-                Error(args[2], "apply()'s function argument must name a top-level fn");
+                Error(args[fi], cat(d.name, "()'s function argument must name a top-level fn"));
             auto wsf = fns[0];
             wid->fnref = wsf;
             wid->exprtype = fntype;
             bool has_idx = false;
-            size_t nextra = args.size() - 3;
+            size_t nextra = args.size() - fi - 1;
             auto spec = EnsurePoolSpec(wsf, chunktype, has_idx, nextra, c->line);
             c->pool_has_idx = has_idx;
             size_t first_extra = has_idx ? 2 : 1;
@@ -143,15 +169,20 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
                 for (size_t j = 0; j < nextra; j++) {
                     auto pt = spec->argtypes[first_extra + j];
                     if (HoldsIndexT(pt)) ThreadIndexError(c, pt);
-                    auto av = CheckArg(args[3 + j], pt);
+                    auto &a = args[fi + 1 + j];
+                    auto av = CheckArg(a, pt);
                     if ((pt->kind == TY_SLICE || IsPlainRef(pt)) && av.Has(data_root))
-                        Error(args[3 + j],
-                              cat("shared argument to apply() cannot alias ", data_root->name,
-                                  ", which is mutably partitioned by chunks()"));
+                        Error(a, cat("shared argument to ", d.name, "() cannot alias ",
+                                     data_root->name,
+                                     ", which is mutably partitioned by chunks()"));
                 }
             }
             c->spec = spec;
-            return VoidVal();
+            if (d.kind == B_APPLY) return VoidVal();
+            // apply_contained: whether every task returned (§11.2's thread_wait).
+            Val v;
+            v.type = ast.booltype;
+            return v;
         }
         case B_POOL_CLOSE: {
             // pool.close() ends the pool: no scope's exit does, as nothing
@@ -786,8 +817,9 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
 }
 
 // The growable u8 array a builtin's `out` argument appends to (BF_OUTARG),
-// as `form` names the call: to_bytes(a, out), thread_wait(id, msg).
-inline void TypeCheck::CheckByteOut(Call *c, Node *out, const string &form) {
+// as `form` names the call: to_bytes(a, out), thread_wait(id, msg),
+// apply_contained(chunks(...), msg, fn, ...). Its checked value.
+inline Val TypeCheck::CheckByteOut(Call *c, Node *out, const string &form) {
     auto ov = CheckV(out, nullptr);
     out->exprtype = ov.type;
     auto ot = ov.type;
@@ -800,6 +832,7 @@ inline void TypeCheck::CheckByteOut(Call *c, Node *out, const string &form) {
         Error(c, "cannot append through a non-writable value (let, or "
                  "non-writable provenance, §9.5)");
     NoteGrow(c, ov, cat(BuiltinByKind(c->builtin).grows, " ", ExprStr(out)), ot);
+    return ov;
 }
 
 // An argument of print/str/format (§3.7): every value type has a text

@@ -139,9 +139,7 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
             L("gs_pool ", t, " = gs_pool_create(", n, ", ", LocArgs(ln), ");");
             return { t };
         }
-        case B_APPLY:
-            EmitPoolApply(c, an);
-            return {};
+        case B_APPLY: case B_APPLY_CONTAINED: return EmitPoolApply(c, an);
         case B_POOL_CLOSE: {
             // The pool's workers joined and their regions released, and the
             // variable left holding a closed pool, which destroys as nothing.
@@ -170,19 +168,19 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
                 return { t };
             }
             // thread_wait(id, msg): the abort's message, which this wait takes
-            // if no wait has, appended to msg.
-            auto id = GenX(an[0]);
+            // if no wait has, appended to msg. msg is resolved in its turn,
+            // before the wait, so that a check on the way to it aborts before
+            // the wait has taken the message (PinMessageBuffer).
+            auto id = T();
+            L("int64_t ", id, " = ", GenX(an[0]), ";");
+            auto out = RecvLoc(an[1]);
+            PinMessageBuffer(out);
             auto m = T(), n = T();
             L("uint8_t *", m, ";");
             L("int64_t ", n, ";");
             L("uint8_t ", t, " = gs_thread_wait(", id, ", &", m, ", &", n, ", ", LocArgs(ln),
               ");");
-            L("if (", m, ") {");
-            ind++;
-            AppendBytes(RecvLoc(an[1]), m, n, ln);
-            L("gs_free_msg(", m, ");");
-            ind--;
-            L("}");
+            AppendMessage(out, m, n, ln);
             return { t };
         }
         case B_THREAD_SPAWN: case B_THREAD_SPAWN_CONTAINED: return EmitThreadSpawn(c, an);
@@ -1211,10 +1209,20 @@ inline vector<string> CodeGen::EmitThreadSpawn(Call *c, vector<Node *> &an) {
     return { id };
 }
 
-inline void CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
+// pool.apply(chunks(data, size_or_offsets), fn, args...): a task per chunk,
+// each with its packet, handed to the pool, then waited for.
+// pool.apply_contained hands out contained tasks and waits for them with
+// gs_pool_wait_contained: its result is whether every task returned, and
+// the first abort's message is appended to its message buffer, where it has
+// one (Call::pool_has_why), as thread_wait(id, msg) appends a worker's.
+inline vector<string> CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
     usesthreads = true;
     auto sp = c->spec;
     auto thunk = EnsureThreadThunk(sp);
+    auto contained = c->builtin == B_APPLY_CONTAINED;
+    // The worker's name: after the chunks, and after the message buffer
+    // where there is one. Its extra arguments follow it.
+    size_t fi = c->pool_has_why ? 3 : 2;
     // The pool's slot, not its handle: the arguments run after it, and one
     // of them may close the pool, which frees what the handle points at and
     // leaves a closed pool in the slot. So the handle is read from the slot,
@@ -1226,6 +1234,13 @@ inline void CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
         L("gs_pool_check_open(", poolvar, ", ", LocArgs(c->line), ");");
     };
     L("gs_pool ", poolvar, ";");
+    // apply_contained's batch of tasks, of its own (gs_pool_batch), which
+    // its first task makes and its wait frees.
+    string batch;
+    if (contained) {
+        batch = T();
+        L("gs_pool_batch *", batch, " = NULL;");
+    }
     auto cc = Is<Call>(an[1]);
     auto lv = GenLoc(cc->args[0]);
     if (lv.t->kind == TY_REF) DerefLoc(lv);
@@ -1247,14 +1262,22 @@ inline void CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
         L("int64_t ", csz, " = ", csx, ";");
         L("if (", csz, " <= 0) gs_abort(GS_E_CHUNKSIZE, ", LocArgs(cc->line), ");");
     }
+    // The message buffer, resolved in its turn among the arguments, as a
+    // member operation's receiver is: the arguments after it may rebind a
+    // reference it is reached through. It grows once the tasks have ended.
+    Loc why;
+    if (c->pool_has_why) {
+        why = RecvLoc(an[2]);
+        PinMessageBuffer(why);
+    }
     size_t first_extra = c->pool_has_idx ? 2 : 1;
-    size_t nextra = an.size() - 3;
+    size_t nextra = an.size() - fi - 1;
     vector<string> extra_vals(nextra);
     for (size_t j = 0; j < nextra; j++) {
         auto pt = sp->argtypes[first_extra + j];
         if (!IsResz(pt) && !IsBytesT(pt) && FixedSize(pt) > 0 && !HasRelRef(pt)) {
             auto ev = T();
-            FixedLocal(pt, ev, GenXD(an[3 + j], pt));
+            FixedLocal(pt, ev, GenXD(an[fi + 1 + j], pt));
             extra_vals[j] = ev;
         }
     }
@@ -1305,7 +1328,7 @@ inline void CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
             continue;
         }
         if (!IsResz(pt)) {
-            GenConstruct(an[3 + j], stk, pt);
+            GenConstruct(an[fi + 1 + j], stk, pt);
             continue;
         }
         auto szp = T(), cntp = T();
@@ -1318,11 +1341,11 @@ inline void CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
             L("uint8_t *", pp, " = ", Top(stk), ";");
             Bump(stk, pre);
             L(CT(pt), " ", h, ";");
-            GenConstruct(an[3 + j], stk, pt, h);
+            GenConstruct(an[fi + 1 + j], stk, pt, h);
             L("*", cntp, " = ", FoTailHdr(pt, h), ".len;");
             L("GS_MEMCPY(", pp, ", &", h, ", ", pre, ");");
         } else {
-            GenConstruct(an[3 + j], stk, pt, cat("(*", cntp, ")"));
+            GenConstruct(an[fi + 1 + j], stk, pt, cat("(*", cntp, ")"));
         }
         L("*", szp, " = ", Top(stk), " - (uint8_t *)(", szp, " + 1);");
     }
@@ -1353,12 +1376,35 @@ inline void CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
         L("*", szp, " = ", Top(stk), " - (uint8_t *)(", szp, " + 1);");
     }
     if (builtinloop) livepool();
-    L("gs_pool_spawn(", poolvar, ", ", thunk, ", ", pkt, ", ", Top(stk), " - ", pkt, ");");
+    if (contained)
+        L("gs_pool_spawn_contained(", poolvar, ", &", batch, ", ", thunk, ", ", pkt, ", ",
+          Top(stk), " - ", pkt, ");");
+    else
+        L("gs_pool_spawn(", poolvar, ", ", thunk, ", ", pkt, ", ", Top(stk), " - ", pkt, ");");
     PopSc();
     ind--;
     L("}");
-    L("gs_pool_wait(", poolvar, ");");
+    if (!contained) {
+        L("gs_pool_wait(", poolvar, ");");
+        MarkReload("*");
+        return {};
+    }
+    // Emitted here, not returned as text: a discarded result would drop the
+    // wait.
+    auto ok = T();
+    if (!c->pool_has_why) {
+        L("uint8_t ", ok, " = gs_pool_wait_contained(", poolvar, ", ", batch, ", NULL, NULL);");
+        MarkReload("*");
+        return { ok };
+    }
+    auto m = T(), n = T();
+    L("uint8_t *", m, ";");
+    L("int64_t ", n, ";");
+    L("uint8_t ", ok, " = gs_pool_wait_contained(", poolvar, ", ", batch, ", &", m, ", &", n,
+      ");");
     MarkReload("*");
+    AppendMessage(why, m, n, c->line);
+    return { ok };
 }
 
 // The worker's entry thunk, by name; its body follows once every thread
@@ -1537,14 +1583,26 @@ inline void CodeGen::PayloadOf(Node *n, string &src, string &sz) {
 
 // `n` bytes at `src` appended to a growable u8 array, in the two shapes
 // format appends text to: a resizable writes at its stack top, a limited
-// array copies under a capacity check.
-inline void CodeGen::AppendBytes(const Loc &lv, const string &src, const string &n, Line ln) {
+// array copies under a capacity check. Where `owned` names a message the
+// caller frees once the bytes are in, a capacity check that fails frees it
+// first (AppendMessage).
+inline void CodeGen::AppendBytes(const Loc &lv, const string &src, const string &n, Line ln,
+                                 const string &owned) {
     auto v = ArrayView(lv);
     if (lv.t->arr->akind == A_LIMITED) {
         auto ol = T();
         L("int64_t ", ol, " = ", v.len, ";");
-        L("if (", ol, " + ", n, " > ", LimitedCap(lv), ") gs_abort(GS_E_CAPACITY, ",
-          LocArgs(ln), ");");
+        if (owned.empty()) {
+            L("if (", ol, " + ", n, " > ", LimitedCap(lv), ") gs_abort(GS_E_CAPACITY, ",
+              LocArgs(ln), ");");
+        } else {
+            L("if (", ol, " + ", n, " > ", LimitedCap(lv), ") {");
+            ind++;
+            L("gs_free_msg(", owned, ");");
+            L("gs_abort(GS_E_CAPACITY, ", LocArgs(ln), ");");
+            ind--;
+            L("}");
+        }
         L(CopyFn(), "(", ElemAddr(v, ol), ", ", src, ", (size_t)", n, ");");
         L(v.lenlv, " = (", LenCast(lv), ")(", ol, " + ", n, ");");
         return;
@@ -1552,6 +1610,32 @@ inline void CodeGen::AppendBytes(const Loc &lv, const string &src, const string 
     L(CopyFn(), "(", Top(lv.stk), ", ", src, ", (size_t)", n, ");");
     Bump(lv.stk, n);
     L(v.lenlv, " += ", n, ";");
+}
+
+// An abort's message the runtime handed over, `n` bytes at `m`, or NULL
+// where there is none (thread_wait(id, msg), apply_contained's), appended
+// to the growable u8 array at lv, then freed. A limited array too small for
+// it frees it as its capacity check aborts, which a contained thread
+// program returns from, past the free after the append.
+inline void CodeGen::AppendMessage(const Loc &lv, const string &m, const string &n, Line ln) {
+    L("if (", m, ") {");
+    ind++;
+    AppendBytes(lv, m, n, ln, m);
+    L("gs_free_msg(", m, ");");
+    ind--;
+    L("}");
+}
+
+// A message buffer's address, taken where the buffer is resolved, before
+// the message is handed over, so that the checks on the way to it, such as
+// the index into an array of limited buffers, are made there and not again
+// in the append, where only its capacity check can fail (AppendMessage).
+// A later operand may shrink an array the buffer is in only where that is
+// a limited array, whose slots stay storage (§5.3), and no other
+// (ForOperands). A resizable buffer is never an element, and a reference to
+// one is read as it is resolved (RecvLoc).
+inline void CodeGen::PinMessageBuffer(Loc &lv) {
+    if (lv.t->arr->akind == A_LIMITED) PinLoc(lv);
 }
 
 // The destination a resizable or variable builtin result is built at, in the

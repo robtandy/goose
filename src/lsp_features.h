@@ -1593,14 +1593,15 @@ inline bool InlayHints(Workspace &ws, const Json &params, JsonOut &j) {
         // last of them, and passes the worker the rest: thread_spawn's from
         // its first parameter on, pool.apply(chunks(...), fn, args...)'s
         // from the one after the chunk and its index, which apply passes
-        // itself. A call checked in place, in a global's initializer, has
-        // the defaults of the parameters it leaves out after the arguments
-        // written.
+        // itself, and so apply_contained's, whose own may include a message
+        // buffer ahead of the name. A call checked in place, in a global's
+        // initializer, has the defaults of the parameters it leaves out
+        // after the arguments written.
         size_t own = 0, param = 0;
         if (c->builtin == B_THREAD_SPAWN || c->builtin == B_THREAD_SPAWN_CONTAINED) {
             own = 1;
-        } else if (c->builtin == B_APPLY) {
-            own = 3;
+        } else if (c->builtin == B_APPLY || c->builtin == B_APPLY_CONTAINED) {
+            own = c->pool_has_why ? 4 : 3;
             param = c->pool_has_idx ? 2 : 1;
         } else if (c->builtin >= 0) {
             continue;
@@ -1968,10 +1969,14 @@ inline void MemberCompletions(const Located &loc, size_t dotpos, Completions &ou
     builtins(RecvKindOf(type));
     // A thread_pool's members, which the builtins table cannot mark as
     // such: no BR_ kind is a pool's, and no signature there spells apply's
-    // arguments (B_APPLY and B_POOL_CLOSE in TypeCheck::CheckBuiltin).
+    // arguments (B_APPLY, B_APPLY_CONTAINED and B_POOL_CLOSE in
+    // TypeCheck::CheckBuiltin).
     if (type->kind == TY_POOL) {
         out.Add(builtindefs[B_APPLY].name, CK_METHOD, 2,
                 cat(builtindefs[B_APPLY].name, "(chunks(array, size_or_offsets), fn, args...)"));
+        out.Add(builtindefs[B_APPLY_CONTAINED].name, CK_METHOD, 2,
+                cat(builtindefs[B_APPLY_CONTAINED].name,
+                    "(chunks(array, size_or_offsets), [msg, ]fn, args...) -> bool"));
         out.Add(builtindefs[B_POOL_CLOSE].name, CK_METHOD, 2,
                 cat(builtindefs[B_POOL_CLOSE].name, "()"));
     }

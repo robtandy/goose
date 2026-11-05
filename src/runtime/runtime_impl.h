@@ -58,28 +58,36 @@ GS_API GS_NORETURN void gs_panic(const char *msg) {
     gs_end(1);
 }
 
-/* Where an abort in a contained worker returns to (gs_run_contained), and
-   the message it leaves there for thread_wait; NULL on every other thread. */
+/* Where an abort in a contained thread program, a worker or a pool's task,
+   returns to (gs_run_contained), and the message it leaves there for
+   thread_wait or the apply; NULL on every other thread. `handing` counts
+   the pools with tasks out that the thread program handed out
+   (gs_pool_submit, runtime_threads.h), on every pool at once: while there
+   are any, an abort ends the program rather than the thread program, whose
+   storage those tasks may still be writing into. */
 typedef struct {
     jmp_buf jump;
     uint8_t *msg;
     int64_t len;
+    int handing;
 } gs_contained;
 static GS_TLS gs_contained *gs_contain;
 
 /* The end of a failed check or abort(msg) (§9.3), whose message is `len`
-   bytes at `msg` and the location after it. A contained worker's keeps the
-   message, without the "goose runtime error: " every printed one starts
-   with, and ends that worker; anything else's prints it and ends the
-   process. A NULL file is a check the runtime makes on its own, which has
-   no Goose location to print. */
+   bytes at `msg` and the location after it. A contained thread program's
+   keeps the message, without the "goose runtime error: " every printed one
+   starts with, and ends that thread program, unless it has tasks out
+   (gs_contained::handing); anything else's prints it and ends the process.
+   A NULL file is a check the runtime makes on its own, which has no Goose
+   location to print. */
 static GS_NORETURN void gs_fail(const void *msg, int64_t len, const char *file, int line) {
     static const char lead[] = "goose runtime error: ";
     int64_t pre = sizeof lead - 1;
     int64_t loc = file ? snprintf(NULL, 0, " (%s:%d)\n", file, line) : 1;
+    gs_contained *contain = gs_contain && !gs_contain->handing ? gs_contain : NULL;
     uint8_t *text = (uint8_t *)malloc((size_t)(pre + len + loc + 1));
     if (!text) {
-        if (gs_contain) gs_panic("out of memory recording an aborted thread");
+        if (contain) gs_panic("out of memory recording an aborted thread");
         fputs(lead, stderr);
         fwrite(msg, 1, (size_t)len, stderr);
         if (file) fprintf(stderr, " (%s:%d)\n", file, line);
@@ -90,11 +98,11 @@ static GS_NORETURN void gs_fail(const void *msg, int64_t len, const char *file, 
     if (len) memcpy(text + pre, msg, (size_t)len);
     if (file) snprintf((char *)text + pre + len, (size_t)loc + 1, " (%s:%d)\n", file, line);
     else memcpy(text + pre + len, "\n", 2);
-    if (gs_contain) {
+    if (contain) {
         memmove(text, text + pre, (size_t)(len + loc - 1));
-        gs_contain->msg = text;
-        gs_contain->len = len + loc - 1;
-        gs_longjmp(gs_contain->jump, 1);
+        contain->msg = text;
+        contain->len = len + loc - 1;
+        gs_longjmp(contain->jump, 1);
     }
     fwrite(text, 1, (size_t)(pre + len + loc), stderr);
     free(text);

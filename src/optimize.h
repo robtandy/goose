@@ -957,6 +957,7 @@ inline Node *Call::Cp1(Inliner &inl) const {
     c->poolcheck = poolcheck;
     c->nobc = nobc;
     c->pool_has_idx = pool_has_idx;
+    c->pool_has_why = pool_has_why;
     c->qtype = qtype;
     c->shaderblob = shaderblob;
     c->rettypes = rettypes;
