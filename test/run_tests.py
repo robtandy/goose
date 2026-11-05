@@ -2552,6 +2552,16 @@ def main():
             r.fail("command line paths", str(e))
     r.show_task(cli_paths)
 
+    def runtime_header():
+        from runtime_header import check_runtime_header
+        try:
+            n = check_runtime_header(exe, gendir)
+            r.ok(f"runtime header: src/runtime_inline.h ({n} bytes) is what "
+                 "--gen-runtime-header writes from src/runtime/")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("runtime header", str(e))
+    r.show_task(runtime_header)
+
     def emit_order():
         from emit_order import check_emit_order
         try:
