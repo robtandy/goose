@@ -26,7 +26,9 @@ The language reference's examples (docs/reference.md) are checked by
 scripts/check_doc_examples.py, a process of its own like the samples' runner:
 every code block of the document compiles, the blocks marked `// error` fail,
 and where the JIT runs, each complete program's output is the one the
-document shows after it.
+document shows after it. test/doc_builtins.py checks that the builtins
+sections of the reference and of the specification name every builtin of
+src/builtins.h.
 
 The audio/ tests use the SDL3 PCM mixer without a device, the gfx/ tests
 use the SDL3 graphics module, the physics/ tests the Box3D
@@ -1506,6 +1508,17 @@ def main():
             r.local.out.failures += max(1, sum(line.startswith("FAIL ") for line in lines))
     doc_examples_future = r.task(doc_examples, alone=True)
 
+    # Every builtin the compiler knows, named in the builtins sections of the
+    # reference (section 25) and of the specification (§12).
+    def doc_builtins():
+        from doc_builtins import check_doc_builtins
+        try:
+            n = check_doc_builtins(tc.REPO_ROOT)
+            r.ok(f"documented builtins: all {n} of src/builtins.h, in the reference's "
+                 "and the specification's builtins sections")
+        except (RuntimeError, OSError) as e:
+            r.fail("documented builtins", str(e))
+
     # One level of category directories; nested syntax helpers and the modules
     # of the goose_in_goose bootstrap are exercised through their entry points.
     # The lsp/ fixtures are the language server's, driven by lsp_protocol.py.
@@ -2860,8 +2873,9 @@ def main():
     for future in deep:
         r.show(future)
 
-    r.section("language reference examples (docs/reference.md)")
+    r.section("documentation (docs/reference.md, docs/goose_spec.md)")
     r.show(doc_examples_future)
+    r.show_task(doc_builtins)
 
     r.section("samples")
     r.show(samples_future)
