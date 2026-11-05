@@ -1134,6 +1134,11 @@ NODE(Call)
     // apply_contained: a message buffer follows the chunks, ahead of the
     // worker fn, `(chunks(...), why, fn, ...)`.
     bool pool_has_why = false;
+    // apply: the worker fn's first parameter is a `T[>..]&` of its own,
+    // `chunks(out, n)` hands out n tasks, and the apply appends what each
+    // grew to out once all have returned (docs/design/parallel_blocks.md
+    // §3.4), rather than cutting out into chunks `T[:]`.
+    bool pool_growable = false;
     TypeExpr *qtype = nullptr;  // qlimit<T>: T, which names the queue (§11.2).
     const string *shaderblob = nullptr;  // embed_shader's compiled blob or embed_file's bytes, in Ast::shaders.
     Call(Line l, Node *_callee) : Node(l, NKind), callee(_callee) {}

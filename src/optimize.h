@@ -958,6 +958,7 @@ inline Node *Call::Cp1(Inliner &inl) const {
     c->nobc = nobc;
     c->pool_has_idx = pool_has_idx;
     c->pool_has_why = pool_has_why;
+    c->pool_growable = pool_growable;
     c->qtype = qtype;
     c->shaderblob = shaderblob;
     c->rettypes = rettypes;

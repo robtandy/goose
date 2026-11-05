@@ -1450,6 +1450,7 @@ struct CodeGen {
 
     vector<string> EmitThreadSpawn(Call *c, vector<Node *> &an);
     vector<string> EmitPoolApply(Call *c, vector<Node *> &an);
+    void AppendPoolOuts(const Loc &lv, const string &outs, const string &n, const string &ok);
     string EnsureThreadThunk(FnSpec *sp);
     void EmitThreadThunk(FnSpec *sp, int64_t stacks);
     // The image of a resizable value at a scratch stack's top: [int64 count]

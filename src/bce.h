@@ -3729,6 +3729,10 @@ inline bool Call::BceWalk(BCE &b) {
             case B_ABORT: case B_EXIT:
                 return false;   // The program ends here (§9.3).
             case B_APPLY: case B_APPLY_CONTAINED: {
+                // The tasks write the array chunks() names, or, where the
+                // worker grows an output of its own (Call::pool_growable),
+                // the apply appends their output to it: either way its
+                // storage and length are not what they were.
                 auto an = ArgNodes();
                 if (an.size() >= 2)
                     if (auto cc = Is<Call>(an[1]); cc && !cc->args.empty())
