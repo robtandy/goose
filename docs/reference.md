@@ -3908,11 +3908,12 @@ without a payload). Such an argument, like one of any other type, is
 evaluated again for each task, as the task is handed out. A pool of `n`
 workers is `n - 1` threads and the thread that applies it, which runs
 tasks while it waits, so `thread_pool(1)` starts no thread. A worker keeps
-its data stacks from one task to the next, so a task's scratch arrays cost
-no system call once the worker has run one task.
+the data stacks it has reserved from one task to the next, so a task
+reserves new ones only where it needs more than every earlier task on that
+worker did.
 
 A pool lives in a local or global variable and nowhere else. It is never
-copied, assigned or returned: a function takes a `thread_pool&`, and a
+copied, reassigned or returned: a function takes a `thread_pool&`, and a
 `const thread_pool&` can apply a pool but not close it. Nothing closes a
 pool at its scope's exit, so `defer pool.close();` right after making one
 is the usual form. A closed pool closes again as nothing, and applying it

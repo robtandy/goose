@@ -5285,10 +5285,10 @@ compiler's own description, pass by pass and analysis by analysis, is
   in-process build does). TinyCC does not optimize and cannot place
   thread-local storage in an in-memory run, so a program that uses workers
   or thread pools (§11.2) is refused there (docs/design/jit_backend.md).
-* **Thread pools** (§11.2). Each of a pool's threads reserves the data
-  stack regions its tasks use once, as its first task opens them, and
-  rewinds them for each task after, rather than releasing them, so a task's
-  stacks cost no system call once its worker has run one. The thread
+* **Thread pools** (§11.2). Each of a pool's workers keeps the data stack
+  regions its tasks reserve, and rewinds them for each next task rather
+  than releasing them, so a task maps a region only where it needs more
+  than every earlier task on that worker did. The thread
   applying a pool runs its share of the tasks on regions the pool keeps for
   it, apart from its own, which hold its program's live storage. All of
   them are released when the pool is closed. `implementation.md` §7 has
