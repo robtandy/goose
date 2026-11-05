@@ -1057,6 +1057,31 @@ GS_API uint8_t gs_pool_wait_contained(gs_pool p, gs_pool_batch *batch, uint8_t *
    program. */
 GS_API void gs_pool_guard(gs_pool_batch *batch, void (*run)(void (*)(uint8_t *), uint8_t *),
                           void (*entry)(uint8_t *), uint8_t *args);
+/* What one task of pool.apply(chunks(out, n), fn, ...) left in the T[>..]&
+   of its own that its fn grows (docs/design/parallel_blocks.md §3.4): a
+   copy of its `len` elements, `bytes` bytes at `data`, taken as the task
+   returned (gs_pool_keep), which the apply appends to out once every task
+   has ended. Empty, `data` NULL, where the task left none or never
+   returned. */
+typedef struct {
+    uint8_t *data;
+    int64_t len;
+    int64_t bytes;
+} gs_pool_out;
+/* One apply's n outputs, a slot for each task, all empty, which the pool
+   lists until the apply frees them (gs_pool_outs_free). Those of an apply
+   that never gets to free them, as where one of its arguments closes the
+   pool or a long-distance return leaves one, go with the pool
+   (gs_pool_destroy). Only the thread holding the pool makes and frees them;
+   each task writes its own slot, which the apply reads once its wait for
+   the tasks has ended. */
+GS_API gs_pool_out *gs_pool_outs_new(gs_pool p, int64_t n);
+/* A task's output, `len` elements of `size` bytes at `data`, copied into its
+   slot as the task returns, before its worker rewinds the stacks they are
+   on for its next task. */
+GS_API void gs_pool_keep(gs_pool_out *slot, const uint8_t *data, int64_t len, int64_t size);
+/* Frees an apply's outputs, and what its tasks kept in them. */
+GS_API void gs_pool_outs_free(gs_pool_out *outs);
 
 #ifndef GS_RUNTIME_OBJECT
 

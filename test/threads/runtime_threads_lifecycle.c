@@ -6,8 +6,9 @@
    and those it leaves for the stop. A pool's last worker is the thread
    that waits for it, which runs tasks on stacks the pool keeps for it and
    finds its own as it left them, alone in a pool of one worker, also after
-   a contained task (pool.apply_contained) aborts there. Small limits make
-   a region registry that leaks entries fail quickly. */
+   a contained task (pool.apply_contained) aborts there. The outputs tasks
+   keep for their apply go with the apply, or else with the pool. Small
+   limits make a region registry that leaks entries fail quickly. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -554,6 +555,114 @@ static void run_interleaved_batches(void) {
     check_baseline(allocations, regions);
 }
 
+/* A task of a pool.apply whose worker grows a T[>..]& of its own, as its
+   thunk runs it: the elements go on a stack of the task's own, and as it
+   returns, into the slot its arguments name (gs_pool_keep). One whose
+   arguments say so aborts first, which leaves the slot empty. */
+typedef struct {
+    gs_pool_out *slot;
+    int64_t stamp;
+    int64_t aborts;
+} keeping_args;
+
+static void keeping_task(uint8_t *args) {
+    check_task_start();
+    keeping_args a;
+    memcpy(&a, args, sizeof a);
+    gs_stack out;
+    gs_stack_init(&out);
+    uint8_t *base = out.top;
+    int64_t n = a.stamp % 3;
+    for (int64_t i = 0; i < n; ++i) {
+        int64_t v = a.stamp * 10 + i;
+        memcpy(out.top, &v, sizeof v);
+        out.top += sizeof v;
+    }
+    if (a.aborts) gs_abort(GS_E_ASSERT, __FILE__, __LINE__);
+    gs_pool_keep(a.slot, base, n, sizeof(int64_t));
+}
+
+/* Whether a slot holds what keeping_task keeps for stamp. */
+static int kept_as(const gs_pool_out *o, int64_t stamp) {
+    int64_t n = stamp % 3;
+    if (o->len != n || o->bytes != n * (int64_t)sizeof(int64_t) || (n == 0) != !o->data)
+        return 0;
+    for (int64_t i = 0; i < n; ++i) {
+        int64_t v;
+        memcpy(&v, o->data + i * sizeof v, sizeof v);
+        if (v != stamp * 10 + i) return 0;
+    }
+    return 1;
+}
+
+static void spawn_keeping(gs_pool pool, gs_pool_batch **batch, gs_pool_out *outs, int64_t i,
+                          int64_t stamp, int aborts) {
+    keeping_args a = { outs + i, stamp, aborts };
+    if (batch) gs_pool_spawn_contained(pool, batch, keeping_task, &a, sizeof a);
+    else gs_pool_spawn(pool, keeping_task, &a, sizeof a);
+}
+
+/* An apply's outputs (gs_pool_outs_new), on a pool of four workers, each of
+   which has run a task, and on one of one worker: every task keeps what it
+   grew in its own slot, on whichever worker runs it, a copy that the apply
+   frees with the slots. A contained batch's task that aborts keeps
+   nothing, nor do those skipped after it. Outputs no apply frees go with
+   the pool, once the tasks it has yet to run have kept theirs. */
+static void run_kept_outputs(void) {
+    long allocations = counter_add(&live_allocations, 0);
+    long regions = counter_add(&live_regions, 0);
+    gs_pool pools[2];
+    pools[0] = gs_pool_create(POOL_WORKERS, __FILE__, __LINE__);
+    pools[1] = gs_pool_create(1, __FILE__, __LINE__);
+    run_pool(pools[0], 900);
+    for (int k = 0; k < 2; ++k) {
+        gs_pool pool = pools[k];
+        for (int round = 0; round < 3; ++round) {
+            long held = counter_add(&live_allocations, 0);
+            gs_pool_out *outs = gs_pool_outs_new(pool, 12);
+            check(counter_add(&live_allocations, 0) == held + 1,
+                  "an apply's outputs are one record");
+            for (int64_t i = 0; i < 12; ++i) spawn_keeping(pool, NULL, outs, i, round * 12 + i, 0);
+            gs_pool_wait(pool);
+            check_main_kept();
+            long copies = 0;
+            for (int64_t i = 0; i < 12; ++i) {
+                check(kept_as(&outs[i], round * 12 + i),
+                      "each task keeps what it grew in its own slot");
+                copies += outs[i].data != NULL;
+            }
+            check(counter_add(&live_allocations, 0) == held + 1 + copies,
+                  "a task that grew nothing keeps no copy");
+            gs_pool_outs_free(outs);
+            check(counter_add(&live_allocations, 0) == held,
+                  "freeing an apply's outputs frees what its tasks kept");
+        }
+        long held = counter_add(&live_allocations, 0);
+        gs_pool_batch *batch = NULL;
+        gs_pool_out *outs = gs_pool_outs_new(pool, 12);
+        for (int64_t i = 0; i < 12; ++i) spawn_keeping(pool, &batch, outs, i, 40 + i, i % 4 == 2);
+        check(!gs_pool_wait_contained(pool, batch, NULL, NULL),
+              "a contained batch in which a task aborts waits false");
+        for (int64_t i = 0; i < 12; ++i)
+            check(i % 4 == 2 ? !outs[i].data && outs[i].len == 0
+                             : (!outs[i].data && outs[i].len == 0) || kept_as(&outs[i], 40 + i),
+                  "a task that aborts keeps nothing, nor does one skipped");
+        if (k == 1)
+            check(kept_as(&outs[0], 40) && kept_as(&outs[1], 41) && outs[3].len == 0,
+                  "a pool of one worker runs a batch's tasks up to the first that aborts");
+        gs_pool_outs_free(outs);
+        check(counter_add(&live_allocations, 0) == held, "and the others' copies are freed");
+        outs = gs_pool_outs_new(pool, 4);
+        for (int64_t i = 0; i < 4; ++i) spawn_keeping(pool, NULL, outs, i, 50 + i, 0);
+        gs_pool_wait(pool);
+        outs = gs_pool_outs_new(pool, 2);
+        for (int64_t i = 0; i < 2; ++i) spawn_keeping(pool, NULL, outs, i, 60 + i, 0);
+        gs_pool_destroy(pool);
+        check_main_kept();
+    }
+    check_baseline(allocations, regions);
+}
+
 /* A contained worker is contained again once the wait for the batch it
    handed its pool has ended: an abort then ends the worker alone. */
 static void waited_then_aborting_worker(uint8_t *args) {
@@ -897,6 +1006,7 @@ int main(void) {
     run_contained_solo();
     run_contained_pool();
     run_interleaved_batches();
+    run_kept_outputs();
     int64_t waited = gs_thread_spawn(waited_then_aborting_worker, &stamp, sizeof(stamp), 1);
     check(!gs_thread_wait(waited, NULL, NULL, __FILE__, __LINE__),
           "a contained worker is contained again once it has waited for its pool");

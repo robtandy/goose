@@ -491,6 +491,17 @@ struct gs_pool_batch {
     int64_t len;
 };
 
+/* One apply's outputs (gs_pool_outs_new), its tasks' slots following this
+   header: n of them, for the tasks of a pool.apply whose worker grows a
+   T[>..]& of its own. The pool lists those no apply has freed yet, and frees
+   those left when it is destroyed. Only the thread holding the pool reads
+   or writes the list. */
+typedef struct gs_pool_outs {
+    struct gs_pool_outs *prev, *next;
+    struct gs_pool_state *pool;
+    int64_t n;
+} gs_pool_outs;
+
 struct gs_pool_state {
     /* The live pools' list (gs_live_pools), under gs_threads_mutex. */
     struct gs_pool_state *prev, *next;
@@ -520,6 +531,8 @@ struct gs_pool_state {
     /* The batches of contained tasks no gs_pool_wait_contained has freed
        yet (gs_pool_batch). Under the pool's lock. */
     gs_pool_batch *batches;
+    /* The tasks' outputs no apply has freed yet (gs_pool_outs). */
+    gs_pool_outs *outs;
     /* From the first task of a batch to the end of the wait for it, the
        pool has tasks out (handing), which the contained thread program that
        handed them out, if one did (handed_by), counts: while it has tasks
@@ -756,6 +769,48 @@ GS_API void gs_pool_check_open(gs_pool pool, const char *file, int line) {
     if (!pool) gs_abort(GS_E_POOLCLOSED, file, line);
 }
 
+GS_API gs_pool_out *gs_pool_outs_new(gs_pool pool, int64_t n) {
+    if (!pool) gs_panic("null thread pool");
+    if (n < 0 || (uint64_t)n > (SIZE_MAX - sizeof(gs_pool_outs)) / sizeof(gs_pool_out))
+        gs_panic("out of memory keeping pool task outputs");
+    gs_pool_outs *o =
+        (gs_pool_outs *)calloc(1, sizeof(gs_pool_outs) + (size_t)n * sizeof(gs_pool_out));
+    if (!o) gs_panic("out of memory keeping pool task outputs");
+    o->pool = pool;
+    o->n = n;
+    o->next = pool->outs;
+    if (pool->outs) pool->outs->prev = o;
+    pool->outs = o;
+    return (gs_pool_out *)(o + 1);
+}
+
+/* On the worker that ran the task, which rewinds its stacks before its next
+   one: the elements are copied out of them. */
+GS_API void gs_pool_keep(gs_pool_out *slot, const uint8_t *data, int64_t len, int64_t size) {
+    int64_t bytes = len * size;
+    slot->len = len;
+    slot->bytes = bytes;
+    if (bytes <= 0) return;
+    slot->data = (uint8_t *)malloc((size_t)bytes);
+    if (!slot->data) gs_panic("out of memory keeping a pool task's output");
+    memcpy(slot->data, data, (size_t)bytes);
+}
+
+static void gs_pool_outs_release(gs_pool_outs *o) {
+    gs_pool_out *slots = (gs_pool_out *)(o + 1);
+    for (int64_t i = 0; i < o->n; i++) free(slots[i].data);
+    free(o);
+}
+
+GS_API void gs_pool_outs_free(gs_pool_out *outs) {
+    gs_pool_outs *o = (gs_pool_outs *)outs - 1;
+    struct gs_pool_state *pool = o->pool;
+    if (o->prev) o->prev->next = o->next;
+    else pool->outs = o->next;
+    if (o->next) o->next->prev = o->prev;
+    gs_pool_outs_release(o);
+}
+
 /* The thread waiting is the pool's last worker meanwhile: it runs the tasks
    no pool thread has taken yet, or skips them, then waits for those still
    running. Only the thread holding the pool hands it tasks, and that is
@@ -859,6 +914,13 @@ GS_API void gs_pool_destroy(gs_pool pool) {
         pool->batches = b->next;
         free(b->msg);
         free(b);
+    }
+    /* Likewise the tasks' outputs no apply freed, once no task runs that
+       could still write one. */
+    while (pool->outs) {
+        gs_pool_outs *o = pool->outs;
+        pool->outs = o->next;
+        gs_pool_outs_release(o);
     }
     free(pool->threads);
     free(pool);
