@@ -1242,25 +1242,45 @@ inline vector<string> CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
         L("gs_pool_batch *", batch, " = NULL;");
     }
     auto cc = Is<Call>(an[1]);
-    auto lv = GenLoc(cc->args[0]);
-    if (lv.t->kind == TY_REF) DerefLoc(lv);
-    auto v = ArrayView(lv);
-    auto base = T(), total = T(), off = T(), idx = T();
-    auto elemct = CT(v.elem);
-    L(elemct, " *", base, " = (", elemct, " *)(", v.elems, ");");
-    L("int64_t ", total, " = ", v.len, ";");
-    auto chunkct = CT(sp->argtypes[0]);
-    auto byoffsets = cc->args[1]->exprtype && cc->args[1]->exprtype->kind == TY_SLICE;
-    string csz, offs;
-    if (byoffsets) {
-        auto ox = GenXD(cc->args[1], cc->args[1]->exprtype);
-        offs = T();
-        L(CT(cc->args[1]->exprtype), " ", offs, " = ", ox, ";");
+    auto growable = c->pool_growable;
+    string base, total, off, idx, chunkct, csz, offs, ntasks;
+    auto byoffsets = false;
+    // A growable chunks(out, n) (Call::pool_growable) hands out n tasks, each
+    // growing an array of its own, and appends what they grew to out once
+    // all have returned: out is resolved here, as a member operation's
+    // receiver is (RecvLoc), since the arguments after it may rebind a
+    // reference it is reached through. No task touches it meanwhile.
+    Loc outlv;
+    if (growable) {
+        outlv = RecvLoc(cc->args[0]);
+        idx = T();
+        auto nx = GenX(cc->args[1]);
+        ntasks = T();
+        L("int64_t ", ntasks, " = ", nx, ";");
+        L("if (", ntasks, " <= 0) gs_abort(GS_E_CHUNKSIZE, ", LocArgs(cc->line), ");");
     } else {
-        auto csx = GenX(cc->args[1]);
-        csz = T();
-        L("int64_t ", csz, " = ", csx, ";");
-        L("if (", csz, " <= 0) gs_abort(GS_E_CHUNKSIZE, ", LocArgs(cc->line), ");");
+        auto lv = GenLoc(cc->args[0]);
+        if (lv.t->kind == TY_REF) DerefLoc(lv);
+        auto v = ArrayView(lv);
+        base = T();
+        total = T();
+        off = T();
+        idx = T();
+        auto elemct = CT(v.elem);
+        L(elemct, " *", base, " = (", elemct, " *)(", v.elems, ");");
+        L("int64_t ", total, " = ", v.len, ";");
+        chunkct = CT(sp->argtypes[0]);
+        byoffsets = cc->args[1]->exprtype && cc->args[1]->exprtype->kind == TY_SLICE;
+        if (byoffsets) {
+            auto ox = GenXD(cc->args[1], cc->args[1]->exprtype);
+            offs = T();
+            L(CT(cc->args[1]->exprtype), " ", offs, " = ", ox, ";");
+        } else {
+            auto csx = GenX(cc->args[1]);
+            csz = T();
+            L("int64_t ", csz, " = ", csx, ";");
+            L("if (", csz, " <= 0) gs_abort(GS_E_CHUNKSIZE, ", LocArgs(cc->line), ");");
+        }
     }
     // The message buffer, resolved in its turn among the arguments, as a
     // member operation's receiver is: the arguments after it may rebind a
@@ -1282,12 +1302,24 @@ inline vector<string> CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
         }
     }
     livepool();
+    // A growable apply's outputs, a slot for each task that its thunk keeps
+    // what the task grew in (gs_pool_keep), listed by the pool until they
+    // are appended. Made once the arguments above have run, any of which
+    // may close the pool; one built into a chunk's packet below that closes
+    // it frees them with it, and the apply then aborts before it goes on.
+    string outs;
+    if (growable) {
+        outs = T();
+        L("gs_pool_out *", outs, " = gs_pool_outs_new(", poolvar, ", ", ntasks, ");");
+    }
     // The extra arguments not evaluated above are built into each chunk's
     // packet, so they run again for each chunk: the pool is read again after
     // them, before the chunk is handed to it.
     auto builtinloop = std::find(extra_vals.begin(), extra_vals.end(), "") != extra_vals.end();
     MarkFlush("*");
-    if (byoffsets) {
+    if (growable) {
+        L("for (int64_t ", idx, " = 0; ", idx, " < ", ntasks, "; ", idx, "++) {");
+    } else if (byoffsets) {
         L("if (", offs, ".len == 1) {");
         ind++;
         auto o0 = T();
@@ -1303,15 +1335,17 @@ inline vector<string> CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
     }
     ind++;
     PushSc(SC_STMT);
-    auto chunkv = T();
+    string chunkv;
     if (byoffsets) {
+        chunkv = T();
         auto lo = T(), hi = T();
         L("int64_t ", lo, " = ((int64_t *)", offs, ".data)[", idx, "];");
         L("int64_t ", hi, " = ((int64_t *)", offs, ".data)[", idx, " + 1];");
         L("if (", lo, " < 0 || ", hi, " < ", lo, " || ", hi, " > ", total,
           ") gs_abort(GS_E_CHUNKBOUNDS, ", LocArgs(cc->line), ");");
         L(chunkct, " ", chunkv, " = { ", base, " + ", lo, ", ", hi, " - ", lo, " };");
-    } else {
+    } else if (!growable) {
+        chunkv = T();
         auto clen = T();
         L("int64_t ", clen, " = ", total, " - ", off, " < ", csz, " ? ", total, " - ", off,
           " : ", csz, ";");
@@ -1319,7 +1353,15 @@ inline vector<string> CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
     }
     string stk;
     auto pkt = BytesTemp(stk);
-    EmitValStore(stk, sp->argtypes[0], chunkv);
+    if (growable) {
+        // In place of a chunk, where the task keeps what it grows.
+        auto slot = T();
+        L("gs_pool_out *", slot, " = ", outs, " + ", idx, ";");
+        L("GS_MEMCPY(", Top(stk), ", &", slot, ", sizeof ", slot, ");");
+        Bump(stk, cat("sizeof ", slot));
+    } else {
+        EmitValStore(stk, sp->argtypes[0], chunkv);
+    }
     if (c->pool_has_idx) EmitValStore(stk, ast.inttypes[IS_I64], idx);
     for (size_t j = 0; j < nextra; j++) {
         auto pt = sp->argtypes[first_extra + j];
@@ -1387,6 +1429,7 @@ inline vector<string> CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
     if (!contained) {
         L("gs_pool_wait(", poolvar, ");");
         MarkReload("*");
+        if (growable) AppendPoolOuts(outlv, outs, ntasks, "");
         return {};
     }
     // Emitted here, not returned as text: a discarded result would drop the
@@ -1395,6 +1438,7 @@ inline vector<string> CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
     if (!c->pool_has_why) {
         L("uint8_t ", ok, " = gs_pool_wait_contained(", poolvar, ", ", batch, ", NULL, NULL);");
         MarkReload("*");
+        if (growable) AppendPoolOuts(outlv, outs, ntasks, ok);
         return { ok };
     }
     auto m = T(), n = T();
@@ -1403,8 +1447,42 @@ inline vector<string> CodeGen::EmitPoolApply(Call *c, vector<Node *> &an) {
     L("uint8_t ", ok, " = gs_pool_wait_contained(", poolvar, ", ", batch, ", &", m, ", &", n,
       ");");
     MarkReload("*");
+    // The outputs go first: a limited message buffer too small for the
+    // message aborts, which a contained thread program returns from.
+    if (growable) AppendPoolOuts(outlv, outs, ntasks, ok);
     AppendMessage(why, m, n, c->line);
     return { ok };
+}
+
+// A growable apply's outputs (Call::pool_growable), once every task has
+// ended: appended to the array at lv in task order, each run at its top as
+// an append writes one, then freed with what the tasks kept in them. Where
+// `ok` names a contained apply's answer, only if that is true: a task that
+// aborted kept nothing, and those after it may have been skipped, so the
+// array is left as it was.
+inline void CodeGen::AppendPoolOuts(const Loc &lv, const string &outs, const string &n,
+                                    const string &ok) {
+    assert(!lv.stk.empty());
+    auto v = ArrayView(lv);
+    NoteLen(lv.stk, v.lenlv, lv.lenroot);
+    if (!ok.empty()) {
+        L("if (", ok, ") {");
+        ind++;
+    }
+    auto i = T();
+    L("for (int64_t ", i, " = 0; ", i, " < ", n, "; ", i, "++) {");
+    ind++;
+    auto o = cat(outs, "[", i, "]");
+    L(CopyFn(), "(", Top(lv.stk), ", ", o, ".data, (size_t)", o, ".bytes);");
+    Bump(lv.stk, cat(o, ".bytes"));
+    L(v.lenlv, " += ", o, ".len;");
+    ind--;
+    L("}");
+    if (!ok.empty()) {
+        ind--;
+        L("}");
+    }
+    L("gs_pool_outs_free(", outs, ");");
 }
 
 // The worker's entry thunk, by name; its body follows once every thread
@@ -1430,8 +1508,27 @@ inline void CodeGen::EmitThreadThunk(FnSpec *sp, int64_t stacks) {
     Append(b, "static void ", name, "(uint8_t *p) {\n    gs_stack_block(", stacks, ");\n");
     vector<string> args;
     int regions = 0;    // The dedicated stacks the thunk reserves (thunkregions).
+    string kept;        // A growable output's, once the body has returned.
     for (size_t i = 0; i < sp->argtypes.size(); i++) {
         auto pt = sp->argtypes[i];
+        if (sp->poolentry && i == 0 && IsFatRef(pt)) {
+            // pool.apply's growable output (Call::pool_growable): an empty
+            // T[>..] of the task's own, on a stack of its own. As the body
+            // returns, its elements are copied to the slot the packet names
+            // (gs_pool_keep), before the worker rewinds its stacks for its
+            // next task; a contained task that aborts leaves the slot empty.
+            EmitCoreTypes();
+            regions++;
+            Append(b, "    gs_pool_out *a0_out;\n",
+                   "    GS_MEMCPY(&a0_out, p, sizeof a0_out); p += sizeof a0_out;\n",
+                   "    gs_stack a0_stk; gs_stack_init(&a0_stk);\n",
+                   "    gs_rhdr a0 = { a0_stk.top, 0 };\n");
+            args.push_back("&a0");
+            args.push_back("&a0_stk");
+            kept = cat("    gs_pool_keep(a0_out, a0.base, a0.len, ",
+                       FixedSize(pt->ref->sub->arr->sub), ");\n");
+            continue;
+        }
         if (IsResz(pt)) {
             EmitCoreTypes();
             auto a = cat("a", i), stk = cat(a, "_stk");
@@ -1532,7 +1629,7 @@ inline void CodeGen::EmitThreadThunk(FnSpec *sp, int64_t stacks) {
     }
     string argstr;
     for (size_t i = 0; i < args.size(); i++) Append(argstr, i ? ", " : "", args[i]);
-    Append(b, "    ", ki.cname, "(", argstr, ");\n}\n\n");
+    Append(b, "    ", ki.cname, "(", argstr, ");\n", kept, "}\n\n");
     code += b;
     thunkregions[sp] = regions;
 }

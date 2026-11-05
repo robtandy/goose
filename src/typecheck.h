@@ -2401,6 +2401,7 @@ struct TypeCheck {
     FnSpec *EnsureThreadSpec(SFunction *sf, Line l);
     FnSpec *EnsurePoolSpec(SFunction *sf, TypeExpr *chunktype, bool &has_idx,
                            size_t nextra, Line l);
+    static bool PoolGrowableParam(SFunction *sf);
 
     // ------------------------------------------------------------------
     // Struct and variant literals (§4.2). The per-node entry is
