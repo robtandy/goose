@@ -167,6 +167,15 @@ order, and must find its own storage as it left it; both print the same.
   through `chunks(out, n)`, with output whose size depends on the data or
   on scheduling, appended in task order, and `pool.apply_contained`, which
   appends only where every task returned.
+* `pool_arg_evaluation.goose`: how often, and in what order, an apply
+  evaluates its arguments, by size, by offsets, into growable output,
+  contained, and with no task at all. The pool, the array, its chunk size,
+  offsets or task count, the message buffer and the extra arguments of a
+  fixed-size type that takes bytes are evaluated once, before any task is
+  out, and every other extra argument once per task, as the task is built:
+  a variable-size or resizable one, and a `T[0]` or a variant type with no
+  payload, which take no bytes. A `T[..0]` and an empty struct, which take
+  a byte, are evaluated once.
 * `pool_caller_worker.goose`: the thread applying a pool as its last
   worker, on stacks the pool keeps for it, with the globals copied for
   each task and an argument built for each, and a task's own pool.
