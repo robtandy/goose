@@ -204,7 +204,7 @@ fn main() {
 
 ### 6.2 Parallel Database Hash Join (`chunks(counts, 1)` + `chunks(joined, offsets)`)
 
-See [`test/threads/parallel_scope.goose`](../../test/threads/parallel_scope.goose) for a complete runnable two-pass parallel Hash Join:
+See `test/threads/parallel_scope.goose` for a complete runnable two-pass parallel Hash Join:
 
 ```goose
 // Pass 1: Each worker counts matches for its probe morsel `[idx * step .. (idx + 1) * step]`
