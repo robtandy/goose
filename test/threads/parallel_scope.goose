@@ -5,6 +5,10 @@
 // - Supports both uniform chunking `chunks(arr, size)` and prefix-sum offset
 //   chunking `chunks(arr, offsets)` (demonstrated with a full parallel Hash
 //   Join where both Build and Probe run in parallel via pool.apply).
+// - A worker whose first parameter is a `T[>..]&` of its own grows output
+//   whose size only its run knows: `chunks(arr, num_tasks)` hands out that
+//   many tasks, and the apply appends their elements to `arr` in task order
+//   once all have returned (a parallel filter, and the Probe in one pass).
 // - The program ends the pool itself, with `defer pool.close();`: nothing
 //   ends it at its scope's exit.
 // - A pool of n workers is n - 1 threads of its own and the thread applying
@@ -147,6 +151,49 @@ fn write_join_matches(
     }
 }
 
+// The Probe in one pass, with growable output: each morsel's matches go to
+// an output of its own, so there is no count first and no offsets.
+fn probe_join_matches(
+    out:            JoinedRow[>..]&,
+    idx:            i64,
+    ht:             const HashSlot[:],
+    probe:          const ProbeRow[:],
+    step:           i64,
+    num_parts:      i64,
+    slots_per_part: i64,
+) {
+    let part_mask = num_parts - 1;
+    let slot_mask = slots_per_part - 1;
+    let lo = idx * step;
+    let hi = min(lo + step, probe.len);
+    for i in lo..hi {
+        let p = probe[i];
+        let hash = p.key * 7;
+        let part = hash & part_mask;
+        let sub_ht = ht[part * slots_per_part..(part + 1) * slots_per_part];
+        var h = (hash >> 2) & slot_mask;
+        while sub_ht[h].occupied {
+            if sub_ht[h].key == p.key {
+                out.push(JoinedRow { key: p.key, user_id: sub_ht[h].user_id, cents: p.cents });
+            }
+            h = (h + 1) & slot_mask;
+        }
+    }
+}
+
+// A parallel filter with growable output: each task starts with an empty
+// `out` on its worker's stacks and pushes the multiples of 3 in its morsel
+// `[idx * step .. (idx + 1) * step]`, as many as the data holds.
+fn filter_chunk(out: i64[>..]&, idx: i64, src: const i64[:], step: i64) {
+    let lo = idx * step;
+    let hi = min(lo + step, src.len);
+    for i in lo..hi {
+        if src[i] % 3 == 0 {
+            out.push(src[i]);
+        }
+    }
+}
+
 fn run_all(pool: thread_pool&) {
     var weights: i64[>..] = [2, 3, 5];
     var cfg = Config { scale: 10, bias: 1 };
@@ -215,6 +262,21 @@ fn run_all(pool: thread_pool&) {
     // Join Phase 2 (Parallel Probe Write): write matches into variable-sized disjoint chunks
     pool.apply(chunks(joined, offsets), write_join_matches, ht, probe, step, num_parts, slots_per_part);
     print("joined rows: ", joined);
+
+    // Join Phases 1 and 2 in one pass: one task per probe morsel, each
+    // growing its own matches, appended in morsel order.
+    var joined_once: JoinedRow[>..] = [];
+    pool.apply(chunks(joined_once, num_morsels), probe_join_matches, ht, probe, step, num_parts,
+               slots_per_part);
+    print("joined in one pass: ", joined_once);
+
+    // Parallel filter: 4 tasks keep 1, 3, 1 and 2 of their 5 rows.
+    var src: i64[>..] = [];
+    for i in 20 { src.push(i * 7 % 20); }
+    let filter_step = 5;
+    var filtered: i64[>..] = [];
+    pool.apply(chunks(filtered, 4), filter_chunk, src, filter_step);
+    print("filtered: ", filtered);
 }
 
 fn main() {

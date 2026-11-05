@@ -3762,6 +3762,20 @@ inline FnSpec *TypeCheck::EnsureThreadSpec(SFunction *sf, Line l) {
     return spec;
 }
 
+// Whether pool.apply's worker sf takes a growable output of its own first,
+// a T[>..]& (Call::pool_growable), rather than a chunk T[:] of the array
+// chunks() names: as its first parameter is written, whatever else about
+// it EnsurePoolSpec then rejects.
+inline bool TypeCheck::PoolGrowableParam(SFunction *sf) {
+    if (sf->params.empty() || !sf->params[0].type) return false;
+    auto t = sf->params[0].type;
+    return t->kind == TY_REF && t->ref->sub->kind == TY_ARRAY &&
+           t->ref->sub->arr->akind == A_GROW;
+}
+
+// The specialization pool.apply runs as each task, whose first parameter is
+// chunktype: the chunk T[:] it writes, or the T[>..]& it grows, which a
+// task starts empty on stacks of its own (PoolGrowableParam).
 inline FnSpec *TypeCheck::EnsurePoolSpec(SFunction *sf, TypeExpr *chunktype, bool &has_idx,
                                          size_t nextra, Line l) {
     if (sf->brokensig) throw Abandoned {};
@@ -3787,8 +3801,8 @@ inline FnSpec *TypeCheck::EnsurePoolSpec(SFunction *sf, TypeExpr *chunktype, boo
         has_idx = true;
     } else {
         Error(l, cat("pool.apply(", sf->name, ", ...): ", sf->name, " takes ",
-                     (int64_t)sf->params.size(),
-                     " parameter(s), expected (chunk: ", TypeStr(chunktype),
+                     (int64_t)sf->params.size(), " parameter(s), expected (",
+                     IsPlainRef(chunktype) ? "out: " : "chunk: ", TypeStr(chunktype),
                      ", [idx: i64, ]...) matching ", (int64_t)nextra, " extra argument(s)"));
     }
     for (auto sp : sf->specs) {
