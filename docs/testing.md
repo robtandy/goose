@@ -242,6 +242,12 @@ and over a grow-shrink one. `optimizer/bce_chunk_arguments.goose` pins what
 bounds-check elimination makes of a chunk handed to a callee that resizes
 the elements it views: the lengths measured in the receiver's elements are
 gone after the call, and those measured in another array's are kept.
+`codegen/fixed_builtin_results.goose` returns chunks of both builtins, and
+the fixed-size results of `bytes_of` and `default`, as variable arrays
+(`i64[]`), which an append, and a grow-only array's initialization and
+assignment, take as an element run, and a variable array's slot as a value
+with its length in front: a builtin with a fixed-size result builds nothing
+at the destination, which is built from its value.
 
 ## Configurations and backends
 
