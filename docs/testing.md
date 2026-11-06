@@ -112,7 +112,7 @@ Test fixtures are grouped by category; `run_tests.py` stays at the root of `test
 | `optimizer/` | Inlining, tail recursion and bounds-check elimination. |
 | `runtime/` | Runtime diagnostics, reusable slot and slice pool operations and array size checks, the checks of `chunk` and `chunk_at` (below), and `runtime_trim_memory.c`, the native test of releasing unused data-stack memory. |
 | `storage/` | Relative references, pools, serialization, and the slices `chunk` and `chunk_at` cut (below). |
-| `threads/` | Workers, queues, shared globals, contained workers' aborts, thread pools (`parallel_scope.goose` and the `pool_*` and `chunk_*` fixtures, below) and `runtime_threads_lifecycle.c`, the native runtime lifecycle test; `host_exit.c` is the C host of `host_exit.goose`, a library build the host starts, ends with `goose_exit` and starts again (the `host_exit` task). Imported helpers live in `threads/spawn/`. |
+| `threads/` | Workers, queues, shared globals, contained workers' aborts, thread pools (`parallel_scope.goose` and the `pool_*` and `chunk_*` fixtures, below), `par for` (the `par_for*` fixtures, below) and `runtime_threads_lifecycle.c`, the native runtime lifecycle test; `host_exit.c` is the C host of `host_exit.goose`, a library build the host starts, ends with `goose_exit` and starts again (the `host_exit` task). Imported helpers live in `threads/spawn/`. |
 | `stdlib/` | Standard-library modules. |
 | `goose_in_goose/` | A Goose-written compiler used as one multi-file bootstrap regression: build and run three generations, check a C fixed point and repeated self-checks of the stage-2 compiler, and compare JIT/native self-compilation. |
 | `audio/` | The `audio` module: the offline PCM mixer advanced by exact frame counts; the rejection of bad rates, PCM, parameters and output; voice and sound capacity and stale handles; and the threading rejection. |
@@ -212,6 +212,44 @@ parameter, a reference parameter that is not `const`, a `thread_fn` as the
 worker, a global pool in a worker), `pool_copy*` and `pool_return_local`
 (every way of copying a pool), `pool_close_*`, `pool_contained_msg_*` (the
 message buffer) and `pool_growable_*` (growable output).
+
+`par for` (spec §11.2, `docs/design/child_threads.md` §4-§5) is tested by
+fixtures with the `goose-threads` marker (below), whose native builds run
+with the default pool, with `GOOSE_THREADS=1` and with `GOOSE_THREADS=4`,
+at `-O0` and `-O2`, and through TinyCC, which runs every `par for` in
+place, all printing the same:
+
+* `threads/par_for.goose`: the query engine's phases of the design note's
+  section 5 (a filter into chunks of an output with per-chunk counts, a
+  probe of a shared table, a partitioned build through `chunk_at`, a
+  distinct count with a growable table local to each iteration, and totals
+  with an integer reduction beside float partials), the blur a row per
+  iteration, `par for &x, i in arr`, `par for x in arr` with a `^=`
+  reduction, reductions by every operation over a range, a range's index
+  binder, a `par for` nested in another's body and one in a function a
+  `par for`'s body calls (both run in place), a `defer` in the body, and
+  loops of no iteration and of one.
+* `syntax/par_for_syntax.goose`: `par` as a function's, a variable's and a
+  field's name beside every form of `par for`, with typed binders.
+* `threads/par_for_abort.goose`: an abort in one iteration ends the
+  program with its message, whichever thread runs it.
+* `threads/par_for_contained.goose`: in a contained worker, a `par for`
+  whose iterations abort ends the worker, whose `thread_wait` takes the
+  message, and one whose iterations return runs on.
+* `runtime/par_for_chunk_at_bounds.goose`: the offsets of a `chunk_at` part
+  are checked before any iteration runs, which then writes nothing.
+
+Their rejections are the `errors_tc/par_for_*.goose` fixtures, one or more
+per rule: R1 (`write_captured`, `push_captured`, `callee_write`,
+`global_callee`, `nested_write` and `launder`: a variable from outside the
+body written as a whole, by a member, through a reference a callee is
+given, as a global in a callee, by a nested function, and through a
+reference loaded out of it), the reductions (`float_reduction`,
+`reduction_mixed`, `reduction_read`), R2 (`chunk_alias`, `element_alias`,
+`bounds_alias` and `chunk_two_ways`: a partitioned array read another way,
+or cut two ways), R3 (`print`, `qput` in a callee, `exit`, `thread_pool`),
+R4 (`break`, `return`, `return_from`), and `sequential_elems`, a `par for`
+over elements of variable size.
 
 The slicing members `a.chunk(k, n)` and `a.chunk_at(bounds, k)` (spec
 §3.10, `docs/design/child_threads.md` §4.4) are tested by
@@ -463,6 +501,7 @@ The runner checks more than exit status and runtime output:
 | `lexer_tokens.goose` | Exact token stream, including keyword classification, decoded literals and longest-match punctuation. |
 | Every positive Goose fixture | Successful parse, successful initial dump, identical dump/reparse/dump, and typechecking with exactly the warnings it declares, unless its first line contains `parse-only`. Parsing also resolves type names; dumping alone does not. |
 | First-line `dump-runtime` | Compile and execute the dumped source against the original output. `control_expression_dump.goose` uses this to check grouping semantics, which a stable dump alone cannot establish. |
+| First-line `goose-threads` | Run each native build of the program again with `GOOSE_THREADS=1`, where every `par for` runs on the thread that reaches it, and with `GOOSE_THREADS=4`, which forks onto four workers; both runs must end and print as the default one does. The `par for` fixtures (below) use this. |
 | Every fixture with `// bce:elide` or `// bce:keep` | Run `-O1 --check --bce-test`, including expected-abort regressions. Native/JIT O0 and O2 runs independently check behavior. |
 | `gfx_err_shader_syntax.goose`, `gfx_err_shader_part.goose` | Besides their markers, the error is reported at the program's line holding the offending GLSL. |
 | `gfx/probe.frag`, `gfx/probe_badset.frag` | `goose --compile-shader`, the shader compiler that every compiler has, with or without the gfx layer. `probe.frag` compiles, including its `#include` of `probe_common.glsl`, and reports its one sampler and its 32-byte uniform block. `probe_badset.frag`, which has a sampler outside the set that SDL_GPU gives a fragment shader's textures, is rejected with the rule it broke. |

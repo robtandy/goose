@@ -1090,8 +1090,8 @@ are legal when its provenance is writable (§9.5).
   (§5.1, §5.2). Both check at run time, in every build: a count `n` of zero or
   less, a `k` outside `0..n` (for `chunk_at`, outside `0..bounds.len - 1`),
   and bounds with `lo < 0`, `hi < lo` or `hi > a.len` abort (§9.3).
-  (`design/child_threads.md` §4.4 proposes them as the disjoint runs of a
-  parallel loop.)
+  They are the disjoint runs an iteration of a `par for` owns (§11.2,
+  `design/child_threads.md` §4.4).
 * Slices of fixed-element arrays index and iterate, bounds-checked against
   the slice's own length. Slices never grow; shrinking a slice (re-slicing)
   is always safe.
@@ -2436,6 +2436,15 @@ plain loops.
 Range/count bounds are evaluated once, before the first iteration; an
 empty or reversed range performs no iterations. `continue` advances to the
 next index or sequential element just as reaching the end of the body does.
+
+**`par for`.** Each form above may be written `par for` (`par for i in n`,
+`par for i in a..b`, `par for x in arr`, `par for &x in arr`,
+`par for &x, i in arr`, with the binder types `for` takes), which says that
+the iterations are independent, so that they may run on several threads at
+once. It computes what the `for` computes; what its body may touch, and how
+it runs, are in §11.2. `par` is a keyword only directly before `for`, and a
+name everywhere else. A `par for` over an array or slice walks fixed-size
+elements, which it cuts into runs.
 
 A loop iterates its sequence in place, not a copy of it. Traversal of a
 resizable array tests the current length before each iteration, so
@@ -4746,6 +4755,100 @@ outlives it, and the rules below keep the tasks from racing.
   its storage. Guard-page hits, native stack exhaustion and `exit(code)` in
   a task still end the program.
 
+**`par for`** (§6.5; docs/design/child_threads.md) runs the iterations of
+one loop on the threads of the program instance that reaches it, with no
+copies: the body reads what the enclosing functions and the globals hold in
+place and writes only places that one iteration owns, so that no two
+iterations race and no result depends on how they are scheduled. The
+parent's thread is inside the loop until every iteration has ended, so
+everything the body sees outlives the iterations, and nothing of it is
+grown, shrunk or assigned meanwhile.
+
+* **Meaning.** A `par for` computes what the same `for` computes: an
+  implementation may run its iterations in any interleaving, on any number
+  of threads of the program instance, or one after another on the thread
+  reaching the loop, and the program's output, aborts and exit status do
+  not depend on which, but for which of several aborts is reported (below).
+  Its range, count or sequence is evaluated once, before any iteration
+  runs.
+* **R1: what the body sees from outside is read-only.** Every variable the
+  body names that is declared outside it, of the enclosing function or of
+  a function that one is nested in, and every global, is read-only in the
+  body (§9.5), as a by-value `for` binding is: it is not assigned, grown,
+  shrunk or written by a member operation, and nothing is written through a
+  reference or slice read out of it, or loaded out of storage reached
+  through one, whatever the type of the slot it is loaded from. A function
+  the body calls is checked for the body, as a specialization of its own
+  (§10.2), under the same rule: it writes no global, and no variable of a
+  function around the loop. What the body declares itself it writes
+  freely. The exceptions are the places R2 gives an iteration and the
+  reductions below.
+* **R2: what one iteration owns is writable.** Three places are written by
+  one iteration alone: the element `par for &x in a` or `par for &x, i in
+  a` binds; `a[k]`, `a` a variable from outside the body and `k` a binder
+  that tells the iterations apart (a count's or range's binder, or an index
+  binder); and `a.chunk(k, n)` where the loop is `par for k in n` or
+  `par for k in 0..n` with `n` written alike, or `a.chunk_at(b, k)` where
+  the loop is `par for k in b.len - 1`, `b` a variable, and any slice bound
+  to one of these. Each is writable where `a` is writable outside the body,
+  its elements are fixed-size and flat (§1.1), and it lies in one storage
+  the compiler knows exactly (§9.2) that is not a global's; otherwise it is
+  as read-only as the rest. One storage is cut one way: by element, or by
+  `chunk` of one `n`, or by `chunk_at` of one `b`. The body then reaches that
+  storage no other way but for its length: not through the variable, nor
+  through another reference or slice that may point into it, nor as
+  `chunk_at`'s bounds.
+* **Reductions.** A local integer of a function around the loop (not a
+  `varint`, an index type or a reference) may be accumulated in the body by
+  one associative operation, `+=` with `-=`, `++` and `--`, or `|=`, `&=`
+  or `^=`, directly or by a nested function the body calls, where the body
+  reads and writes it no other way. Each chunk of iterations (below)
+  accumulates its own, from the operation's identity, and the loop
+  combines them into the variable in chunk order once every iteration has
+  ended. Integers wrap exactly in any order (§6.2), so the result is the
+  sequential loop's. A float is no reduction: per-iteration parts
+  (`partial[k] = acc`) are added up after the loop in the order the program
+  writes.
+* **R3: no effect but those writes.** Neither the body nor a function it
+  calls may `print`, `exit`, use a queue (`qput`, `qget`, `qpoll`,
+  `qlimit`), a worker (`thread_spawn`, `thread_spawn_contained`,
+  `thread_wait`) or a pool (`thread_pool`, `apply`, `apply_contained`,
+  `close`), or call the input, output, environment, clock and memory
+  functions of the standard library's `os` and `ffi` modules, since their
+  order would show how the iterations were scheduled. Any other `extern fn`
+  is C the compiler cannot see into, whose effects the program answers for.
+* **R4: nothing leaves the body but the end of an iteration.** No
+  `return`, and no `return … from` (§7.9) out of the body, from it, from a
+  function value or from a function it calls, and no `break` of the loop.
+  `continue` of the `par for` ends its iteration, and a `defer` (§6.6) in
+  the body runs as each iteration ends.
+* **R5: the body's own locals are each iteration's.** A local declared in
+  the body may be fixed-size or growable; one of either lives as long as
+  its iteration, on the native stack or the data stacks of the thread
+  running it.
+* **Aborts.** An abort in an iteration (§9.3) ends the program, as one
+  outside the loop would, on whichever thread runs it; where several
+  iterations would abort, which one's message is reported is unspecified.
+  In a contained worker (above), it ends that worker once every iteration
+  that is running has ended, and its `thread_wait(id, msg)` takes the
+  message. A `par for` whose body takes `a.chunk_at(b, k)` as an
+  iteration's part checks the offsets in `b` before any iteration runs,
+  none below zero, falling or past `a.len`, and aborts as `chunk_at` does
+  where one is.
+* **Running.** The program has one pool of threads for its `par for`s, made
+  at the first loop that can use it, of `GOOSE_THREADS` workers where that
+  environment variable is a positive count and of `hardware_threads()`
+  otherwise, read once; it lasts as long as the process, and `goose_exit`
+  (§7.11) ends it. A loop cuts its iterations into contiguous chunks, one
+  per worker, the thread reaching it among them, and runs each chunk as a
+  plain loop. It runs on the thread reaching it instead, iteration by
+  iteration, in-process under TinyCC (`goose run`), at `GOOSE_THREADS=1`,
+  inside an iteration of another `par for` or a pool's task (a nested
+  `par for`, written in the body or reached through a call), while another
+  thread's `par for` has the pool, and where it has at most one iteration.
+  A `thread_fn` worker's `par for` runs on the same pool, in the worker's
+  program instance.
+
 ### 11.3 Dynamic stacks (future)
 
 This future feature is a resizable-of-resizables local in which each
@@ -5301,7 +5404,8 @@ constif     := "const" "if" expr blockexpr ("else" (constif | blockexpr))?  // �
 expr        := control | binary
 control     := ifexpr | matchexpr | blockexpr | loops | jumps
 ifexpr      := "if" expr blockexpr ("else" (ifexpr | blockexpr))?
-loops       := ("while" expr | "for" forbind "in" iter | "loop") blockexpr
+loops       := ("while" expr | "par"? "for" forbind "in" iter | "loop") blockexpr
+                                                 // `par` only directly before `for` (§6.5)
 forbind     := "&"? ident (":" type)? ("," ident (":" type)?)?
 iter        := expr | expr ".." expr
 jumps       := "return" exprlist? ("from" qname)? | "break" expr? | "continue"
