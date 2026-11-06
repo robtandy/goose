@@ -4152,9 +4152,13 @@ What the body may touch:
   `par for k in n`, or `a.chunk_at(bounds, k)` in
   `par for k in bounds.len - 1`, with any slice bound to one. These are
   writable where `a` is, its elements are fixed-size and flat, and it is
-  one array the compiler knows. An array is cut one way, and the body
-  reaches it no other way but for its length: `c[0] = a[0]` beside
-  `let c = a.chunk(k, 4)` is an error, since `a[0]` is another iteration's.
+  one array the compiler knows. An array is cut one way, through one
+  variable, and the body reaches it no other way but for its `.len`:
+  `c[0] = a[0]` beside `let c = a.chunk(k, 4)` is an error, since `a[0]` is
+  another iteration's, and so is `a[k]` beside `b[k]` for two slices of one
+  array, which may start at different elements. Where `a` is a parameter,
+  which may be any array its callers pass, a global or another array that
+  may be the same one is not read in the body either.
   A `par for` in another's body is held to the outer one's rules too: it
   writes only what the outer iteration owns.
 * **Reductions.** An integer of the caller's accumulated by one operation,

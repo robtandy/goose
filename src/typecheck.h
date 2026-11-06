@@ -2240,6 +2240,7 @@ struct TypeCheck {
         // An element's index: null for the iteration's ordinal, else the
         // binder of a range that does not start at 0 (ParCtx::shifted).
         VarDef *by = nullptr;
+        TypeExpr *elem = nullptr;   // The type of the elements it is a run of.
     };
     // A `par for` whose body is being checked: what it allows, and what the
     // body did, which the loop is judged by once the body is checked
@@ -2267,10 +2268,35 @@ struct TypeCheck {
         // and the first update of it, and the names those updates write.
         vector<tuple<VarDef *, TType, Node *>> reductions;
         set<Node *> redtargets;
+        // The references and slices read out of storage in the body, where
+        // they may point, of what type, and where they were read: none may
+        // lead to storage a part is of (FinishParFor).
+        struct ParRead {
+            Roots roots;
+            TypeExpr *pointee = nullptr;
+            Node *at = nullptr;
+        };
+        vector<ParRead> readbacks;
     };
     // The par fors whose bodies are being checked, innermost last. A null
     // entry is a body that is checked for no par for, between them.
     vector<ParCtx *> parctx;
+    // What the check of a specialization made for a par for's body did,
+    // its callees' included, which a call reusing it in a par for's body
+    // does again (ParReplay): a name of a variable from outside the body,
+    // an update of a reduction, a part an iteration owns, a part's own name
+    // or a length's, which the par for judges as it judges its own (ParNote).
+    enum ParNoteKind { PN_USE, PN_REDUCE, PN_PART, PN_PARTUSE, PN_LENGTH };
+    struct ParNote {
+        ParNoteKind kind = PN_USE;
+        Node *at = nullptr;          // The name, or the update.
+        VarDef *var = nullptr;
+        TType op = T_EOF;            // PN_REDUCE: the reduction's operation class.
+        Node *name = nullptr;        // PN_REDUCE: the name the update writes.
+        ParPart part;                // PN_PART.
+        ForLoop *loop = nullptr;     // PN_PART, PN_PARTUSE: the loop whose iteration owns it.
+    };
+    unordered_map<FnSpec *, vector<ParNote>> parnotes;
     // The variable a part is being taken of while its path is checked
     // (ParIndexPart, ParChunkPart): it is as writable there as outside the
     // body.
@@ -2293,7 +2319,18 @@ struct TypeCheck {
     void StartParFor(ForLoop *x, ParCtx &ctx);
     void ParPass(ForLoop *x, ParCtx &ctx);
     void FinishParFor(ForLoop *x, ParCtx &ctx);
-    void AddParPart(VarDef *vd, VarDef *root, ParForm form, Node *key, Node *at, Node *name);
+    void AddParPart(VarDef *vd, VarDef *root, ParForm form, Node *key, Node *at, Node *name,
+                    TypeExpr *elem, VarDef *by = nullptr);
+    void ParRecord(const ParNote &n);
+    void ParApply(const ParNote &n);
+    void ParReplay(FnSpec *spec);
+    void ParReadBack(const Roots &r, TypeExpr *t);
+    FnSpec *ClassSpecOf(VarDef *r, bool &exact);
+    void ParReduce(Node *at, VarDef *vd, TType cls, Node *name);
+    void ParLengthUse(Node *at, VarDef *vd);
+    bool ParMayAlias(const RootAlt &a, VarDef *root, ParCtx &ctx);
+    bool ParHoldsRun(TypeExpr *t, TypeExpr *e);
+    bool ParUseReaches(VarDef *vd, TypeExpr *e);
     bool ParIndexPart(Index *ix, VarDef *&owned, VarDef *&by);
     bool ParOrdinal(VarDef *vd) {
         return vd && (vd == Par().ordinal || vd == Par().ordinal2);

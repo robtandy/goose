@@ -4219,12 +4219,32 @@ runs and `FinishParFor` judges once they have settled.
   inner loop would write.
 * **Uses.** Every name of a variable outside the body is recorded with its
   node (`NoteParUse`), in the body, its function values and the functions
-  checked for it. `FinishParFor` requires the parts of one root to be cut
-  one way (`ParPart::form`, `key`, `by`), and every use but a part's own
-  name and a `.len` or `.cap` (`partuses`) to reach none of the parts' roots
-  (`ParRootsOf`: the variable's storage and what it holds, or where it
-  points); and a reduction's variable to be used only by its updates
-  (`redtargets`). It adds the reductions and the `chunk_at` pairs to what
+  checked for it, and so is every reference or slice read out of storage in
+  the body and its function values (`ParReadBack`, from `ReadBackLVal` and a
+  `for`'s element binding). `FinishParFor` requires the parts of one root
+  to be taken through one variable and cut one way (`ParPart::var`, `form`,
+  `key`, `by`), and parts whose roots may be one storage
+  (`ParMayAlias`) not to be of one element type; every use but a part's own
+  name and a builtin `.len` or `.cap` (`partuses`, `ParLengthUse`) to reach
+  no part's storage (`ParRootsOf`: the variable's storage and what it holds,
+  or where it points), and no read-back either; and a reduction's variable
+  to be used only by its updates (`redtargets`). Whether a root may be a
+  part's storage is `ParMayAlias`'s: the root itself; anything where the
+  alternative is inexact and outside the part's scope (`WithinDepth`);
+  and, where either is a parameter's class, which stands for storage the
+  activation's callers handed it, any global, variable of a function around
+  it or other class, but for a class of the same specialization where both
+  are exact in its key (`ClassSpecOf`, `RootArg::exact`). A use or read-back
+  counts only where what it reaches may hold a run of the part's elements
+  (`ParUseReaches`, `ParHoldsRun`).
+* **Replay.** What a check does that a par for judges -- a use, a
+  reduction's update, a part, a part's own name, a length -- goes to the
+  par fors on the stack through `ParApply`, which also records it with
+  every specialization being checked for them (`ParRecord`, `parnotes`).
+  A call that reuses a specialization in a par for's body replays its
+  record there (`ParReplay`, from `GetOrCreateSpec`), so a generic
+  function checked in one par for and called again from another, a nested
+  function's reduction it is handed included, counts for both. It adds the reductions and the `chunk_at` pairs to what
   the loop holds for codegen, which an earlier check of the same loop (a
   recursive cycle's round) may have found through a function this one
   reused.

@@ -1755,6 +1755,9 @@ inline FnSpec *TypeCheck::GetOrCreateSpec(MatchInfo &mi, vector<Val> &argvals, N
         } else if (!spec->inprogress) {
             ReplayOuterExits(spec);
             ReplayEnvExits(spec);
+            // What the check of it did that a par for's body judges, for this
+            // call's par fors, which that check may not have been made for.
+            if (InPar()) ParReplay(spec);
         }
         NoteCalleeEnvReads(spec);
         return spec;
@@ -2933,6 +2936,8 @@ inline void TypeCheck::CheckSpecBodyOnce(FnSpec *spec, vector<Val> *argvals, Lin
     // whichever body is being checked as it is reached (FnSpec::inpar).
     std::optional<ParScope> nopar;
     if (!spec->inpar && InPar()) nopar.emplace(*this, nullptr);
+    // What it does for a par for's body is recorded afresh (ParRecord).
+    if (spec->inpar) parnotes.erase(spec);
     // A body is checked inside the call that first reaches it, so the native
     // stack holds one of these per call on the compile-time call path.
     if (StackLow()) {

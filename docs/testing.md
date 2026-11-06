@@ -231,6 +231,10 @@ place, all printing the same:
   `defer` in the body, and loops of no iteration and of one.
 * `syntax/par_for_syntax.goose`: `par` as a function's, a variable's and a
   field's name beside every form of `par for`, with typed binders.
+* `threads/par_for_reused.goose`: a generic function handed a nested
+  function that reduces a variable, called from three `par for`s in turn,
+  each of which must add its own count exactly, and a helper reading a
+  global reused beside the parts of a local array.
 * `threads/par_for_abort.goose`: an abort in one iteration ends the
   program with its message, whichever thread runs it.
 * `threads/par_for_contained.goose`: in a contained worker, a `par for`
@@ -241,13 +245,22 @@ place, all printing the same:
 
 Their rejections are the `errors_tc/par_for_*.goose` fixtures, one or more
 per rule: R1 (`write_captured`, `push_captured`, `callee_write`,
-`global_callee`, `nested_write` and `launder`: a variable from outside the
-body written as a whole, by a member, through a reference a callee is
-given, as a global in a callee, by a nested function, and through a
-reference loaded out of it), the reductions (`float_reduction`,
-`reduction_mixed`, `reduction_read`), R2 (`chunk_alias`, `chunk_whole_read`,
-`element_alias`, `bounds_alias` and `chunk_two_ways`: a partitioned array
-read another way, an element of it or the whole of it, or cut two ways; `nested_alias` and `nested_outer_write`: an outer loop's
+`global_callee`, `nested_write`, `launder`, `inner_for_refs` and
+`inner_for_slices`: a variable from outside the body written as a whole,
+by a member, through a reference a callee is given, as a global in a
+callee, by a nested function, through a reference loaded out of it, and
+through a reference or slice a plain `for` in the body binds out of an
+array from outside it), the reductions (`float_reduction`,
+`reduction_mixed`, `reduction_read`, and `reused_reduction_read`, through
+a generic function reused from another loop), R2 (`chunk_alias`,
+`chunk_whole_read`, `element_alias`, `bounds_alias`, `chunk_two_ways`,
+`field_named_len`, `shifted_index`, `shifted_chunk`, `param_global_alias`
+and `reused_alias`: a partitioned array read another way, an element of
+it or the whole of it, or cut two ways; an element's field named `len`,
+which is no length; two views of one array from different starts, by
+index and by chunk; a parameter's elements owned beside a read of a global
+the parameter may be, directly and through a function reused from another
+loop; `nested_alias` and `nested_outer_write`: an outer loop's
 partitioned array read in an inner loop's body, and an inner loop's
 element of what the outer loop sees from outside, which every outer
 iteration writes), R3 (`print`, `qput` in a callee, `exit`, `thread_pool`),

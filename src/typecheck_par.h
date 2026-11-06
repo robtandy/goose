@@ -54,7 +54,114 @@ inline bool TypeCheck::ParCapturedAround(const VarDef *vd) {
 // vd, a variable from outside it: FinishParFor judges each, for every par
 // for whose body the name is in that sees vd from outside.
 inline void TypeCheck::NoteParUse(Node *at, VarDef *vd) {
-    EachParSeeing(vd, [&](ParCtx &ctx) { ctx.uses.push_back({ at, vd }); });
+    auto seen = false;
+    EachParSeeing(vd, [&](ParCtx &) { seen = true; });
+    if (!seen) return;
+    ParNote n;
+    n.kind = PN_USE;
+    n.at = at;
+    n.var = vd;
+    ParApply(n);
+}
+
+// What a par for's body does that its loop judges (ParNote), to the par
+// fors on the stack, and recorded with every specialization being checked
+// for them, whose reuse does it again (ParReplay).
+inline void TypeCheck::ParApply(const ParNote &n) {
+    switch (n.kind) {
+        case PN_USE:
+            EachParSeeing(n.var, [&](ParCtx &ctx) { ctx.uses.push_back({ n.at, n.var }); });
+            break;
+        case PN_REDUCE:
+            ParReduce(n.at, n.var, n.op, n.name);
+            break;
+        case PN_PART:
+            if (InPar() && Par().loop == n.loop) Par().parts.push_back(n.part);
+            break;
+        case PN_PARTUSE:
+            if (InPar() && Par().loop == n.loop) Par().partuses.insert(n.at);
+            break;
+        case PN_LENGTH:
+            EachParSeeing(n.var, [&](ParCtx &ctx) { ctx.partuses.insert(n.at); });
+            break;
+    }
+    ParRecord(n);
+}
+
+// Every specialization being checked above the outermost par for on the
+// stack, and checked for it, records n: a call that later reuses it in a
+// par for's body, whose loop no check of it saw, replays n there.
+inline void TypeCheck::ParRecord(const ParNote &n) {
+    auto base = -1;
+    for (auto i = (int)parctx.size() - 1; i >= 0 && parctx[i]; i--) base = parctx[i]->frame;
+    if (base < 0) return;
+    for (auto i = (int)frames.size() - 1; i > base; i--) {
+        auto &f = frames[i];
+        if (f.isfunval || !f.spec || !f.spec->inpar) continue;
+        auto &notes = parnotes[f.spec];
+        auto known = false;
+        for (auto &m : notes)
+            known = known ||
+                    (m.kind == n.kind && m.at == n.at && m.var == n.var && m.loop == n.loop);
+        if (!known) notes.push_back(n);
+    }
+}
+
+// A call in a par for's body reusing spec, which a check made in another
+// loop's body or before: what that check found the body and its callees do
+// is done again here, so this loop judges it too. A specialization in
+// progress records what it does as its check goes on.
+inline void TypeCheck::ParReplay(FnSpec *spec) {
+    if (spec->inprogress) return;
+    auto it = parnotes.find(spec);
+    if (it == parnotes.end()) return;
+    auto notes = it->second;   // Replaying records into the checks in progress.
+    for (auto &n : notes) ParApply(n);
+}
+
+// An update of vd, a reduction by `cls` (T_PLUSEQ for + and -, T_OREQ,
+// T_ANDEQ or T_XOREQ) of every par for around it that sees it from outside:
+// the iterations of an outer one each run an inner one, whose chunks add
+// into the outer chunk's own total. One operation per reduction (§4.6).
+inline void TypeCheck::ParReduce(Node *at, VarDef *vd, TType cls, Node *name) {
+    auto opname = [](TType k) {
+        return k == T_PLUSEQ ? "+= and -=" : k == T_OREQ ? "|=" : k == T_ANDEQ ? "&=" : "^=";
+    };
+    EachParSeeing(vd, [&](ParCtx &ctx) {
+        ctx.redtargets.insert(name);
+        for (auto &[v, o, first] : ctx.reductions) {
+            if (v != vd) continue;
+            if (o != cls)
+                Error(at, cat(vd->name, " is a reduction of this par for by ", opname(o),
+                              " (at ", Where(first->line), "), and cannot be updated by ",
+                              opname(cls), " too: a reduction has one operation "
+                              "(docs/design/child_threads.md §4.6)"));
+            return;
+        }
+        ctx.reductions.push_back({ vd, cls, at });
+    });
+}
+
+// `a.len` or `a.cap` of the builtin property, at `at`, the name of a: the
+// length, which no iteration of a par for can change, read beside the parts
+// of a the iterations write (FinishParFor).
+inline void TypeCheck::ParLengthUse(Node *at, VarDef *vd) {
+    ParNote n;
+    n.kind = PN_LENGTH;
+    n.at = at;
+    n.var = vd;
+    ParApply(n);
+}
+
+// A reference or slice of pointee type t read out of storage in a par for's
+// body, which may point at r: what it reads or writes there may be a part
+// of another iteration (FinishParFor), for every par for whose body this is.
+inline void TypeCheck::ParReadBack(const Roots &r, TypeExpr *t) {
+    auto at = cur.nodepath.empty() ? nullptr : cur.nodepath.back().node;
+    for (auto i = (int)parctx.size() - 1; i >= 0 && parctx[i]; i--) {
+        auto &ctx = *parctx[i];
+        ctx.readbacks.push_back({ r, t, at ? at : ctx.loop });
+    }
 }
 
 // The loop's header, checked: what chunk(k, n) and chunk_at(bounds, k) of
@@ -139,10 +246,21 @@ inline Roots TypeCheck::ParRootsOf(VarDef *vd) {
 // A part an iteration owns (§4.4): of vd, lying in `root`, cut as `form`
 // takes it with `key`, at `at`, where `name` names vd.
 inline void TypeCheck::AddParPart(VarDef *vd, VarDef *root, ParForm form, Node *key, Node *at,
-                                  Node *name) {
-    auto &ctx = Par();
-    ctx.parts.push_back({ vd, root, form, key, at });
-    if (name) ctx.partuses.insert(name);
+                                  Node *name, TypeExpr *elem, VarDef *by) {
+    ParNote n;
+    n.kind = PN_PART;
+    n.part = { vd, root, form, key, at, by, elem };
+    n.loop = Par().loop;
+    n.at = at;
+    n.var = vd;
+    ParApply(n);
+    if (!name) return;
+    ParNote u;
+    u.kind = PN_PARTUSE;
+    u.at = name;
+    u.var = vd;
+    u.loop = Par().loop;
+    ParApply(u);
 }
 
 // a[k], a a variable outside the body and k a binder of the loop that tells
@@ -214,28 +332,13 @@ inline void TypeCheck::ParAssign(Node *at, LVal &lv, TType op) {
                       "you choose"));
     if (!t || t->kind != TY_INT || t->intstorage == IS_VARINT || t->ix)
         ParWriteError(at, vd, "cannot update");
-    auto cls = op == T_MINUSEQ || op == T_INC || op == T_DEC ? T_PLUSEQ : op;
-    auto name = Is<Assign>(at) ? Is<Assign>(at)->lval : Is<IncDec>(at) ? Is<IncDec>(at)->lval
-                                                                       : at;
-    auto opname = [](TType k) {
-        return k == T_PLUSEQ ? "+= and -=" : k == T_OREQ ? "|=" : k == T_ANDEQ ? "&=" : "^=";
-    };
-    // A reduction of every par for around it that sees it from outside: the
-    // iterations of an outer one each run the inner loop, whose chunks add
-    // into the outer chunk's own total.
-    EachParSeeing(vd, [&](ParCtx &ctx) {
-        ctx.redtargets.insert(name);
-        for (auto &[v, o, first] : ctx.reductions) {
-            if (v != vd) continue;
-            if (o != cls)
-                Error(at, cat(vd->name, " is a reduction of this par for by ", opname(o),
-                              " (at ", Where(first->line), "), and cannot be updated by ",
-                              opname(cls), " too: a reduction has one operation "
-                              "(docs/design/child_threads.md §4.6)"));
-            return;
-        }
-        ctx.reductions.push_back({ vd, cls, at });
-    });
+    ParNote n;
+    n.kind = PN_REDUCE;
+    n.at = at;
+    n.var = vd;
+    n.op = op == T_MINUSEQ || op == T_INC || op == T_DEC ? T_PLUSEQ : op;
+    n.name = Is<Assign>(at) ? Is<Assign>(at)->lval : Is<IncDec>(at) ? Is<IncDec>(at)->lval : at;
+    ParApply(n);
 }
 
 // A builtin (`builtin`), or a function (`callee`), that a par for's body or
@@ -297,6 +400,80 @@ inline void TypeCheck::ParCallNeeds(Node *at, FnSpec *callee) {
     }
 }
 
+// The specialization whose parameter's class r is, on the compile-time path,
+// and whether its calls all gave that parameter one root exactly
+// (RootArg::exact): where they did, another such class of it is other
+// storage. Null where no frame's specialization has r as a class.
+inline FnSpec *TypeCheck::ClassSpecOf(VarDef *r, bool &exact) {
+    exact = false;
+    for (auto i = (int)frames.size() - 1; i >= 0; i--) {
+        auto sp = frames[i].spec;
+        if (!sp || frames[i].isfunval) continue;
+        auto view = false;
+        auto p = ClassParam(sp, r, view);
+        if (p < 0) continue;
+        exact = view ? (p < (int)sp->views.size() && sp->views[p].exact)
+                     : (p < (int)sp->roots.size() && sp->roots[p].exact);
+        return sp;
+    }
+    return nullptr;
+}
+
+// Whether a value with alternative `a` may lead to storage `root`, a part's,
+// in the par for of ctx. A variable's own storage is no other's, and what
+// the loop's own activation made is no caller's; but a parameter's class
+// stands for what callers handed the activation, which may be any of their
+// storage: a global's, a variable's of a function around this one, another
+// class's, but for another class of the same specialization whose calls all
+// gave both one root exactly. A bound, an inexact alternative, may be
+// anything outside its scope.
+inline bool TypeCheck::ParMayAlias(const RootAlt &a, VarDef *root, ParCtx &ctx) {
+    auto r = a.root;
+    if (r == root) return true;
+    // Static data, and a const global's storage, are read-only, and no
+    // writable part lies in either.
+    if (!r || !root || (r->isglobal && r->type && r->type->cq)) return false;
+    if (!a.exact) return WithinDepth(root, r);
+    auto spec = frames[ctx.frame].spec;
+    auto own = [&](VarDef *v) {
+        return IsTemp(v) || (!IsClassRoot(v) && !v->isglobal && v->ownerspec == spec);
+    };
+    if (own(root) || own(r)) return false;
+    auto rc = IsClassRoot(root), ac = IsClassRoot(r);
+    if (!rc && !ac) return false;
+    if (rc && ac) {
+        bool re = false, ae = false;
+        auto rs = ClassSpecOf(root, re);
+        auto as = ClassSpecOf(r, ae);
+        return !(rs && rs == as && re && ae);
+    }
+    return true;
+}
+
+// Whether storage of type t holds a run of elements of type e, which a part
+// of type e is: an array of them, or of what holds one, by value. Any array
+// may be a run of bytes, which a byte view (bytes_of) cuts out of it.
+inline bool TypeCheck::ParHoldsRun(TypeExpr *t, TypeExpr *e) {
+    if (!t || !e) return true;
+    if (t->kind == TY_ARRAY)
+        return IsU8(e) || MaySameType(t->arr->sub, e) || ParHoldsRun(t->arr->sub, e);
+    return AnyField(t, [&](TypeExpr *ft) { return ParHoldsRun(ft, e); });
+}
+
+// Whether what a use of vd reaches may be a part's storage of elements of
+// type e: where a reference or slice of it points, an element of the part or
+// what holds the part's run; vd's own storage, where that holds such a run;
+// and anything, where vd holds references (ParRootsOf takes their roots).
+inline bool TypeCheck::ParUseReaches(VarDef *vd, TypeExpr *e) {
+    auto t = vd->type;
+    if (!t || !e) return true;
+    if (IsRefOrSlice(t)) {
+        auto p = PointeeOf(t);
+        return !p || MayHoldValueOf(e, p) || ParHoldsRun(p, e);
+    }
+    return HoldsPlainRef(t) || ParHoldsRun(t, e);
+}
+
 // The body is checked: its parts must each be cut one way and reached no
 // other way, and its reductions used no other way (§4.4, §4.6). What
 // codegen needs of them goes on the loop.
@@ -319,31 +496,62 @@ inline void TypeCheck::FinishParFor(ForLoop *x, ParCtx &ctx) {
         }
         return "";
     };
+    // Whether a value of pointee type t may lie in a run of elements of type
+    // e, or hold one: point into a part, or at what a part is a run of.
+    auto reaches = [&](TypeExpr *t, TypeExpr *e) {
+        return !t || !e || MayHoldValueOf(e, t) || ParHoldsRun(t, e);
+    };
     for (size_t i = 0; i < ctx.parts.size(); i++) {
         auto &b = ctx.parts[i];
         for (size_t j = 0; j < i; j++) {
             auto &a = ctx.parts[j];
-            if (a.root != b.root || a.at == b.at) continue;
-            auto same = a.form == b.form &&
-                        (a.form == PF_ELEMENT ? a.by == b.by : SameParExpr(a.key, b.key));
-            if (!same)
+            if (a.at == b.at) continue;
+            // One view of one storage, cut one way: by the same element
+            // index, or into the same runs.
+            if (a.root == b.root && a.var && a.var == b.var) {
+                auto same = a.form == b.form &&
+                            (a.form == PF_ELEMENT ? a.by == b.by : SameParExpr(a.key, b.key));
+                if (!same)
+                    Error(b.at, cat("a par for's iterations own ", formname(b), " here and ",
+                                    formname(a), " at ", Where(a.at->line), ", which are cut "
+                                    "differently and so overlap between iterations "
+                                    "(docs/design/child_threads.md §4.4)"));
+                continue;
+            }
+            // Two views that may be of one storage may start at different
+            // elements of it, whatever their cuts.
+            RootAlt ra;
+            ra.root = b.root;
+            ra.exact = true;
+            auto kin = !a.elem || !b.elem || MaySameType(a.elem, b.elem) || IsU8(a.elem) ||
+                       IsU8(b.elem);
+            if (kin && ParMayAlias(ra, a.root, ctx))
                 Error(b.at, cat("a par for's iterations own ", formname(b), " here and ",
-                                formname(a), " at ", Where(a.at->line), ", which are cut "
-                                "differently and so overlap between iterations "
-                                "(docs/design/child_threads.md §4.4)"));
+                                formname(a), " at ", Where(a.at->line), ", which may be views "
+                                "of one array from different starts, and so overlap between "
+                                "iterations (docs/design/child_threads.md §4.4)"));
         }
     }
     for (auto &[at, vd] : ctx.uses) {
         if (ctx.partuses.count(at)) continue;
         auto roots = ParRootsOf(vd);
         for (auto &p : ctx.parts) {
-            if (vd != p.var && !roots.Has(p.root)) continue;
-            Error(at, cat(vd->name, " is ", vd == p.var ? "" : "or may point into storage ",
+            auto mine = vd == p.var;
+            if (!mine && !roots.Any([&](const RootAlt &a) {
+                    return a.root == p.root ||
+                           (ParUseReaches(vd, p.elem) && ParMayAlias(a, p.root, ctx));
+                }))
+                continue;
+            Error(at, cat(vd->name, " is ", mine ? "" : "or may point into storage ",
                           "partitioned by this par for, each iteration owning ", formname(p),
                           " (", Where(p.at->line), "), so no iteration may read or write ",
-                          vd == p.var ? "it" : "that storage", " any other way: another "
+                          mine ? "it" : "that storage", " any other way: another "
                           "iteration may be writing what this one reads "
-                          "(docs/design/child_threads.md §4.4)"));
+                          "(docs/design/child_threads.md §4.4)",
+                          vd->isglobal && !mine
+                              ? cat("; a global that is only read can be declared const, which "
+                                    "no part lies in")
+                              : string()));
         }
         for (auto &[rv, op, first] : ctx.reductions) {
             if (rv != vd || ctx.redtargets.count(at)) continue;
@@ -354,6 +562,18 @@ inline void TypeCheck::FinishParFor(ForLoop *x, ParCtx &ctx) {
                           "(docs/design/child_threads.md §4.6)"));
         }
     }
+    // A reference or slice read out of storage in the body may lead to the
+    // storage of a part, whatever the variable whose storage it was read out
+    // of.
+    for (auto &rb : ctx.readbacks)
+        for (auto &p : ctx.parts)
+            if (reaches(rb.pointee, p.elem) &&
+                rb.roots.Any([&](const RootAlt &a) { return ParMayAlias(a, p.root, ctx); }))
+                Error(rb.at, cat("a reference or slice read out of storage here may point into "
+                                 "storage partitioned by this par for, each iteration owning ",
+                                 formname(p), " (", Where(p.at->line), "), so no iteration may "
+                                 "read or write it this way: another iteration may be writing "
+                                 "what this one reads (docs/design/child_threads.md §4.4)"));
     // Added to what an earlier check of the same loop found (a recursive
     // cycle's round, say), whose functions this check reused: what they
     // reduce or partition they did not check again.

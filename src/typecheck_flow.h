@@ -2107,7 +2107,11 @@ inline void TypeCheck::CheckFor(ForLoop *x) {
     // what a holder of the activation's holds is what the passes before
     // stored there too, which the elements later iterations read may be.
     auto readback = IsRefOrSlice(bindtype) && elemtype && (!byref || elemtype->kind == TY_REF);
+    // In a par for's body nothing launders writability (§4.3 R1): an element
+    // read out of a sequence the body cannot write binds read-only.
+    auto seqwritable = iterprov.writable;
     if (readback) iterprov.writable = SlotLoadWritable(elemtype, iterprov.writable);
+    if (readback && InPar() && !seqwritable) iterprov.writable = false;
     // A par for (docs/design/child_threads.md §4): what its body may touch
     // is judged once it is checked (FinishParFor). The element `par for &x`
     // binds is the iteration's (§4.3 R2) where it is a flat element of one
@@ -2125,7 +2129,12 @@ inline void TypeCheck::CheckFor(ForLoop *x) {
             auto root = iterprov.Exact() ? iterprov.Root() : nullptr;
             if (root && !root->isglobal && !readback && IsFlat(elemtype)) {
                 auto id = Is<Ident>(x->iter);
-                par.parts.push_back({ id ? id->vdef : nullptr, root, PF_ELEMENT, nullptr, x });
+                ParPart p;
+                p.var = id ? id->vdef : nullptr;
+                p.root = root;
+                p.at = x;
+                p.elem = elemtype;
+                par.parts.push_back(p);
             } else {
                 iterprov.writable = false;
             }
@@ -2140,6 +2149,15 @@ inline void TypeCheck::CheckFor(ForLoop *x) {
                                    intemp ? &contents : nullptr, slotread, true);
             iterprov.TakeAlts(rb);
             for (auto &a : iterprov.alts) a.slotread = slotread;
+            // As ReadBackLVal does in a par for's body: one that may point at
+            // storage from outside it is read-only, and judged against the
+            // parts of the par for's iterations.
+            if (InPar()) {
+                if (iterprov.Any([&](const RootAlt &a) { return a.root && ParCaptured(a.root); }))
+                    iterprov.writable = false;
+                if ((int)frames.size() - 1 == Par().frame || frames.back().isfunval)
+                    ParReadBack(iterprov, PointeeOf(bindtype));
+            }
         }
         auto vd = NewVar(x->var, bindtype, x->line, false, x->vdef);
         vd->assigned = vd->maybeassigned = true;

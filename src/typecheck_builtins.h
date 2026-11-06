@@ -918,7 +918,7 @@ inline Val TypeCheck::CheckChunk(Call *c, const BuiltinDef &d, vector<Node *> &a
         auto root = lv.Exact() ? lv.Root() : nullptr;
         if (root && !root->isglobal && IsFlat(elem))
             AddParPart(owned, root, d.kind == B_CHUNK ? PF_CHUNK : PF_CHUNK_AT,
-                       d.kind == B_CHUNK ? args[2] : args[1], c, args[0]);
+                       d.kind == B_CHUNK ? args[2] : args[1], c, args[0], elem);
         else
             lv.writable = false;
     }

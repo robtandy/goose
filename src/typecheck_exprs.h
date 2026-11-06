@@ -111,8 +111,7 @@ inline TypeCheck::LVal TypeCheck::CheckLValue(Node *n) {
             // read-only as anything else from outside the body otherwise.
             auto root = lv.Exact() ? lv.Root() : nullptr;
             if (lv.writable && root && !root->isglobal && IsFlat(elem)) {
-                AddParPart(owned, root, PF_ELEMENT, nullptr, n, ix->obj);
-                Par().parts.back().by = by;
+                AddParPart(owned, root, PF_ELEMENT, nullptr, n, ix->obj, elem, by);
             } else if (lv.writable) {
                 lv.writable = false;
                 lv.parfrom = owned;
@@ -294,11 +293,18 @@ inline void TypeCheck::ReadBackLVal(LVal &lv) {
                             : lv.writable && !lv.type->cq;
     // In a par for's body nothing launders writability (§4.3 R1): what is
     // read out of storage the body cannot write, or may point at storage
-    // from outside the body, is read-only.
-    if (InPar() && (!pathwritable || lv.Any([&](const RootAlt &a) {
-            return a.root && ParCaptured(a.root);
-        })))
-        lv.writable = false;
+    // from outside the body, is read-only. And where it may point, the loop
+    // judges against the parts its iterations own (FinishParFor): read in
+    // the body itself, or in a function value of it, since what a callee
+    // reads out of storage it was handed is the caller's argument's.
+    if (InPar()) {
+        if (!pathwritable || lv.Any([&](const RootAlt &a) {
+                return a.root && ParCaptured(a.root);
+            }))
+            lv.writable = false;
+        if ((int)frames.size() - 1 == Par().frame || frames.back().isfunval)
+            ParReadBack(lv, PointeeOf(lv.type));
+    }
 }
 
 // How writable a reference or slice loaded out of a field or an element of

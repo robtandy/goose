@@ -467,10 +467,6 @@ inline Val Dot::Check(TypeCheck &tc, TypeExpr *) {
             if (auto en = tc.ast.LookupEnum(id->name, id->ns))
                 return tc.CheckVariantConst(this, en);
     }
-    // An array's length, which no iteration of a par for can change, is
-    // read beside the parts of it the iterations write (FinishParFor).
-    if (tc.InPar() && (name == "len" || name == "cap") && Is<Ident>(obj))
-        tc.Par().partuses.insert(obj);
     auto ov = tc.CheckV(obj, nullptr);
     if (tc.IsUntypedEmptyArray(ov.type)) tc.NoUntypedEmptyArray(ov, obj, cat(".", name));
     obj->exprtype = ov.type;
@@ -488,6 +484,11 @@ inline Val Dot::Check(TypeCheck &tc, TypeExpr *) {
     if (auto bd = LookupBuiltin(name); bd && (bd->flags & BF_PROPERTY)) {
         if (RecvKindOf(t) & bd->recv) {
             member = bd->kind;
+            // An array's length, which no iteration of a par for can change,
+            // is read beside the parts of it the iterations write
+            // (FinishParFor); a field of the name is no length.
+            if (auto id = Is<Ident>(obj); id && id->vdef && tc.InPar())
+                tc.ParLengthUse(obj, id->vdef);
             Val v;
             assert(bd->rets[0] == 'i');
             v.type = tc.ast.inttypes[IS_I64];

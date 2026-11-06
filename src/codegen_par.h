@@ -55,8 +55,10 @@ inline void CodeGen::OutlineParLoops() {
             if (!n || Is<FunVal>(n)) return;
             if (auto b = Is<Block>(n)) {
                 for (auto &st : b->stmts) {
-                    if (auto fl = Is<ForLoop>(st); fl && fl->ispar) st = OutlineParLoop(sp, fl, work);
-                    else walk(st);
+                    if (auto fl = Is<ForLoop>(st); fl && fl->ispar)
+                        st = OutlineParLoop(sp, fl, work);
+                    else
+                        walk(st);
                 }
                 if (auto fl = Is<ForLoop>(b->tail); fl && fl->ispar)
                     b->tail = OutlineParLoop(sp, fl, work);

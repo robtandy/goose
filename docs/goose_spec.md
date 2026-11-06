@@ -4798,11 +4798,22 @@ grown, shrunk or assigned meanwhile.
   the rest. The rules of an outer `par for` hold in the body of an inner
   one, which is part of its body: an integer the inner one reduces is a
   reduction of the outer one as well, where the outer one sees it from
-  outside. One storage is cut one way: by element, or by
+  outside. Parts of one storage taken through two variables are taken
+  through two views of it, which may start at different elements, and
+  overlap from one iteration to the next however they are cut: `a[k]` beside
+  `b[k]`, with `a` and `b` slices of one array, is an error. One storage is cut one way: by element, or by
   `chunk` of one `n`, or by `chunk_at` of one `b`. The body then reaches that
-  storage no other way but for its length: not through the variable, nor
-  through another reference or slice that may point into it, nor as
-  `chunk_at`'s bounds.
+  storage no other way but for its length (an array's or slice's `.len` or
+  `.cap`, not a field of the name): not through the variable, nor through
+  another reference or slice that may point into it, read out of storage in
+  the body included, nor as `chunk_at`'s bounds. A parameter stands for
+  storage its callers hand the function, which may be a global's, a
+  variable's of a function around it, or another parameter's where not
+  every call gives that one a root of its own exactly (§9.2), so where a
+  part lies in a parameter's storage, a use of any of those that may hold
+  the part's elements is a use of the part's storage. What a function the
+  body calls reaches counts as the body's, however often the function is
+  called from other `par for`s.
 * **Reductions.** A local integer of a function around the loop (not a
   `varint`, an index type or a reference) may be accumulated in the body by
   one associative operation, `+=` with `-=`, `++` and `--`, or `|=`, `&=`
@@ -4811,7 +4822,9 @@ grown, shrunk or assigned meanwhile.
   accumulates its own, from the operation's identity, and the loop
   combines them into the variable in chunk order once every iteration has
   ended. Integers wrap exactly in any order (§6.2), so the result is the
-  sequential loop's. A float is no reduction: per-iteration parts
+  sequential loop's; in a debug build, a signed reduction's overflow check
+  is the regrouped chain's (§6.2), each chunk's accumulation and the
+  combining checked as they execute. A float is no reduction: per-iteration parts
   (`partial[k] = acc`) are added up after the loop in the order the program
   writes.
 * **R3: no effect but those writes.** Neither the body nor a function it
