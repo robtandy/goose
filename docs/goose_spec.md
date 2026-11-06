@@ -1087,7 +1087,7 @@ are legal when its provenance is writable (§9.5).
   where `bounds` is any `i64` array or slice, taken as a `const i64[:]`;
   `k` and `n` are `i64`. As slicing does, either reads `a`'s elements and
   length before its other arguments run, which therefore cannot shrink `a`
-  (§5.1). Both check at run time, in every build: a count `n` of zero or
+  (§5.1, §5.2). Both check at run time, in every build: a count `n` of zero or
   less, a `k` outside `0..n` (for `chunk_at`, outside `0..bounds.len - 1`),
   and bounds with `lo < 0`, `hi < lo` or `hi > a.len` abort (§9.3).
   (`design/child_threads.md` §4.4 proposes them as the disjoint runs of a
