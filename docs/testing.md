@@ -234,10 +234,14 @@ receiver, one that is no array, bounds that are not `i64`, writes through
 the chunks of a `const` array and of a read-only view, a chunk returned,
 stored or bound past the life of its array or temporary, shrinks while a
 chunk is live, and an argument that shrinks the receiver after its elements
-were read. `optimizer/bce_chunk_arguments.goose` pins what bounds-check
-elimination makes of a chunk handed to a callee that resizes the elements
-it views: the lengths measured in the receiver's elements are gone after
-the call, and those measured in another array's are kept.
+were read. `chunk_slice_ref_shrink.goose` and `chunk_slice_ref_pop.goose`
+hold that last one for a receiver reached through a reference to a slice,
+whose elements are the slice's, not the slot's: both builtins in both
+spellings, over a grow-only array shrunk through a reference or as a global,
+and over a grow-shrink one. `optimizer/bce_chunk_arguments.goose` pins what
+bounds-check elimination makes of a chunk handed to a callee that resizes
+the elements it views: the lengths measured in the receiver's elements are
+gone after the call, and those measured in another array's are kept.
 
 ## Configurations and backends
 

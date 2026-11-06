@@ -537,8 +537,8 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
 // §4.4): the slice a[lo..hi] of the bounds its arguments give. The
 // receiver's elements and length are read first, as a slice's object's are
 // (GenSlice), then the arguments, which the checker keeps from shrinking it
-// (HoldAs). A count of zero or less, a chunk index outside the chunks, and
-// bounds that fall or leave the array abort, in every build.
+// (TypeCheck::ForOperands). A count of zero or less, a chunk index outside
+// the chunks, and bounds that fall or leave the array abort, in every build.
 inline vector<string> CodeGen::EmitChunk(Call *c, vector<Node *> &an, Line ln) {
     auto lv = GenLoc(an[0]);
     if (lv.t->kind == TY_REF) DerefLoc(lv);

@@ -329,7 +329,10 @@ inline Val TypeCheck::ContainerRead(LVal lv) {
 // the scans see. A `for` walks its sequence in place, so that is held while
 // the body runs (HoldForSequence). apply_contained's message buffer, after
 // the pool and the chunks, is appended to once its later operands have run,
-// so it is held as a member's receiver is.
+// so it is held as a member's receiver is. chunk and chunk_at slice their
+// receiver, whose elements and length they read before the arguments after
+// it run (EmitChunk): it is held as a slice expression's object is, as the
+// elements it leads to, through a reference to a slice too.
 template<typename F> void TypeCheck::ForOperands(Node *n, F f) {
     if (auto c = Is<Call>(n)) {
         auto builtin = c->builtin >= 0;
@@ -337,9 +340,10 @@ template<typename F> void TypeCheck::ForOperands(Node *n, F f) {
         auto render = builtin && (c->builtin == B_PRINT || c->builtin == B_STR ||
                                   c->builtin == B_FORMAT);
         auto out = c->builtin == B_APPLY_CONTAINED && c->pool_has_why ? 2 : -1;
+        auto recv = c->builtin == B_CHUNK || c->builtin == B_CHUNK_AT ? HK_ELEMS : HK_RECEIVER;
         auto at = 0;
         auto kind = [&]() {
-            auto k = (member && !at) || at == out ? HK_RECEIVER : render ? HK_NONE : HK_VALUE;
+            auto k = member && !at ? recv : at == out ? HK_RECEIVER : render ? HK_NONE : HK_VALUE;
             at++;
             return k;
         };
@@ -453,8 +457,7 @@ inline void TypeCheck::Ascend(Node *n) {
 // path leads to, a temporary's exactly); the references a holder holds,
 // each as a reference to its pointee; a builtin's receiver as a reference
 // to the array it is, or its elements where the builtin reads them
-// (to_bytes, a slice) or views them, as a slice of it would (chunk,
-// chunk_at); an assignment's location as recorded (CheckAssign).
+// (to_bytes, a slice); an assignment's location as recorded (CheckAssign).
 template<typename F>
 void TypeCheck::HoldAs(Node *n, const Val &v, HoldKind kind, Node *parent, const char *render,
                        F f) {
@@ -483,8 +486,7 @@ void TypeCheck::HoldAs(Node *n, const Val &v, HoldKind kind, Node *parent, const
             TypeExpr *elem = rt->kind == TY_ARRAY ? rt->arr->sub
                              : rt->kind == TY_SLICE ? rt->sub : nullptr;
             auto held = v;
-            auto elems = c->builtin == B_TO_BYTES || c->builtin == B_CHUNK ||
-                         c->builtin == B_CHUNK_AT || rt->kind == TY_SLICE;
+            auto elems = c->builtin == B_TO_BYTES || rt->kind == TY_SLICE;
             if (elems) {
                 if (!elem) return;
                 held.type = ast.SliceOf(elem, n->line);

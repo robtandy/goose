@@ -875,7 +875,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
 // elements lie, writable where they are and `const` where they are
 // read-only (§9.5), so that the rules of §9 judge it as they judge that
 // slice. The receiver's elements are held while the arguments after it run,
-// as a slice's object is while its bounds do (HoldAs).
+// as a slice's object is while its bounds do (ForOperands, HK_ELEMS).
 inline Val TypeCheck::CheckChunk(Call *c, const BuiltinDef &d, vector<Node *> &args) {
     auto lv = SlicedPath(args[0]);
     TypeExpr *elem = nullptr;
