@@ -245,9 +245,9 @@ per rule: R1 (`write_captured`, `push_captured`, `callee_write`,
 body written as a whole, by a member, through a reference a callee is
 given, as a global in a callee, by a nested function, and through a
 reference loaded out of it), the reductions (`float_reduction`,
-`reduction_mixed`, `reduction_read`), R2 (`chunk_alias`, `element_alias`,
-`bounds_alias` and `chunk_two_ways`: a partitioned array read another way,
-or cut two ways; `nested_alias` and `nested_outer_write`: an outer loop's
+`reduction_mixed`, `reduction_read`), R2 (`chunk_alias`, `chunk_whole_read`,
+`element_alias`, `bounds_alias` and `chunk_two_ways`: a partitioned array
+read another way, an element of it or the whole of it, or cut two ways; `nested_alias` and `nested_outer_write`: an outer loop's
 partitioned array read in an inner loop's body, and an inner loop's
 element of what the outer loop sees from outside, which every outer
 iteration writes), R3 (`print`, `qput` in a callee, `exit`, `thread_pool`),
