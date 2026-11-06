@@ -240,6 +240,7 @@ R"GSRT(enum {
     GS_E_CHUNKSIZE,    /* a chunks() size of zero or less */
     GS_E_CHUNKBOUNDS,  /* chunk offsets out of bounds or not monotonically increasing */
     GS_E_POOLCLOSED,   /* pool.apply on a thread_pool that close() ended */
+    GS_E_CHUNKCOUNT,   /* a.chunk(k, n) of a count n of zero or less */
 };
 
 )GSRT"
@@ -1518,6 +1519,7 @@ R"GSRT(static const char *gs_errmsgs[] = {
     "chunk size of zero or less",
     "chunk offsets out of bounds or not monotonically increasing",
     "cannot apply on a closed thread_pool",
+    "chunk count of zero or less",
 };
 
 )GSRT"
