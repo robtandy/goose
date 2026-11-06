@@ -6,6 +6,7 @@
     { "include": "#comments" },
     { "include": "#strings" },
     { "match": "\\broot\\b(?=\\s+struct\\b)", "name": "storage.modifier.goose" },
+    { "match": "\\bpar\\b(?=\\s+for\\b)", "name": "keyword.control.goose" },
     { "include": "#declarations" },
     { "match": "\\b(?:bool|varint|[iu](?:8|16|32|64)|f(?:32|64)|thread_pool(?!\\s*[<(]))\\b", "name": "storage.type.goose" },
     { "match": "\\b(?:true|false|null)\\b", "name": "constant.language.goose" },

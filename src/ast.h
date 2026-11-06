@@ -1353,6 +1353,11 @@ NODE(ForLoop)
     bool sumred = false;
     BCE_MARK
     bool byref;                 // for &x in ...
+    // `par for` (docs/design/child_threads.md §4): the iterations are
+    // independent, and the loop may run them in contiguous chunks on the
+    // threads of the program's pool (TypeCheck::FinishParFor,
+    // CodeGen::OutlineParLoops), or one after another as `for` does.
+    bool ispar = false;
     string_view var;
     string_view idxvar;         // Optional second binding; empty if absent.
     // The integer types written for a range's or count's binder and for an

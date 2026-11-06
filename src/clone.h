@@ -254,6 +254,7 @@ inline Node *ForLoop::Clone1(Ast &ast) const {
                               (Block *)body->Clone(ast));
     f->vartype = ast.CloneExpansionType(vartype);
     f->idxtype = ast.CloneExpansionType(idxtype);
+    f->ispar = ispar;
     return f;
 }
 

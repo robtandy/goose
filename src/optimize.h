@@ -1059,6 +1059,7 @@ inline Node *ForLoop::Cp1(Inliner &inl) const {
     c->vdef = inl.Remap(vdef);
     c->idxdef = inl.Remap(idxdef);
     c->iterkind = iterkind;
+    c->ispar = ispar;
     return c;
 }
 
