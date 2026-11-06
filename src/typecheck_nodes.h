@@ -509,9 +509,7 @@ inline Val Index::Check(TypeCheck &tc, TypeExpr *) {
 
 inline Val SliceExpr::Check(TypeCheck &tc, TypeExpr *) {
     TypeCheck::DestScope ds(tc, TypeCheck::Dest {});
-    auto lv = tc.LValueBase(obj, cmpview);
-    tc.DerefLValue(lv, obj);
-    tc.SliceProvenance(lv, obj);
+    auto lv = tc.SlicedPath(obj, cmpview);
     TypeExpr *elem;
     if (lv.type->kind == TY_SLICE) {
         elem = lv.type->sub;
@@ -530,13 +528,7 @@ inline Val SliceExpr::Check(TypeCheck &tc, TypeExpr *) {
     if (lv.intemp && !cmpview) tc.NoRelRefTempRead(obj, lv.type, elem);
     if (lo) tc.CheckIntAny(lo);
     if (hi) tc.CheckIntAny(hi);
-    Val v;
-    v.type = tc.ast.SliceOf(elem, line);
-    v.SetProv(lv);
-    v.reusable = false;   // A view of a pool is not the pool.
-    if (lv.type->cq) v.writable = false;   // A const field's or element's, as a variable's.
-    v.type->cq = !v.writable;   // A slice of read-only storage is a `const T[:]` (§9.5).
-    return v;
+    return tc.SliceVal(lv, elem, line);
 }
 
 inline Val AsCast::Check(TypeCheck &tc, TypeExpr *) {

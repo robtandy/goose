@@ -1781,6 +1781,8 @@ struct TypeCheck {
     void RequireAssigned(VarDef *vd, Node *at, string_view use = {});
     void RequireIndexArray(TypeExpr *t, Node *at, string_view what);
     void SliceProvenance(LVal &lv, Node *at);
+    LVal SlicedPath(Node *obj, bool cmpview = false);
+    Val SliceVal(const LVal &lv, TypeExpr *elem, Line line);
     void ReadBackLVal(LVal &lv);
     bool SlotLoadWritable(TypeExpr *t, bool path);
     Val ContainerRead(LVal lv);

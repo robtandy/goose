@@ -212,6 +212,29 @@ inline void TypeCheck::SliceProvenance(LVal &lv, Node *at) {
     lv.var = nullptr;
 }
 
+// The path a slice is taken of -- the object of obj[lo..hi], the receiver of
+// a.chunk(k, n) -- followed through a reference or slice to the elements it
+// leads to, which are what the slice views.
+inline TypeCheck::LVal TypeCheck::SlicedPath(Node *obj, bool cmpview) {
+    auto lv = LValueBase(obj, cmpview);
+    DerefLValue(lv, obj);
+    SliceProvenance(lv, obj);
+    return lv;
+}
+
+// A slice of the elements of type elem that the path lv leads to
+// (SlicedPath), whatever its bounds: rooted where they lie and as writable as
+// they are, and so a `const T[:]` where they are read-only (§9.5).
+inline Val TypeCheck::SliceVal(const LVal &lv, TypeExpr *elem, Line line) {
+    Val v;
+    v.type = ast.SliceOf(elem, line);
+    v.SetProv(lv);
+    v.reusable = false;   // A view of a pool is not the pool.
+    if (lv.type->cq) v.writable = false;   // A const field's or element's, as a variable's.
+    v.type->cq = !v.writable;   // A slice of read-only storage is a `const T[:]` (§9.5).
+    return v;
+}
+
 // A location whose own type is a reference or slice: the value loaded out
 // of it is a read-back, so its root is re-derived (§9.5). Out of a field or
 // an element it is as writable as the slot says (SlotLoadWritable); a slice
