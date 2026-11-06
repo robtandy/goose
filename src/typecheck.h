@@ -2286,6 +2286,8 @@ struct TypeCheck {
         ~ParScope() { tc.parctx.resize(depth); }
     };
     bool ParCaptured(const VarDef *vd);
+    template<typename F> void EachParSeeing(const VarDef *vd, F f);
+    bool ParCapturedAround(const VarDef *vd);
     bool ParView(const VarDef *vd) { return ParCaptured(vd) && vd != parowned; }
     void NoteParUse(Node *at, VarDef *vd);
     void StartParFor(ForLoop *x, ParCtx &ctx);

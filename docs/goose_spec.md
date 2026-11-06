@@ -4791,9 +4791,14 @@ grown, shrunk or assigned meanwhile.
   `par for k in 0..n` with `n` written alike, or `a.chunk_at(b, k)` where
   the loop is `par for k in b.len - 1`, `b` a variable, and any slice bound
   to one of these. Each is writable where `a` is writable outside the body,
-  its elements are fixed-size and flat (§1.1), and it lies in one storage
-  the compiler knows exactly (§9.2) that is not a global's; otherwise it is
-  as read-only as the rest. One storage is cut one way: by element, or by
+  its elements are fixed-size and flat (§1.1), it lies in one storage the
+  compiler knows exactly (§9.2) that is not a global's, and no `par for`
+  whose body this loop is in sees `a` from outside too, since each of that
+  loop's iterations runs this one whole; otherwise it is as read-only as
+  the rest. The rules of an outer `par for` hold in the body of an inner
+  one, which is part of its body: an integer the inner one reduces is a
+  reduction of the outer one as well, where the outer one sees it from
+  outside. One storage is cut one way: by element, or by
   `chunk` of one `n`, or by `chunk_at` of one `b`. The body then reaches that
   storage no other way but for its length: not through the variable, nor
   through another reference or slice that may point into it, nor as

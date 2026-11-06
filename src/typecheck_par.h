@@ -33,10 +33,28 @@ inline bool TypeCheck::ParCaptured(const VarDef *vd) {
     return InPar() && vd && (vd->isglobal || vd->depth <= Par().depth);
 }
 
+// The par fors whose bodies are being checked that see vd from outside,
+// innermost first, up to a body checked for none (a null entry). A par for
+// in another's body sees what the outer one sees from outside, and more.
+template<typename F> void TypeCheck::EachParSeeing(const VarDef *vd, F f) {
+    for (auto i = (int)parctx.size() - 1; i >= 0 && parctx[i]; i--)
+        if (vd && (vd->isglobal || vd->depth <= parctx[i]->depth)) f(*parctx[i]);
+}
+
+// Whether a par for around the innermost one sees vd from outside: no
+// iteration of the inner one owns a part of it, since the outer one's
+// iterations all run the inner loop.
+inline bool TypeCheck::ParCapturedAround(const VarDef *vd) {
+    auto n = 0;
+    EachParSeeing(vd, [&](ParCtx &) { n++; });
+    return n > 1;
+}
+
 // A name in the body (or in a function checked for it) that reads or writes
-// vd, a variable from outside it: FinishParFor judges each.
+// vd, a variable from outside it: FinishParFor judges each, for every par
+// for whose body the name is in that sees vd from outside.
 inline void TypeCheck::NoteParUse(Node *at, VarDef *vd) {
-    if (ParCaptured(vd)) Par().uses.push_back({ at, vd });
+    EachParSeeing(vd, [&](ParCtx &ctx) { ctx.uses.push_back({ at, vd }); });
 }
 
 // The loop's header, checked: what chunk(k, n) and chunk_at(bounds, k) of
@@ -137,7 +155,7 @@ inline bool TypeCheck::ParIndexPart(Index *ix, VarDef *&owned, VarDef *&by) {
     auto kid = Is<Ident>(ix->idx);
     if (!id || !kid || !id->expansionerror.empty() || !kid->expansionerror.empty()) return false;
     auto vd = LookupVar(id->name, id->ns);
-    if (!vd || vd->isglobal || !ParCaptured(vd)) return false;
+    if (!vd || vd->isglobal || !ParCaptured(vd) || ParCapturedAround(vd)) return false;
     auto kd = LookupVar(kid->name, kid->ns);
     if (!kd || (!ParOrdinal(kd) && kd != Par().shifted)) return false;
     owned = vd;
@@ -154,7 +172,7 @@ inline bool TypeCheck::ParChunkPart(Call *c, const BuiltinDef &d, vector<Node *>
     auto id = Is<Ident>(args[0]);
     if (!id || !id->expansionerror.empty()) return false;
     auto vd = LookupVar(id->name, id->ns);
-    if (!vd || vd->isglobal || !ParCaptured(vd)) return false;
+    if (!vd || vd->isglobal || !ParCaptured(vd) || ParCapturedAround(vd)) return false;
     auto kid = Is<Ident>(d.kind == B_CHUNK ? args[1] : args[2]);
     if (!kid || !kid->expansionerror.empty() || !ParOrdinal(LookupVar(kid->name, kid->ns)))
         return false;
@@ -199,21 +217,25 @@ inline void TypeCheck::ParAssign(Node *at, LVal &lv, TType op) {
     auto cls = op == T_MINUSEQ || op == T_INC || op == T_DEC ? T_PLUSEQ : op;
     auto name = Is<Assign>(at) ? Is<Assign>(at)->lval : Is<IncDec>(at) ? Is<IncDec>(at)->lval
                                                                        : at;
-    auto &ctx = Par();
-    ctx.redtargets.insert(name);
-    for (auto &[v, o, first] : ctx.reductions) {
-        if (v != vd) continue;
-        auto opname = [](TType k) {
-            return k == T_PLUSEQ ? "+= and -=" : k == T_OREQ ? "|=" : k == T_ANDEQ ? "&=" : "^=";
-        };
-        if (o != cls)
-            Error(at, cat(vd->name, " is a reduction of this par for by ", opname(o), " (at ",
-                          Where(first->line), "), and cannot be updated by ", opname(cls),
-                          " too: a reduction has one operation (docs/design/child_threads.md "
-                          "§4.6)"));
-        return;
-    }
-    ctx.reductions.push_back({ vd, cls, at });
+    auto opname = [](TType k) {
+        return k == T_PLUSEQ ? "+= and -=" : k == T_OREQ ? "|=" : k == T_ANDEQ ? "&=" : "^=";
+    };
+    // A reduction of every par for around it that sees it from outside: the
+    // iterations of an outer one each run the inner loop, whose chunks add
+    // into the outer chunk's own total.
+    EachParSeeing(vd, [&](ParCtx &ctx) {
+        ctx.redtargets.insert(name);
+        for (auto &[v, o, first] : ctx.reductions) {
+            if (v != vd) continue;
+            if (o != cls)
+                Error(at, cat(vd->name, " is a reduction of this par for by ", opname(o),
+                              " (at ", Where(first->line), "), and cannot be updated by ",
+                              opname(cls), " too: a reduction has one operation "
+                              "(docs/design/child_threads.md §4.6)"));
+            return;
+        }
+        ctx.reductions.push_back({ vd, cls, at });
+    });
 }
 
 // A builtin (`builtin`), or a function (`callee`), that a par for's body or
@@ -279,14 +301,21 @@ inline void TypeCheck::ParCallNeeds(Node *at, FnSpec *callee) {
 // other way, and its reductions used no other way (§4.4, §4.6). What
 // codegen needs of them goes on the loop.
 inline void TypeCheck::FinishParFor(ForLoop *x, ParCtx &ctx) {
+    // The binder a chunk is taken with, as written: chunk(k, n), chunk_at(b, k).
+    auto index = [&](const ParPart &p) -> string {
+        auto c = Is<Call>(p.at);
+        auto an = c ? c->ArgNodes() : vector<Node *>();
+        auto i = p.form == PF_CHUNK ? 1u : 2u;
+        return i < an.size() ? ExprStr(an[i]) : string("k");
+    };
     auto formname = [&](const ParPart &p) -> string {
         auto of = p.var ? string(p.var->name) : string("the sequence");
         switch (p.form) {
             case PF_ELEMENT:
                 return p.by ? cat(of, "[", p.by->name, "]")
                             : cat("the element of ", of, " the iteration's index names");
-            case PF_CHUNK: return cat(of, ".chunk(k, ", ExprStr(p.key), ")");
-            case PF_CHUNK_AT: return cat(of, ".chunk_at(", ExprStr(p.key), ", k)");
+            case PF_CHUNK: return cat(of, ".chunk(", index(p), ", ", ExprStr(p.key), ")");
+            case PF_CHUNK_AT: return cat(of, ".chunk_at(", ExprStr(p.key), ", ", index(p), ")");
         }
         return "";
     };
@@ -325,9 +354,14 @@ inline void TypeCheck::FinishParFor(ForLoop *x, ParCtx &ctx) {
                           "(docs/design/child_threads.md §4.6)"));
         }
     }
-    x->reductions.clear();
-    for (auto &[rv, op, first] : ctx.reductions) x->reductions.push_back({ rv, op });
-    x->chunkats.clear();
+    // Added to what an earlier check of the same loop found (a recursive
+    // cycle's round, say), whose functions this check reused: what they
+    // reduce or partition they did not check again.
+    for (auto &[rv, op, first] : ctx.reductions) {
+        auto known = false;
+        for (auto &[v, o] : x->reductions) known = known || v == rv;
+        if (!known) x->reductions.push_back({ rv, op });
+    }
     for (auto &p : ctx.parts) {
         if (p.form != PF_CHUNK_AT || !p.var) continue;
         auto b = Is<Ident>(p.key);

@@ -226,9 +226,9 @@ place, all printing the same:
   with an integer reduction beside float partials), the blur a row per
   iteration, `par for &x, i in arr`, `par for x in arr` with a `^=`
   reduction, reductions by every operation over a range, a range's index
-  binder, a `par for` nested in another's body and one in a function a
-  `par for`'s body calls (both run in place), a `defer` in the body, and
-  loops of no iteration and of one.
+  binder, a `par for` nested in another's body, with a reduction of both,
+  and one in a function a `par for`'s body calls (both run in place), a
+  `defer` in the body, and loops of no iteration and of one.
 * `syntax/par_for_syntax.goose`: `par` as a function's, a variable's and a
   field's name beside every form of `par for`, with typed binders.
 * `threads/par_for_abort.goose`: an abort in one iteration ends the
@@ -247,7 +247,10 @@ given, as a global in a callee, by a nested function, and through a
 reference loaded out of it), the reductions (`float_reduction`,
 `reduction_mixed`, `reduction_read`), R2 (`chunk_alias`, `element_alias`,
 `bounds_alias` and `chunk_two_ways`: a partitioned array read another way,
-or cut two ways), R3 (`print`, `qput` in a callee, `exit`, `thread_pool`),
+or cut two ways; `nested_alias` and `nested_outer_write`: an outer loop's
+partitioned array read in an inner loop's body, and an inner loop's
+element of what the outer loop sees from outside, which every outer
+iteration writes), R3 (`print`, `qput` in a callee, `exit`, `thread_pool`),
 R4 (`break`, `return`, `return_from`), and `sequential_elems`, a `par for`
 over elements of variable size.
 

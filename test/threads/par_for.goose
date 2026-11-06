@@ -251,6 +251,11 @@ fn main() {
         par for &c, j in row { c = i * 10 + j; }  // a par for in a par for: in place
     }
     print("nested: ", grid);
+    var pairs = 0;
+    par for i in 10 {
+        par for j in 10 { if (i + j) % 3 == 0 { pairs++; } }   // a reduction of both
+    }
+    print("nested reduction: ", pairs);
     var rows2: i64[12] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     par for i in 3 { fill_row(rows2.chunk(i, 3), i * 100); }
     print("called: ", rows2);

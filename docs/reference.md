@@ -4155,6 +4155,8 @@ What the body may touch:
   one array the compiler knows. An array is cut one way, and the body
   reaches it no other way but for its length: `c[0] = a[0]` beside
   `let c = a.chunk(k, 4)` is an error, since `a[0]` is another iteration's.
+  A `par for` in another's body is held to the outer one's rules too: it
+  writes only what the outer iteration owns.
 * **Reductions.** An integer of the caller's accumulated by one operation,
   `+=` (with `-=`, `++` and `--`), `|=`, `&=` or `^=`, and used no other way
   in the body, is kept per chunk of iterations and added up in order once

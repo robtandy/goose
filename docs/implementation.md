@@ -4210,6 +4210,13 @@ runs and `FinishParFor` judges once they have settled.
   root the path has, where it is exact, flat and no global's, and refused
   otherwise. The element `par for &x` binds is a part of the sequence's
   root, made by `CheckFor` from the header's provenance.
+* **Nesting.** A `par for` in another's body is part of that body: a name,
+  a part or a reduction in the inner body counts for every loop on
+  `parctx` that sees the variable from outside (`EachParSeeing`, up to a
+  barrier), so a reduction of the inner loop is one of the outer loop too,
+  and no inner iteration owns a part of what an outer loop sees from
+  outside (`ParCapturedAround`), which every outer iteration's run of the
+  inner loop would write.
 * **Uses.** Every name of a variable outside the body is recorded with its
   node (`NoteParUse`), in the body, its function values and the functions
   checked for it. `FinishParFor` requires the parts of one root to be cut
@@ -4217,8 +4224,10 @@ runs and `FinishParFor` judges once they have settled.
   name and a `.len` or `.cap` (`partuses`) to reach none of the parts' roots
   (`ParRootsOf`: the variable's storage and what it holds, or where it
   points); and a reduction's variable to be used only by its updates
-  (`redtargets`). It leaves the reductions and the `chunk_at` pairs on the
-  loop for codegen.
+  (`redtargets`). It adds the reductions and the `chunk_at` pairs to what
+  the loop holds for codegen, which an earlier check of the same loop (a
+  recursive cycle's round) may have found through a function this one
+  reused.
 * **Effects and exits (R3, R4).** `ParEffect` rejects the builtins of R3 in
   `CheckBuiltin`, and the `os` and `ffi` modules' externs at a resolved
   call; `ParExit` a `return` whose target frame is the loop's or below
