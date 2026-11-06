@@ -1060,6 +1060,8 @@ inline Node *ForLoop::Cp1(Inliner &inl) const {
     c->idxdef = inl.Remap(idxdef);
     c->iterkind = iterkind;
     c->ispar = ispar;
+    for (auto &[v, op] : reductions) c->reductions.push_back({ inl.Remap(v), op });
+    for (auto &[a, b] : chunkats) c->chunkats.push_back({ inl.Remap(a), inl.Remap(b) });
     return c;
 }
 

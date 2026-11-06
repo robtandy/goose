@@ -15,6 +15,7 @@ namespace goose {
 // growths and shrinks; what it cannot express gets dedicated code below.
 inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> &args, Val *precv) {
     c->builtin = d.kind;
+    if (InPar()) ParEffect(c, d.kind, nullptr);
     if (c->trailing) Error(c, cat(d.name, " takes no function value"));
     if (!(d.flags & BF_TYARGS) && !c->tyargs.empty())
         Error(c, cat(d.name, " takes no type arguments"));
@@ -524,9 +525,13 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
         }
         if (!(RecvKindOf(rt) & d.recv))
             Error(c, cat(".", d.name, " is not available on ", TypeStr(rv.type)));
-        if ((d.flags & BF_WRITE) && !rv.writable)
+        if ((d.flags & BF_WRITE) && !rv.writable) {
+            // A variable from outside a par for's body, which it sees read-only.
+            if (auto id = Is<Ident>(args[0]); id && id->vdef && ParView(id->vdef))
+                ParWriteError(c, id->vdef, cat("cannot .", d.name).c_str());
             Error(c, cat("cannot .", d.name, " through a non-writable value "
                          "(let, const, or a read-only instantiation, §9.5)"));
+        }
         // A reference that may point at such a pool, but is not a pool
         // reference, says so.
         auto notpoolref = [&](int ru) -> string {
@@ -877,7 +882,16 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
 // slice. The receiver's elements are held while the arguments after it run,
 // as a slice's object is while its bounds do (ForOperands, HK_ELEMS).
 inline Val TypeCheck::CheckChunk(Call *c, const BuiltinDef &d, vector<Node *> &args) {
-    auto lv = SlicedPath(args[0]);
+    // a.chunk(k, n) or a.chunk_at(bounds, k) in a par for's body, of the
+    // loop's index, count or bounds: the run the iteration owns, of an array
+    // from outside the body (§4.4).
+    VarDef *owned = nullptr;
+    auto part = ParChunkPart(c, d, args, owned);
+    LVal lv;
+    {
+        Saved<VarDef *> po(parowned, part ? owned : parowned);
+        lv = SlicedPath(args[0]);
+    }
     TypeExpr *elem = nullptr;
     if (lv.type->kind == TY_SLICE) {
         elem = lv.type->sub;
@@ -897,6 +911,17 @@ inline Val TypeCheck::CheckChunk(Call *c, const BuiltinDef &d, vector<Node *> &a
     if (d.kind == B_CHUNK) CheckArg(args[1], i64);
     else CheckArg(args[1], ast.ConstOf(ast.SliceOf(i64, c->line)));
     CheckArg(args[2], i64);
+    if (part && lv.writable) {
+        // Owned where it is a run of flat elements of one known storage,
+        // which the rest of the body then reaches no other way (FinishParFor),
+        // and read-only as anything else from outside the body otherwise.
+        auto root = lv.Exact() ? lv.Root() : nullptr;
+        if (root && !root->isglobal && IsFlat(elem))
+            AddParPart(owned, root, d.kind == B_CHUNK ? PF_CHUNK : PF_CHUNK_AT,
+                       d.kind == B_CHUNK ? args[2] : args[1], c, args[0]);
+        else
+            lv.writable = false;
+    }
     auto v = SliceVal(lv, elem, c->line);
     // What an adapting receiver (a limited array) constructs from.
     c->rettypes.push_back(v.type);

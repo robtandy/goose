@@ -147,6 +147,10 @@ struct TypeCheck {
         // holder root says (TempContents), not into the temporary.
         bool intemp = false;
         ReadBack contents;
+        // The variable outside a `par for`'s body the path starts at, which
+        // the body sees read-only (§4.3 R1, ParView): what a write through
+        // the path is rejected for.
+        VarDef *parfrom = nullptr;
     };
 
     // What a nested function's body can name outside its own scopes (§7.5),
@@ -2217,6 +2221,89 @@ struct TypeCheck {
     Val CheckLoop(LoopExpr *x, TypeExpr *expected, bool wantvalue);
     void CheckWhile(While *x);
     void CheckFor(ForLoop *x);
+
+    // ------------------------------------------------------------------
+    // `par for` (docs/design/child_threads.md §4.3-§4.6; typecheck_par.h):
+    // what the body, and every function it calls, may touch.
+
+    // A part of a variable of the enclosing function that one iteration
+    // owns, by the way it is cut (§4.4): the element of the iteration's
+    // index (`for &x`, a[k]), the chunk(k, n) of n equal runs, or the
+    // chunk_at(bounds, k) run between two offsets.
+    enum ParForm { PF_ELEMENT, PF_CHUNK, PF_CHUNK_AT };
+    struct ParPart {
+        VarDef *var = nullptr;      // The variable the part is taken of.
+        VarDef *root = nullptr;     // The one storage it lies in, which iterations write.
+        ParForm form = PF_ELEMENT;
+        Node *key = nullptr;        // chunk's n, or chunk_at's bounds.
+        Node *at = nullptr;         // Where the part is taken.
+        // An element's index: null for the iteration's ordinal, else the
+        // binder of a range that does not start at 0 (ParCtx::shifted).
+        VarDef *by = nullptr;
+    };
+    // A `par for` whose body is being checked: what it allows, and what the
+    // body did, which the loop is judged by once the body is checked
+    // (FinishParFor). Its passes (CheckLoopPasses) add to one record, the
+    // functions checked for the body included.
+    struct ParCtx {
+        ForLoop *loop = nullptr;
+        int depth = 0;               // The loop's scope: a variable no deeper is outside the body.
+        int frame = 0;               // The frame checking the loop.
+        int scope = 0;               // The loop's own scope (SK_LOOP).
+        // The binders that tell the iterations apart: `ordinal` and
+        // `ordinal2` count them from 0 (a count's binder, a 0-based range's,
+        // an index binder), `shifted` is the binder of a range from another
+        // start. Null where the loop names none.
+        VarDef *ordinal = nullptr, *ordinal2 = nullptr, *shifted = nullptr;
+        Node *count = nullptr;       // n of `par for k in n` or `0..n`: what chunk(k, n) takes.
+        Node *bounds = nullptr;      // b of `par for k in b.len - 1`: what chunk_at(b, k) takes.
+        vector<ParPart> parts;
+        // Every use the body makes of a variable outside it, which may not
+        // reach storage a part is of, but for the uses that take a part or
+        // read a length (`partuses`).
+        vector<pair<Node *, VarDef *>> uses;
+        set<Node *> partuses;
+        // The integer reductions (§4.6): each variable with its operation
+        // and the first update of it, and the names those updates write.
+        vector<tuple<VarDef *, TType, Node *>> reductions;
+        set<Node *> redtargets;
+    };
+    // The par fors whose bodies are being checked, innermost last. A null
+    // entry is a body that is checked for no par for, between them.
+    vector<ParCtx *> parctx;
+    // The variable a part is being taken of while its path is checked
+    // (ParIndexPart, ParChunkPart): it is as writable there as outside the
+    // body.
+    VarDef *parowned = nullptr;
+    bool InPar() const { return !parctx.empty() && parctx.back(); }
+    ParCtx &Par() { return *parctx.back(); }
+    struct ParScope {
+        TypeCheck &tc;
+        size_t depth;
+        ParScope(TypeCheck &t, ParCtx *c) : tc(t), depth(t.parctx.size()) {
+            tc.parctx.push_back(c);
+        }
+        ~ParScope() { tc.parctx.resize(depth); }
+    };
+    bool ParCaptured(const VarDef *vd);
+    bool ParView(const VarDef *vd) { return ParCaptured(vd) && vd != parowned; }
+    void NoteParUse(Node *at, VarDef *vd);
+    void StartParFor(ForLoop *x, ParCtx &ctx);
+    void ParPass(ForLoop *x, ParCtx &ctx);
+    void FinishParFor(ForLoop *x, ParCtx &ctx);
+    void AddParPart(VarDef *vd, VarDef *root, ParForm form, Node *key, Node *at, Node *name);
+    bool ParIndexPart(Index *ix, VarDef *&owned, VarDef *&by);
+    bool ParOrdinal(VarDef *vd) {
+        return vd && (vd == Par().ordinal || vd == Par().ordinal2);
+    }
+    bool ParChunkPart(Call *c, const BuiltinDef &d, vector<Node *> &args, VarDef *&owned);
+    bool SameParExpr(Node *a, Node *b);
+    Roots ParRootsOf(VarDef *vd);
+    [[noreturn]] void ParWriteError(Node *at, VarDef *vd, const char *what);
+    void ParAssign(Node *at, LVal &lv, TType op);
+    void ParEffect(Call *c, int builtin, SFunction *callee);
+    void ParExit(Node *at, int targetframe, const char *what);
+    void ParCallNeeds(Node *at, FnSpec *callee);
     int RealFrameIndex();
     Frame &CurRealFrame() { return frames[RealFrameIndex()]; }
     int FindBreakScope(bool forcontinue);

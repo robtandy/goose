@@ -87,6 +87,7 @@ inline Val Ident::Check(TypeCheck &tc, TypeExpr *) {
         vdef = vd;
         if (tc.deferbodies) tc.NoteDeferMention(vd);
         tc.RequireAssigned(vd, this);
+        tc.NoteParUse(this, vd);
         Val v;
         auto t = vd->narrowed ? vd->narrowed : vd->type;
         v.type = tc.LoadType(t);
@@ -107,7 +108,8 @@ inline Val Ident::Check(TypeCheck &tc, TypeExpr *) {
         } else {
             v.Set(vd, true);
             v.byteview = vd->contentbyteview;
-            v.writable = !vd->copybind && !(vd->type && vd->type->cq);
+            // A par for's body sees what is outside it read-only (§4.3 R1).
+            v.writable = !vd->copybind && !(vd->type && vd->type->cq) && !tc.ParView(vd);
             v.reusable = vd->reusable;
             v.nonneg = vd->nonneg;
             if (vd->nonneg) v.nonnegfrom = vd;
@@ -465,6 +467,10 @@ inline Val Dot::Check(TypeCheck &tc, TypeExpr *) {
             if (auto en = tc.ast.LookupEnum(id->name, id->ns))
                 return tc.CheckVariantConst(this, en);
     }
+    // An array's length, which no iteration of a par for can change, is
+    // read beside the parts of it the iterations write (FinishParFor).
+    if (tc.InPar() && (name == "len" || name == "cap") && Is<Ident>(obj))
+        tc.Par().partuses.insert(obj);
     auto ov = tc.CheckV(obj, nullptr);
     if (tc.IsUntypedEmptyArray(ov.type)) tc.NoUntypedEmptyArray(ov, obj, cat(".", name));
     obj->exprtype = ov.type;

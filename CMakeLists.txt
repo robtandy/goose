@@ -51,6 +51,7 @@ add_executable(goose
     src/typecheck_calls.h
     src/typecheck_builtins.h
     src/typecheck_nodes.h
+    src/typecheck_par.h
     src/optimize.h
     src/optimize_basecase.h
     src/optimize_tre.h

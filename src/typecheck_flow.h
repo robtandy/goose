@@ -542,6 +542,14 @@ inline Prov TypeCheck::GlobalVarRead(VarDef *vd) {
 // `let`'s, which only its initializer binds. It has no roots there, as the
 // literal has none (§9.5). Anything else is the temp sentinel.
 inline Prov TypeCheck::RefProvOf(VarDef *vd) {
+    // What a par for's body reads from outside it is read-only there (§4.3
+    // R1), and so is anything reached through it.
+    if (ParView(vd)) {
+        Saved<VarDef *> po(parowned, vd);
+        auto p = RefProvOf(vd);
+        p.writable = false;
+        return p;
+    }
     if (BoundAnywhere(vd) && CurRealFrame().spec) return GlobalVarRead(vd);
     Prov p = vd->ref;
     if (!vd->refrootknown) {
@@ -2100,6 +2108,29 @@ inline void TypeCheck::CheckFor(ForLoop *x) {
     // stored there too, which the elements later iterations read may be.
     auto readback = IsRefOrSlice(bindtype) && elemtype && (!byref || elemtype->kind == TY_REF);
     if (readback) iterprov.writable = SlotLoadWritable(elemtype, iterprov.writable);
+    // A par for (docs/design/child_threads.md §4): what its body may touch
+    // is judged once it is checked (FinishParFor). The element `par for &x`
+    // binds is the iteration's (§4.3 R2) where it is a flat element of one
+    // known storage, the sequence's, which the body then reaches no other
+    // way; any other reference or slice the binding holds is as read-only
+    // as everything else the body sees from outside.
+    ParCtx par;
+    if (x->ispar) {
+        StartParFor(x, par);
+        if ((x->iterkind == IK_ARRAY || x->iterkind == IK_SLICE) && ClassOf(elemtype) != SC_FIXED)
+            Error(x, cat("a par for walks an array or slice of fixed-size elements, which it cuts "
+                         "into runs of iterations: ", TypeStr(x->iter->exprtype),
+                         " is sequential (§3.3)"));
+        if (IsRefOrSlice(bindtype) && iterprov.writable) {
+            auto root = iterprov.Exact() ? iterprov.Root() : nullptr;
+            if (root && !root->isglobal && !readback && IsFlat(elemtype)) {
+                auto id = Is<Ident>(x->iter);
+                par.parts.push_back({ id ? id->vdef : nullptr, root, PF_ELEMENT, nullptr, x });
+            } else {
+                iterprov.writable = false;
+            }
+        }
+    }
     auto seqprov = iterprov;
     auto head = SaveFlow();
     auto sc = CheckLoopPasses(x, head, [&] {
@@ -2135,9 +2166,15 @@ inline void TypeCheck::CheckFor(ForLoop *x) {
             idx->assigned = idx->maybeassigned = true;
             x->idxdef = idx;
         }
+        std::optional<ParScope> ps;
+        if (x->ispar) {
+            ParPass(x, par);
+            ps.emplace(*this, &par);
+        }
         CheckLoopBody(x->body);
     });
     JoinBreakFlow(sc, true);
+    if (x->ispar) FinishParFor(x, par);
 }
 
 inline int TypeCheck::RealFrameIndex() {
@@ -2168,6 +2205,11 @@ inline void TypeCheck::CheckBreak(Break *b) {
     if (si == -2) Error(b, "break cannot cross a const for expansion boundary");
     if (si == -3) JumpLeavesDefer(b, "break");
     if (si < 0) Error(b, "break outside of a loop or block");
+    // Nothing leaves a par for's body but the end of an iteration (§4.3 R4).
+    if (InPar() && si <= Par().scope)
+        Error(b, cat("break out of a par for: an iteration ends by running to the end of the "
+                     "body or by continue, and nothing ends the loop early, since the other "
+                     "iterations may be running (docs/design/child_threads.md §4.3 R4)"));
     if (b->val) {
         if (!Is<LoopExpr>(scopes[si].node) && !Is<EarlyBlock>(scopes[si].node))
             Error(b, "break with a value exits loop/block only");
@@ -2273,6 +2315,12 @@ inline void TypeCheck::CheckContinue(Node *n) {
     if (si == -2) Error(n, "continue cannot cross a const for expansion boundary");
     if (si == -3) JumpLeavesDefer(n, "continue");
     if (si < 0) Error(n, "continue outside of a loop");
+    // A continue of a par for ends its iteration; one of a loop around the
+    // par for would leave the body (§4.3 R4).
+    if (InPar() && si < Par().scope)
+        Error(n, cat("continue of a loop around a par for: an iteration of the par for ends "
+                     "by running to the end of its body or by its own continue "
+                     "(docs/design/child_threads.md §4.3 R4)"));
     auto &sc = scopes[si];
     sc.backedge = sc.backedges ? JoinFlow(sc.backedge, SaveFlow()) : SaveFlow();
     sc.backedges = true;
@@ -2822,6 +2870,10 @@ inline void TypeCheck::CheckAssign(Assign *a) {
         }
     }
     auto lv = CheckLValue(a->lval);
+    // A par for's body writes no variable from outside it as a whole but a
+    // reduction (§4.3 R1, §4.6), and nothing reached from one but what the
+    // iteration owns, which the view of it leaves writable (LVal::parfrom).
+    if (lv.var && ParCaptured(lv.var)) ParAssign(a, lv, a->op);
     // Generic code stores a whole value of a type parameter's type with `.=`
     // (§3.8): it rebinds where the type is a reference, and assigns as `=`
     // does where it is not, so moving elements never writes through them.
@@ -2867,6 +2919,8 @@ inline void TypeCheck::CheckAssign(Assign *a) {
     // (a narrowed optional included, since lv.type is the narrowed type)
     // writes the pointee; rebinding is `.=`.
     if (IsPlainRef(lv.type)) {
+        if (lv.parfrom && !PointeeWritable(lv, a))
+            ParWriteError(a, lv.parfrom, "cannot write through");
         if (a->op == T_ASSIGN) PointeeAssign(a, lv, held);
         else CompoundAssign(a, lv.type->ref->sub, PointeeWritable(lv, a));
         a->pointee = true;
@@ -2878,6 +2932,7 @@ inline void TypeCheck::CheckAssign(Assign *a) {
     if (a->op != T_ASSIGN) {
         NoCopyWrite(a, lv);
         NoLetAssign(a, lv);
+        if (!WholeWritable(lv) && lv.parfrom) ParWriteError(a, lv.parfrom, "cannot write through");
         CompoundAssign(a, lv.type, WholeWritable(lv));
         if (lv.var) RequireAssigned(lv.var, a);
         return;
@@ -2889,9 +2944,11 @@ inline void TypeCheck::CheckAssign(Assign *a) {
     } else {
         NoCopyWrite(a, lv);
         NoLetAssign(a, lv);
-        if (!WholeWritable(lv))
+        if (!WholeWritable(lv)) {
+            if (lv.parfrom) ParWriteError(a, lv.parfrom, "cannot write through");
             Error(a, "cannot assign through this path (const, or a read-only "
                      "instantiation, §9.5)");
+        }
         AssignableClassCheck(target, a);
     }
     if (IsPendingArray(target)) {
@@ -2949,9 +3006,11 @@ inline void TypeCheck::CheckRebind(Assign *a, LVal &lv) {
             Error(a, cat("cannot rebind let ", lv.var->name));
     } else {
         NoLetAssign(a, lv);
-        if (!lv.writable)
+        if (!lv.writable) {
+            if (lv.parfrom) ParWriteError(a, lv.parfrom, "cannot rebind through");
             Error(a, "cannot assign through this path (const, or a read-only "
                      "instantiation, §9.5)");
+        }
     }
     Val v;
     bool wasplain;
@@ -2995,11 +3054,13 @@ inline void TypeCheck::CheckRebind(Assign *a, LVal &lv) {
 inline bool TypeCheck::PointeeWritable(LVal &lv, Node *at) {
     if (lv.var) {
         RequireAssigned(lv.var, at);
-        return lv.var->ref.writable;
+        return lv.var->ref.writable && !ParView(lv.var);
     }
     // Read out of a slot: writable unless the slot's type says const, the
-    // only way a read-only reference got into it (§9.5).
-    return !lv.type->cq;
+    // only way a read-only reference got into it (§9.5). In a par for's body
+    // nothing launders writability: a reference read out of storage the
+    // body cannot write is read-only too (§4.3 R1).
+    return !lv.type->cq && !(InPar() && !lv.writable);
 }
 
 // `r = v` through the reference at lv, whose pointee is the location `at`
@@ -3228,6 +3289,8 @@ inline void TypeCheck::CompoundAssign(Assign *a, TypeExpr *st, bool writable) {
 
 inline void TypeCheck::CheckIncDec(IncDec *x) {
     auto lv = CheckLValue(x->lval);
+    // As an assignment's in a par for's body (CheckAssign).
+    if (lv.var && ParCaptured(lv.var)) ParAssign(x, lv, x->op);
     auto st = lv.type;
     auto writable = WholeWritable(lv);
     if (IsPlainRef(lv.type)) {
@@ -3238,6 +3301,7 @@ inline void TypeCheck::CheckIncDec(IncDec *x) {
         NoLetAssign(x, lv);
         if (lv.var) RequireAssigned(lv.var, x);
     }
+    if (!writable && lv.parfrom) ParWriteError(x, lv.parfrom, "cannot modify through");
     if (!writable) Error(x, "cannot modify through this path (const, or a read-only "
                             "instantiation, §9.5)");
     if (!IsIntT(st))

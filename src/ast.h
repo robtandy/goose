@@ -1358,6 +1358,13 @@ NODE(ForLoop)
     // threads of the program's pool (TypeCheck::FinishParFor,
     // CodeGen::OutlineParLoops), or one after another as `for` does.
     bool ispar = false;
+    // Filled by typecheck for a `par for`: the locals of the enclosing
+    // function it accumulates as integer reductions (§4.6), each with its
+    // operation (T_PLUSEQ for + and -, T_OREQ, T_ANDEQ or T_XOREQ), and the
+    // arrays it partitions with chunk_at, each with the bounds it takes,
+    // which the fork checks once before any iteration runs.
+    vector<pair<VarDef *, TType>> reductions;
+    vector<pair<VarDef *, VarDef *>> chunkats;
     string_view var;
     string_view idxvar;         // Optional second binding; empty if absent.
     // The integer types written for a range's or count's binder and for an
@@ -2366,6 +2373,13 @@ struct FnSpec {
     // assigned at any of them, where none could be when it began: a call
     // reusing it takes them again (TypeCheck::ReplayOuterExits).
     vector<OuterExit> outerexits;
+    // Checked for a call made in a `par for` body (docs/design/child_threads.md
+    // §4.3), under its rules: no global written, no queue, thread, output or
+    // exit. Part of the key, as is, for a nested function, the loop itself,
+    // whose variables from outside its body such a function may name
+    // (TypeCheck::GetOrCreateSpec).
+    bool inpar = false;
+    ForLoop *parloop = nullptr;
     vector<int> litparams;         // Parameters that are literals (§7.7): part of the key.
     vector<LitAdapt> litadapts;    // The types those parameters adapted to in the body.
     vector<LitFlow> litflows;      // Where they were passed on as literals.

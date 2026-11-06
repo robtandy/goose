@@ -472,6 +472,10 @@ inline Val TypeCheck::ResolveCall(Call *c, vector<SFunction *> &cands, FnSpec *e
     // Arguments the re-check rebound by reference replace the originals.
     c->SetArgNodes(argnodes);
     c->spec = spec;
+    if (InPar()) {
+        ParEffect(c, -1, best.sf);
+        ParCallNeeds(c, spec);
+    }
     CheckCalleeRelative(c, spec, argvals);
     CalleesReturn(c, { spec }, argsreach);
     return CallResult(c, spec, argvals);
@@ -1641,11 +1645,15 @@ inline FnSpec *TypeCheck::GetOrCreateSpec(MatchInfo &mi, vector<Val> &argvals, N
                                 (!owner || (!external && r->ownerspec && within(r->ownerspec, owner)));
         }
     }
+    // A call in a par for's body is checked under its rules (FnSpec::inpar).
+    auto inpar = InPar();
+    auto parloop = inpar && sf->isnested ? Par().loop : nullptr;
     for (auto spec : sf->specs) {
         // A reuse would merge an exemplar's call into what the real calls
         // agreed on (CheckExemplars).
         if (spec->id < exemplarbase) continue;
         if (spec->lexparent != mi.env) continue;
+        if (spec->inpar != inpar || spec->parloop != parloop) continue;
         if (!spec->inprogress && spec->narrowedenv != narrowedenv) continue;
         // A cycle's member due for its next round is checked again below
         // with what it reads then. A failed one read what it read before
@@ -1765,6 +1773,8 @@ inline FnSpec *TypeCheck::GetOrCreateSpec(MatchInfo &mi, vector<Val> &argvals, N
     auto spec = ast.NewFnSpec();
     spec->sf = sf;
     spec->lexparent = mi.env;
+    spec->inpar = inpar;
+    spec->parloop = parloop;
     spec->narrowedenv = narrowedenv;
     spec->argtypes = mi.paramtypes;
     spec->roots = roots;
@@ -2919,6 +2929,10 @@ inline void TypeCheck::CheckSpecBodyOnce(FnSpec *spec, vector<Val> *argvals, Lin
     // In progress from here, so that an error before the body's check, an
     // extern's included, leaves it failed (Checkpoint).
     spec->inprogress = true;
+    // A body checked for no par for's call is held to no par for's rules,
+    // whichever body is being checked as it is reached (FnSpec::inpar).
+    std::optional<ParScope> nopar;
+    if (!spec->inpar && InPar()) nopar.emplace(*this, nullptr);
     // A body is checked inside the call that first reaches it, so the native
     // stack holds one of these per call on the compile-time call path.
     if (StackLow()) {
@@ -3689,6 +3703,7 @@ inline void TypeCheck::CheckReturn(Return *r) {
     // A return written in a defer body, or in a function value written in
     // one, would leave the body (§6.6), whichever function it exits.
     if (deferbodies && InDeferBody()) Error(r, "return cannot leave a defer body (§6.6)");
+    ParExit(r, tf, r->from.empty() ? "return" : "return ... from");
     auto tspec = frames[tf].spec;
     r->target = frames[tf].sf;
     r->targetspec = tspec;

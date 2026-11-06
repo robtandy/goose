@@ -20,6 +20,7 @@
 #include "typecheck_calls.h"
 #include "typecheck_builtins.h"
 #include "typecheck_nodes.h"
+#include "typecheck_par.h"
 #include "optimize.h"
 #include "optimize_basecase.h"
 #include "optimize_tre.h"
