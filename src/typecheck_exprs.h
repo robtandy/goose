@@ -453,7 +453,8 @@ inline void TypeCheck::Ascend(Node *n) {
 // path leads to, a temporary's exactly); the references a holder holds,
 // each as a reference to its pointee; a builtin's receiver as a reference
 // to the array it is, or its elements where the builtin reads them
-// (to_bytes, a slice); an assignment's location as recorded (CheckAssign).
+// (to_bytes, a slice) or views them, as a slice of it would (chunk,
+// chunk_at); an assignment's location as recorded (CheckAssign).
 template<typename F>
 void TypeCheck::HoldAs(Node *n, const Val &v, HoldKind kind, Node *parent, const char *render,
                        F f) {
@@ -482,7 +483,8 @@ void TypeCheck::HoldAs(Node *n, const Val &v, HoldKind kind, Node *parent, const
             TypeExpr *elem = rt->kind == TY_ARRAY ? rt->arr->sub
                              : rt->kind == TY_SLICE ? rt->sub : nullptr;
             auto held = v;
-            auto elems = c->builtin == B_TO_BYTES || rt->kind == TY_SLICE;
+            auto elems = c->builtin == B_TO_BYTES || c->builtin == B_CHUNK ||
+                         c->builtin == B_CHUNK_AT || rt->kind == TY_SLICE;
             if (elems) {
                 if (!elem) return;
                 held.type = ast.SliceOf(elem, n->line);

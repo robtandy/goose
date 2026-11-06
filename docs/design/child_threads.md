@@ -40,8 +40,11 @@
 
 </details>
 
-Research note, November 2026. Nothing here is implemented, and every piece
-of syntax is a placeholder. The question, from
+Research note, November 2026. Only the chunking builtins `chunk` and
+`chunk_at` of [4.4](#44-disjoint-writes-structural-first-proven-second)
+are implemented, as ordinary slicing (step 1 of
+[section 7](#7-recommendation-and-order); spec §3.10); nothing else here
+is, and every other piece of syntax is a placeholder. The question, from
 [goose#234](https://github.com/aardappel/goose/issues/234), is how a Goose
 program can split work over a large array across cores *without copying
 the array*: threads that read the parent's data in place and each write a

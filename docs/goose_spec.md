@@ -1075,6 +1075,23 @@ are legal when its provenance is writable (§9.5).
   `let s: const u8[:] = make();` binds a view of a temporary and is an
   error. (An array literal of variable-size elements is not such an array:
   it has no temporary to be sliced, §4.2.)
+* Cut into runs by the members `a.chunk(k, n)` and `a.chunk_at(bounds, k)`
+  (or `chunk(a, k, n)`, `chunk_at(a, bounds, k)`), on any array-family value
+  or slice `a` of fixed-size elements. Each is exactly the slice `a[lo..hi]`
+  of the bounds it computes: a `T[:]`, or a `const T[:]` where `a` is
+  read-only, rooted where `a`'s elements lie (§9.2, §9.5). For `chunk`, with
+  `q = a.len / n` and `r = a.len % n`, `lo = k * q + min(k, r)` and
+  `hi = lo + q + (k < r ? 1 : 0)`: for `k` in `0..n` the runs are
+  contiguous, cover `a`, and differ in length by at most one, the longer
+  ones first. For `chunk_at`, `lo = bounds[k]` and `hi = bounds[k + 1]`,
+  where `bounds` is any `i64` array or slice, taken as a `const i64[:]`;
+  `k` and `n` are `i64`. As slicing does, either reads `a`'s elements and
+  length before its other arguments run, which therefore cannot shrink `a`
+  (§5.1). Both check at run time, in every build: a count `n` of zero or
+  less, a `k` outside `0..n` (for `chunk_at`, outside `0..bounds.len - 1`),
+  and bounds with `lo < 0`, `hi < lo` or `hi > a.len` abort (§9.3).
+  (`design/child_threads.md` §4.4 proposes them as the disjoint runs of a
+  parallel loop.)
 * Slices of fixed-element arrays index and iterate, bounds-checked against
   the slice's own length. Slices never grow; shrinking a slice (re-slicing)
   is always safe.
@@ -3924,6 +3941,9 @@ task (§11.2), each of them except the last two ends only that worker or task:
   build), and a conversion into an index or bound type outside its array
   (§3.11), elided the same way;
 * a reusable pool's `free(i)` with an index outside `[0, pool.len)`;
+* `a.chunk(k, n)` with a count `n` of zero or less or a `k` outside
+  `0..n`, and `a.chunk_at(bounds, k)` with a `k` outside
+  `0..bounds.len - 1` or bounds that fall or leave `a` (§3.10);
 * a slice pool's `alloc_slice`/`realloc_slice` with a negative length, or
   one no data stack could hold (§5.4);
 * a slice pool's `free_slice`/`realloc_slice` with a non-empty slice that is
@@ -4773,6 +4793,8 @@ And the array members, ordinary functions of their receiver per UFCS
 | `.range_index(s, msg?) -> i64` | the same, fixed-size elements | checked start of a contained slice; zero for empty (§3.3) |
 | `.check_length(n, msg?) -> i64` | grow-only, grow-shrink, fixed-size elements | validate a count without allocating (§3.3) |
 | `.move_from(src)` | slices, fixed-size elements | checked equal-length copy, safe for overlapping slices (§3.3) |
+| `.chunk(k, n) -> T[:]` | every array kind and slices, fixed-size elements | the `k`-th of `n` contiguous runs that cover the receiver, lengths differing by at most one (§3.10) |
+| `.chunk_at(bounds, k) -> T[:]` | the same | the run from `bounds[k]` to `bounds[k + 1]`, for `bounds` any `i64` array or slice (§3.10) |
 | `.alloc_index(v) -> i64`, `.alloc_ref(v) -> T&`, `.free(i)` | deprecated `reusable` pools | slot reuse (§5.4); prefer stdlib `slot_pool<T>` |
 | `.alloc_slice(n) -> T[:]`, `.realloc_slice(s, n) -> T[:]`, `.free_slice(s)` | deprecated `reusable[]` pools | slice reuse (§5.4); prefer stdlib `slice_pool<T>` |
 
