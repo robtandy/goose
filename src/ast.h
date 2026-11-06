@@ -8,6 +8,7 @@ namespace goose {
 struct Node;
 struct Block;
 struct Break;
+struct ForLoop;
 struct FunVal;
 struct TypeExpr;
 struct SFunction;
@@ -1145,6 +1146,12 @@ NODE(Call)
     // §3.4), rather than cutting out into chunks `T[:]`.
     bool pool_growable = false;
     TypeExpr *qtype = nullptr;  // qlimit<T>: T, which names the queue (§11.2).
+    // Codegen's outlining of a `par for` (CodeGen::OutlineParLoops): this
+    // call to the function its body became stands where the loop did, and
+    // runs the loop's chunks on the pool, or the whole range itself where
+    // the program runs sequentially (CodeGen::EmitParFor). Its arguments are
+    // the range's ends, or the sequence the loop walks.
+    ForLoop *parfor = nullptr;
     const string *shaderblob = nullptr;  // embed_shader's compiled blob or embed_file's bytes, in Ast::shaders.
     Call(Line l, Node *_callee) : Node(l, NKind), callee(_callee) {}
     // What the call passes for the callee's free variable v (fvremap).
@@ -1365,6 +1372,13 @@ NODE(ForLoop)
     // which the fork checks once before any iteration runs.
     vector<pair<VarDef *, TType>> reductions;
     vector<pair<VarDef *, VarDef *>> chunkats;
+    // Set by codegen's outlining (CodeGen::OutlineParLoops) on the loop the
+    // outlined body of a `par for` runs: the parameters of that function
+    // holding the chunk's first index and the one past its last, of an
+    // array or slice the loop walks (whose view is the function's parameter
+    // iter names), and the iteration count before the chunk, where a range's
+    // or count's index binder counts from it.
+    VarDef *parlo = nullptr, *parhi = nullptr, *parix = nullptr;
     string_view var;
     string_view idxvar;         // Optional second binding; empty if absent.
     // The integer types written for a range's or count's binder and for an

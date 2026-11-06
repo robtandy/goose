@@ -35,6 +35,7 @@
 #include "codegen_stmts.h"
 #include "codegen_calls.h"
 #include "codegen_builtins.h"
+#include "codegen_par.h"
 #include "codegen_render.h"
 #include "codegen_emit.h"
 #include "codegen_stacks.h"
