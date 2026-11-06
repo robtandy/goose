@@ -5376,7 +5376,10 @@ results: `EnsureEr` compiles a second, `_er` twin of the callee that emits
 raw elements plus a count, so that `v.append(f())` is contiguous. A callee
 without a twin (a builtin, a dispatch, a `return from` target) delivers the
 value form, and the receiver slides the length prefix out with one
-`memmove` (`EmitSlidePrefix`). A `T[]` result that ends up in a slot of
+`memmove` (`EmitSlidePrefix`). A builtin whose result is fixed-size (the
+slice of `chunk` or `bytes_of`, a fixed array) builds nothing at the
+destination: the run is built from the C value it returns
+(`ConstructCall`). A `T[]` result that ends up in a slot of
 another length storage is re-prefixed afterwards (`EmitReprefix`). A
 runtime-capacity limited result (`T[..]`) has no run form: `EmitAppend`
 builds its image on the destination stack, then compacts its live elements

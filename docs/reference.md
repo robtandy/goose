@@ -910,6 +910,8 @@ read the same way.
 | `.index_of(r) -> i64` | arrays of fixed-size elements | the index of the element `r` refers to |
 | `.range_index(s, msg?) -> i64` | the same | the start of a wholly contained slice; checked when provenance does not prove it |
 | `.check_length(n, msg?) -> i64` | grow-only, grow-shrink, fixed-size elements | validates a count against the data-stack reservation; returns it without changing the array |
+| `.chunk(k, n) -> T[:]` | every array kind and slices, fixed-size elements | the `k`-th of `n` contiguous runs that cover the array, as a slice ([section 7](#7-slices)) |
+| `.chunk_at(bounds, k) -> T[:]` | the same | the run `a[bounds[k]..bounds[k + 1]]`, as a slice ([section 7](#7-slices)) |
 
 Growth always supplies element values: there is no operation that exposes
 an uninitialized slot. Exceeding a limited array's capacity aborts; so does
@@ -1114,6 +1116,32 @@ fn main() {
 ```
 10 150 90 90 1 2
 [20, 30] true
+```
+
+**Chunks** are slices whose bounds the member that takes them computes.
+`a.chunk(k, n)` is the `k`-th of `n` contiguous runs of `a`, for `k` in
+`0..n`: together they cover `a`, and their lengths differ by at most one,
+the longer ones first. `a.chunk_at(bounds, k)` is
+`a[bounds[k]..bounds[k + 1]]`, for `bounds` any `i64` array or slice. Each
+is the slice `a[lo..hi]` would be, writable where `a` is and checked like
+it; a count of zero or less, a `k` with no run, and bounds that fall or
+leave `a` abort. Spec §3.10.
+
+```goose
+fn main() {
+    var xs: i64[>..] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    for k in 3 { print(xs.chunk(k, 3)); }  // 10 in 3 runs: 4, 3 and 3 long
+    let bounds: i64[4] = [0, 2, 2, 10];
+    for &x in xs.chunk_at(bounds, 2) { x *= 10; }
+    print(xs.chunk_at(bounds, 0), " ", xs.chunk_at(bounds, 1), " ", xs);
+}
+```
+
+```
+[0, 1, 2, 3]
+[4, 5, 6]
+[7, 8, 9]
+[0, 1] [] [0, 1, 20, 30, 40, 50, 60, 70, 80, 90]
 ```
 
 A slice is **checked**. It carries a static root, the variable that bounds
@@ -4343,8 +4371,9 @@ standard library, written in Goose under `stdlib/` and documented in
 | `embed_file(path)`, `embed_shader(…)` | a file's bytes, or a compiled shader, read at compile time | [21](#embed_file) |
 
 The array members, `.len`, `.cap`, `.push`, `.append`, `.pop`, `.pop_n`,
-`.resize`, `.clear`, `.index_of`, `.range_index`, `.check_length`, `.move_from` are in
-[section 5](#members). The stdlib pool APIs and deprecated builtin operations
+`.resize`, `.clear`, `.index_of`, `.range_index`, `.check_length`, `.move_from`,
+`.chunk`, `.chunk_at` are in [section 5](#members), the last two also in
+[section 7](#7-slices). The stdlib pool APIs and deprecated builtin operations
 `.alloc_index`, `.alloc_ref`, `.free`, `.alloc_slice`, `.realloc_slice`,
 `.free_slice` are in [section 14](#14-reusable-pools).
 Spec §12.

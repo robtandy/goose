@@ -1781,6 +1781,8 @@ struct TypeCheck {
     void RequireAssigned(VarDef *vd, Node *at, string_view use = {});
     void RequireIndexArray(TypeExpr *t, Node *at, string_view what);
     void SliceProvenance(LVal &lv, Node *at);
+    LVal SlicedPath(Node *obj, bool cmpview = false);
+    Val SliceVal(const LVal &lv, TypeExpr *elem, Line line);
     void ReadBackLVal(LVal &lv);
     bool SlotLoadWritable(TypeExpr *t, bool path);
     Val ContainerRead(LVal lv);
@@ -2481,6 +2483,7 @@ struct TypeCheck {
     // Builtins (§3.7, §9.3, §11.2) and array members (§3.3, §5.4).
 
     Val CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> &args, Val *precv);
+    Val CheckChunk(Call *c, const BuiltinDef &d, vector<Node *> &args);
     Val CheckByteOut(Call *c, Node *out, const string &form);
     void CheckPrintable(Call *c, const char *what, vector<Node *> &args, size_t i,
                         const Val *out = nullptr);

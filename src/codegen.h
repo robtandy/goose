@@ -1362,6 +1362,7 @@ struct CodeGen {
     Loc RecvLoc(Node *n);
     string LenCast(const Loc &lv);
     vector<string> EmitBuiltin(Call *c, Dst d0);
+    vector<string> EmitChunk(Call *c, vector<Node *> &an, Line ln);
 
     // ------------------------------------------------------------------
     // Text forms (§3.7): print, str and format share them. A scalar's text

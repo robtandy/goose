@@ -485,6 +485,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             if (!IsRefOrSlice(vt)) v = TempCopy(v);
             return v;
         }
+        case B_CHUNK: case B_CHUNK_AT: return CheckChunk(c, d, args);
         default: break;
     }
     // Member receiver validation, from the table.
@@ -864,6 +865,41 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             break;
         default: assert(false);
     }
+    return v;
+}
+
+// a.chunk(k, n) and a.chunk_at(bounds, k) (docs/design/child_threads.md
+// §4.4): a run of a's elements whose bounds the call computes, and checks,
+// when it runs. It is the slice a[lo..hi] would be (SliceExpr::Check), taken
+// of the receiver's path as that takes its object's: rooted where a's
+// elements lie, writable where they are and `const` where they are
+// read-only (§9.5), so that the rules of §9 judge it as they judge that
+// slice. The receiver's elements are held while the arguments after it run,
+// as a slice's object is while its bounds do (ForOperands, HK_ELEMS).
+inline Val TypeCheck::CheckChunk(Call *c, const BuiltinDef &d, vector<Node *> &args) {
+    auto lv = SlicedPath(args[0]);
+    TypeExpr *elem = nullptr;
+    if (lv.type->kind == TY_SLICE) {
+        elem = lv.type->sub;
+    } else if (lv.type->kind == TY_ARRAY) {
+        RequireComplete(lv.type, c->line);
+        elem = lv.type->arr->sub;
+    } else {
+        Error(c, cat(".", d.name, " is not available on ", TypeStr(lv.type)));
+    }
+    if (ClassOf(elem) != SC_FIXED)
+        Error(c, cat(".", d.name, " needs fixed-size elements: ", TypeStr(lv.type),
+                     " is sequential (§3.3)"));
+    if (lv.intemp) NoRelRefTempRead(args[0], lv.type, elem);
+    auto i64 = ast.inttypes[IS_I64];
+    // chunk(k, n): the k-th of n runs; chunk_at(bounds, k): the k-th run
+    // between the offsets of any i64 array or slice.
+    if (d.kind == B_CHUNK) CheckArg(args[1], i64);
+    else CheckArg(args[1], ast.ConstOf(ast.SliceOf(i64, c->line)));
+    CheckArg(args[2], i64);
+    auto v = SliceVal(lv, elem, c->line);
+    // What an adapting receiver (a limited array) constructs from.
+    c->rettypes.push_back(v.type);
     return v;
 }
 
