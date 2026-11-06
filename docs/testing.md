@@ -252,7 +252,11 @@ callee, by a nested function, through a reference loaded out of it, and
 through a reference or slice a plain `for` in the body binds out of an
 array from outside it), the reductions (`float_reduction`,
 `reduction_mixed`, `reduction_read`, and `reused_reduction_read`, through
-a generic function reused from another loop), R2 (`chunk_alias`,
+a generic function reused from another loop; `reduction_alias`,
+`reduction_alias_callee`, `reduction_alias_holder` and
+`reduction_alias_readback`: a reduction read through a reference to it,
+an array of them handed to a callee, a holder, and a reference read out of
+storage in the body), R2 (`chunk_alias`,
 `chunk_whole_read`, `element_alias`, `bounds_alias`, `chunk_two_ways`,
 `field_named_len`, `shifted_index`, `shifted_chunk`, `param_global_alias`
 and `reused_alias`: a partitioned array read another way, an element of
@@ -260,7 +264,11 @@ it or the whole of it, or cut two ways; an element's field named `len`,
 which is no length; two views of one array from different starts, by
 index and by chunk; a parameter's elements owned beside a read of a global
 the parameter may be, directly and through a function reused from another
-loop; `nested_alias` and `nested_outer_write`: an outer loop's
+loop; `reuse_inexact_after`, `reuse_inexact_before` and
+`reuse_inexact_via`: two parameters a later call, an earlier one, or the
+calls of a function passing its own parameters on, may give one array;
+`byte_view_alias` and `byte_view_readback`: a byte view that may be of the
+partitioned array, as a parameter and read out of a holder; `nested_alias` and `nested_outer_write`: an outer loop's
 partitioned array read in an inner loop's body, and an inner loop's
 element of what the outer loop sees from outside, which every outer
 iteration writes), R3 (`print`, `qput` in a callee, `exit`, `thread_pool`),

@@ -4806,19 +4806,25 @@ grown, shrunk or assigned meanwhile.
   storage no other way but for its length (an array's or slice's `.len` or
   `.cap`, not a field of the name): not through the variable, nor through
   another reference or slice that may point into it, read out of storage in
-  the body included, nor as `chunk_at`'s bounds. A parameter stands for
+  the body included, nor through a byte view (`bytes_of`), which may view
+  any array's elements, nor as `chunk_at`'s bounds. A parameter stands for
   storage its callers hand the function, which may be a global's, a
-  variable's of a function around it, or another parameter's where not
-  every call gives that one a root of its own exactly (§9.2), so where a
-  part lies in a parameter's storage, a use of any of those that may hold
-  the part's elements is a use of the part's storage. What a function the
-  body calls reaches counts as the body's, however often the function is
-  called from other `par for`s.
+  variable's of a function around it, or another parameter's where some
+  call does not give the two arrays apart, each named exactly (§9.2); as
+  that takes every call of the function to tell, through the calls of the
+  functions it is called from, it is judged once the whole program is
+  checked. So where a part lies in a parameter's storage, a use of any of
+  those that may hold the part's elements is a use of the part's storage.
+  What a function the body calls reaches counts as the body's, however
+  often the function is called from other `par for`s.
 * **Reductions.** A local integer of a function around the loop (not a
   `varint`, an index type or a reference) may be accumulated in the body by
   one associative operation, `+=` with `-=`, `++` and `--`, or `|=`, `&=`
   or `^=`, directly or by a nested function the body calls, where the body
-  reads and writes it no other way. Each chunk of iterations (below)
+  reads and writes it no other way: not by name, nor through a reference
+  that may point at it, or a holder or an array of references that may
+  lead to one, read in the body or handed to a function it calls. Each
+  chunk of iterations (below)
   accumulates its own, from the operation's identity, and the loop
   combines them into the variable in chunk order once every iteration has
   ended. Integers wrap exactly in any order (§6.2), so the result is the

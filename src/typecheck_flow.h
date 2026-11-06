@@ -2156,7 +2156,7 @@ inline void TypeCheck::CheckFor(ForLoop *x) {
                 if (iterprov.Any([&](const RootAlt &a) { return a.root && ParCaptured(a.root); }))
                     iterprov.writable = false;
                 if ((int)frames.size() - 1 == Par().frame || frames.back().isfunval)
-                    ParReadBack(iterprov, PointeeOf(bindtype));
+                    ParReadBack(iterprov, bindtype);
             }
         }
         auto vd = NewVar(x->var, bindtype, x->line, false, x->vdef);

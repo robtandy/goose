@@ -153,9 +153,10 @@ inline void TypeCheck::ParLengthUse(Node *at, VarDef *vd) {
     ParApply(n);
 }
 
-// A reference or slice of pointee type t read out of storage in a par for's
-// body, which may point at r: what it reads or writes there may be a part
-// of another iteration (FinishParFor), for every par for whose body this is.
+// A reference or slice of type t read out of storage in a par for's body,
+// which may point at r: what it reads or writes there may be a part of
+// another iteration, or a reduction (FinishParFor), for every par for whose
+// body this is.
 inline void TypeCheck::ParReadBack(const Roots &r, TypeExpr *t) {
     auto at = cur.nodepath.empty() ? nullptr : cur.nodepath.back().node;
     for (auto i = (int)parctx.size() - 1; i >= 0 && parctx[i]; i--) {
@@ -236,10 +237,17 @@ inline Roots TypeCheck::ParRootsOf(VarDef *vd) {
     Roots r;
     if (vd->type && IsRefOrSlice(vd->type)) {
         r.Add(vd->ref.AsRoots());
-        return r;
+    } else {
+        r.Set(vd, true);
+        if (vd->type && HoldsPlainRef(vd->type)) r.Add(vd->contents);
     }
-    r.Set(vd, true);
-    if (vd->type && HoldsPlainRef(vd->type)) r.Add(vd->contents);
+    // And where the references held in that storage lead, and so on: a
+    // callee handed vd may read them out and follow them.
+    for (size_t i = 0; i < r.alts.size(); i++) {
+        auto x = r.alts[i].root;
+        if (!x || x == vd || (x->type && !HoldsPlainRef(x->type))) continue;
+        r.Add(x->contents);
+    }
     return r;
 }
 
@@ -401,53 +409,66 @@ inline void TypeCheck::ParCallNeeds(Node *at, FnSpec *callee) {
 }
 
 // The specialization whose parameter's class r is, on the compile-time path,
-// and whether its calls all gave that parameter one root exactly
-// (RootArg::exact): where they did, another such class of it is other
-// storage. Null where no frame's specialization has r as a class.
-inline FnSpec *TypeCheck::ClassSpecOf(VarDef *r, bool &exact) {
-    exact = false;
+// and whether its calls so far all gave that parameter one root exactly, an
+// array other than every other argument's (RootArg::exact, concrete): only
+// then may another such class of it be other storage, which the calls yet
+// to come may still deny (ResolveGrowConflicts). The contents of a holder
+// parameter (a view class) are never known apart. Null where no frame's
+// specialization has r as a class.
+inline FnSpec *TypeCheck::ClassSpecOf(VarDef *r, bool &distinct) {
+    distinct = false;
     for (auto i = (int)frames.size() - 1; i >= 0; i--) {
         auto sp = frames[i].spec;
         if (!sp || frames[i].isfunval) continue;
         auto view = false;
         auto p = ClassParam(sp, r, view);
         if (p < 0) continue;
-        exact = view ? (p < (int)sp->views.size() && sp->views[p].exact)
-                     : (p < (int)sp->roots.size() && sp->roots[p].exact);
+        distinct = !view && p < (int)sp->roots.size() && sp->roots[p].exact &&
+                   sp->roots[p].concrete;
         return sp;
     }
     return nullptr;
 }
 
-// Whether a value with alternative `a` may lead to storage `root`, a part's,
-// in the par for of ctx. A variable's own storage is no other's, and what
-// the loop's own activation made is no caller's; but a parameter's class
-// stands for what callers handed the activation, which may be any of their
-// storage: a global's, a variable's of a function around this one, another
-// class's, but for another class of the same specialization whose calls all
-// gave both one root exactly. A bound, an inexact alternative, may be
+// Whether a value with alternative `a` may lead to storage `root`, a part's
+// or a reduction's, in the par for of ctx (MayAliasRoots, for a par for). A
+// variable's own storage is no other's, nor are two components of one root
+// struct, and what the loop's own activation made is no caller's; but a
+// parameter's class stands for what callers handed the activation, which
+// may be any of their storage: a global's, a variable's of a function
+// around this one, another class's. Two classes of one specialization are
+// other storage only where every call reaching it gives them arrays apart,
+// which only the last of those calls settles: AL_DEFER, with the
+// specialization in `defer`. A bound, an inexact alternative, may be
 // anything outside its scope.
-inline bool TypeCheck::ParMayAlias(const RootAlt &a, VarDef *root, ParCtx &ctx) {
+inline TypeCheck::Alias TypeCheck::ParMayAlias(const RootAlt &a, VarDef *root, ParCtx &ctx,
+                                               FnSpec *&defer) {
+    defer = nullptr;
     auto r = a.root;
-    if (r == root) return true;
+    if (r == root) return AL_YES;
     // Static data, and a const global's storage, are read-only, and no
     // writable part lies in either.
-    if (!r || !root || (r->isglobal && r->type && r->type->cq)) return false;
-    if (!a.exact) return WithinDepth(root, r);
+    if (!r || !root || (r->isglobal && r->type && r->type->cq)) return AL_NO;
+    if (!a.exact) return WithinDepth(root, r) ? AL_YES : AL_NO;
+    if (r->componentowner && r->componentowner == root->componentowner &&
+        r->componentfield != root->componentfield && TypeEq(r->componentbase, root->componentbase))
+        return AL_NO;
     auto spec = frames[ctx.frame].spec;
     auto own = [&](VarDef *v) {
         return IsTemp(v) || (!IsClassRoot(v) && !v->isglobal && v->ownerspec == spec);
     };
-    if (own(root) || own(r)) return false;
+    if (own(root) || own(r)) return AL_NO;
     auto rc = IsClassRoot(root), ac = IsClassRoot(r);
-    if (!rc && !ac) return false;
+    if (!rc && !ac) return AL_NO;
     if (rc && ac) {
-        bool re = false, ae = false;
-        auto rs = ClassSpecOf(root, re);
-        auto as = ClassSpecOf(r, ae);
-        return !(rs && rs == as && re && ae);
+        bool rd = false, ad = false;
+        auto rs = ClassSpecOf(root, rd);
+        auto as = ClassSpecOf(r, ad);
+        if (!rs || rs != as || !rd || !ad) return AL_YES;
+        defer = rs;
+        return AL_DEFER;
     }
-    return true;
+    return AL_YES;
 }
 
 // Whether storage of type t holds a run of elements of type e, which a part
@@ -460,18 +481,40 @@ inline bool TypeCheck::ParHoldsRun(TypeExpr *t, TypeExpr *e) {
     return AnyField(t, [&](TypeExpr *ft) { return ParHoldsRun(ft, e); });
 }
 
+// Whether a reference or slice of pointee type p may lead to a part's
+// storage, a run of elements of type e: point at an element of it or at
+// what holds the run; view it as bytes, as a byte view (bytes_of) may any
+// array's elements; or point at references, which lead anywhere
+// (ParRootsOf takes their roots).
+inline bool TypeCheck::ParPointeeReaches(TypeExpr *p, TypeExpr *e) {
+    return !p || !e || IsU8(p) || IsRefOrSlice(p) || HoldsPlainRef(p) || MayHoldValueOf(e, p) ||
+           ParHoldsRun(p, e);
+}
+
 // Whether what a use of vd reaches may be a part's storage of elements of
-// type e: where a reference or slice of it points, an element of the part or
-// what holds the part's run; vd's own storage, where that holds such a run;
-// and anything, where vd holds references (ParRootsOf takes their roots).
+// type e: where a reference or slice of it points (ParPointeeReaches); vd's
+// own storage, where that holds such a run; and anything, where vd holds
+// references (ParRootsOf takes their roots).
 inline bool TypeCheck::ParUseReaches(VarDef *vd, TypeExpr *e) {
     auto t = vd->type;
     if (!t || !e) return true;
+    if (IsRefOrSlice(t)) return ParPointeeReaches(PointeeOf(t), e);
+    return HoldsPlainRef(t) || ParHoldsRun(t, e);
+}
+
+// Whether a value of type t may lead to rv, an integer variable (a
+// reduction's), other than by naming it: as a reference that may point at
+// it, or by references it holds or points at (ParRootsOf takes their roots).
+// A slice views an array's elements, never a variable of its own, and a
+// byte view the elements of an array too.
+inline bool TypeCheck::ParReachesVar(TypeExpr *t, VarDef *rv) {
+    if (!t || !rv->type) return true;
     if (IsRefOrSlice(t)) {
         auto p = PointeeOf(t);
-        return !p || MayHoldValueOf(e, p) || ParHoldsRun(p, e);
+        if (!p || IsRefOrSlice(p) || HoldsPlainRef(p)) return true;
+        return t->kind == TY_REF && MayHoldValueOf(rv->type, p);
     }
-    return HoldsPlainRef(t) || ParHoldsRun(t, e);
+    return HoldsPlainRef(t);
 }
 
 // The body is checked: its parts must each be cut one way and reached no
@@ -496,10 +539,20 @@ inline void TypeCheck::FinishParFor(ForLoop *x, ParCtx &ctx) {
         }
         return "";
     };
-    // Whether a value of pointee type t may lie in a run of elements of type
-    // e, or hold one: point into a part, or at what a part is a run of.
-    auto reaches = [&](TypeExpr *t, TypeExpr *e) {
-        return !t || !e || MayHoldValueOf(e, t) || ParHoldsRun(t, e);
+    // A use or a part that may reach storage x, where y lies: an error where
+    // the two may be one storage, and where only the call sites can tell
+    // (two classes of one specialization), one ResolveGrowConflicts reports
+    // unless every call reaching it passed them arrays apart.
+    auto clash = [&](Alias al, FnSpec *sp, VarDef *xr, VarDef *yr, Node *at, auto msg) {
+        if (al == AL_YES) Error(at, msg());
+        if (al == AL_DEFER && pardeferred.insert({ at, sp, xr, yr }).second)
+            growconflicts.push_back({ at, sp, xr, yr, msg() });
+    };
+    auto redmsg = [&](string what, VarDef *rv, Node *first) {
+        return cat(what, " may point at ", rv->name, ", a reduction of this par for (",
+                   Where(first->line), "), so the body may not read it through ",
+                   "that: each chunk of iterations keeps a total of its own, which the loop "
+                   "combines once they all end (docs/design/child_threads.md §4.6)");
     };
     for (size_t i = 0; i < ctx.parts.size(); i++) {
         auto &b = ctx.parts[i];
@@ -520,16 +573,20 @@ inline void TypeCheck::FinishParFor(ForLoop *x, ParCtx &ctx) {
             }
             // Two views that may be of one storage may start at different
             // elements of it, whatever their cuts.
+            auto kin = !a.elem || !b.elem || MaySameType(a.elem, b.elem) || IsU8(a.elem) ||
+                       IsU8(b.elem);
+            if (!kin) continue;
             RootAlt ra;
             ra.root = b.root;
             ra.exact = true;
-            auto kin = !a.elem || !b.elem || MaySameType(a.elem, b.elem) || IsU8(a.elem) ||
-                       IsU8(b.elem);
-            if (kin && ParMayAlias(ra, a.root, ctx))
-                Error(b.at, cat("a par for's iterations own ", formname(b), " here and ",
-                                formname(a), " at ", Where(a.at->line), ", which may be views "
-                                "of one array from different starts, and so overlap between "
-                                "iterations (docs/design/child_threads.md §4.4)"));
+            FnSpec *sp = nullptr;
+            auto al = ParMayAlias(ra, a.root, ctx, sp);
+            clash(al, sp, b.root, a.root, b.at, [&] {
+                return cat("a par for's iterations own ", formname(b), " here and ",
+                           formname(a), " at ", Where(a.at->line), ", which may be views of "
+                           "one array from different starts, and so overlap between "
+                           "iterations (docs/design/child_threads.md §4.4)");
+            });
         }
     }
     for (auto &[at, vd] : ctx.uses) {
@@ -537,43 +594,80 @@ inline void TypeCheck::FinishParFor(ForLoop *x, ParCtx &ctx) {
         auto roots = ParRootsOf(vd);
         for (auto &p : ctx.parts) {
             auto mine = vd == p.var;
-            if (!mine && !roots.Any([&](const RootAlt &a) {
-                    return a.root == p.root ||
-                           (ParUseReaches(vd, p.elem) && ParMayAlias(a, p.root, ctx));
-                }))
-                continue;
-            Error(at, cat(vd->name, " is ", mine ? "" : "or may point into storage ",
-                          "partitioned by this par for, each iteration owning ", formname(p),
-                          " (", Where(p.at->line), "), so no iteration may read or write ",
-                          mine ? "it" : "that storage", " any other way: another "
-                          "iteration may be writing what this one reads "
-                          "(docs/design/child_threads.md §4.4)",
-                          vd->isglobal && !mine
-                              ? cat("; a global that is only read can be declared const, which "
-                                    "no part lies in")
-                              : string()));
+            auto msg = [&] {
+                return cat(vd->name, " is ", mine ? "" : "or may point into storage ",
+                           "partitioned by this par for, each iteration owning ", formname(p),
+                           " (", Where(p.at->line), "), so no iteration may read or write ",
+                           mine ? "it" : "that storage", " any other way: another iteration "
+                           "may be writing what this one reads "
+                           "(docs/design/child_threads.md §4.4)",
+                           vd->isglobal && !mine
+                               ? cat("; a global that is only read can be declared const, "
+                                     "which no part lies in")
+                               : string());
+            };
+            if (mine) Error(at, msg());
+            auto reaches = ParUseReaches(vd, p.elem);
+            for (auto &a : roots.alts) {
+                FnSpec *sp = nullptr;
+                auto al = a.root == p.root ? AL_YES
+                          : reaches        ? ParMayAlias(a, p.root, ctx, sp)
+                                           : AL_NO;
+                clash(al, sp, a.root, p.root, at, msg);
+            }
         }
         for (auto &[rv, op, first] : ctx.reductions) {
-            if (rv != vd || ctx.redtargets.count(at)) continue;
-            Error(at, cat(vd->name, " is a reduction of this par for (", Where(first->line),
-                          "), so the body may only accumulate it, never read it or write it "
-                          "otherwise: each chunk of iterations keeps a total of its own, "
-                          "which the loop combines once they all end "
-                          "(docs/design/child_threads.md §4.6)"));
+            if (rv == vd) {
+                if (!ctx.redtargets.count(at))
+                    Error(at, cat(vd->name, " is a reduction of this par for (",
+                                  Where(first->line), "), so the body may only accumulate it, "
+                                  "never read it or write it otherwise: each chunk of "
+                                  "iterations keeps a total of its own, which the loop "
+                                  "combines once they all end "
+                                  "(docs/design/child_threads.md §4.6)"));
+                continue;
+            }
+            // Nor read it through a reference or what holds one.
+            if (!ParReachesVar(vd->type, rv)) continue;
+            for (auto &a : roots.alts) {
+                FnSpec *sp = nullptr;
+                auto al = ParMayAlias(a, rv, ctx, sp);
+                clash(al, sp, a.root, rv, at, [&] {
+                    return redmsg(string(vd->name), rv, first);
+                });
+            }
         }
     }
     // A reference or slice read out of storage in the body may lead to the
-    // storage of a part, whatever the variable whose storage it was read out
-    // of.
-    for (auto &rb : ctx.readbacks)
-        for (auto &p : ctx.parts)
-            if (reaches(rb.pointee, p.elem) &&
-                rb.roots.Any([&](const RootAlt &a) { return ParMayAlias(a, p.root, ctx); }))
-                Error(rb.at, cat("a reference or slice read out of storage here may point into "
-                                 "storage partitioned by this par for, each iteration owning ",
-                                 formname(p), " (", Where(p.at->line), "), so no iteration may "
-                                 "read or write it this way: another iteration may be writing "
-                                 "what this one reads (docs/design/child_threads.md §4.4)"));
+    // storage of a part, or to a reduction, whatever the variable whose
+    // storage it was read out of.
+    for (auto &rb : ctx.readbacks) {
+        auto pointee = rb.type && IsRefOrSlice(rb.type) ? PointeeOf(rb.type) : nullptr;
+        for (auto &p : ctx.parts) {
+            if (!ParPointeeReaches(pointee, p.elem)) continue;
+            for (auto &a : rb.roots.alts) {
+                FnSpec *sp = nullptr;
+                auto al = ParMayAlias(a, p.root, ctx, sp);
+                clash(al, sp, a.root, p.root, rb.at, [&] {
+                    return cat("a reference or slice read out of storage here may point into "
+                               "storage partitioned by this par for, each iteration owning ",
+                               formname(p), " (", Where(p.at->line), "), so no iteration may "
+                               "read or write it this way: another iteration may be writing "
+                               "what this one reads (docs/design/child_threads.md §4.4)");
+                });
+            }
+        }
+        for (auto &[rv, op, first] : ctx.reductions) {
+            if (!ParReachesVar(rb.type, rv)) continue;
+            for (auto &a : rb.roots.alts) {
+                FnSpec *sp = nullptr;
+                auto al = ParMayAlias(a, rv, ctx, sp);
+                clash(al, sp, a.root, rv, rb.at, [&] {
+                    return redmsg("a reference or slice read out of storage here", rv, first);
+                });
+            }
+        }
+    }
     // Added to what an earlier check of the same loop found (a recursive
     // cycle's round, say), whose functions this check reused: what they
     // reduce or partition they did not check again.

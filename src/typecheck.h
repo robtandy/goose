@@ -2269,11 +2269,11 @@ struct TypeCheck {
         vector<tuple<VarDef *, TType, Node *>> reductions;
         set<Node *> redtargets;
         // The references and slices read out of storage in the body, where
-        // they may point, of what type, and where they were read: none may
-        // lead to storage a part is of (FinishParFor).
+        // they may point, their type, and where they were read: none may
+        // lead to storage a part is of, nor to a reduction (FinishParFor).
         struct ParRead {
             Roots roots;
-            TypeExpr *pointee = nullptr;
+            TypeExpr *type = nullptr;
             Node *at = nullptr;
         };
         vector<ParRead> readbacks;
@@ -2325,12 +2325,13 @@ struct TypeCheck {
     void ParApply(const ParNote &n);
     void ParReplay(FnSpec *spec);
     void ParReadBack(const Roots &r, TypeExpr *t);
-    FnSpec *ClassSpecOf(VarDef *r, bool &exact);
+    FnSpec *ClassSpecOf(VarDef *r, bool &distinct);
     void ParReduce(Node *at, VarDef *vd, TType cls, Node *name);
     void ParLengthUse(Node *at, VarDef *vd);
-    bool ParMayAlias(const RootAlt &a, VarDef *root, ParCtx &ctx);
     bool ParHoldsRun(TypeExpr *t, TypeExpr *e);
+    bool ParPointeeReaches(TypeExpr *p, TypeExpr *e);
     bool ParUseReaches(VarDef *vd, TypeExpr *e);
+    bool ParReachesVar(TypeExpr *t, VarDef *rv);
     bool ParIndexPart(Index *ix, VarDef *&owned, VarDef *&by);
     bool ParOrdinal(VarDef *vd) {
         return vd && (vd == Par().ordinal || vd == Par().ordinal2);
@@ -3006,7 +3007,8 @@ struct TypeCheck {
     Alias MayAliasRoots(VarDef *a, bool aexact, VarDef *b, bool bexact);
     Alias MayAliasRoots(VarDef *a, bool aexact, VarDef *b, bool bexact, FnSpec *current);
     // A growth of, or a use of (CheckBuiltUses), a root the call sites have
-    // to tell apart from the one under construction.
+    // to tell apart from the one under construction; or a use in a par for's
+    // body of a root they have to tell apart from a part's (FinishParFor).
     struct GrowConflict {
         Node *at = nullptr;
         FnSpec *spec = nullptr;
@@ -3015,6 +3017,12 @@ struct TypeCheck {
         string msg;
     };
     vector<GrowConflict> growconflicts;
+    // Whether a value with alternative `a` may lead to `root`, a part's
+    // storage or a reduction, in the par for of ctx: AL_DEFER for two
+    // classes of `defer`, which only its call sites can tell apart.
+    Alias ParMayAlias(const RootAlt &a, VarDef *root, ParCtx &ctx, FnSpec *&defer);
+    // The par for conflicts left to ResolveGrowConflicts, once each.
+    set<tuple<Node *, FnSpec *, VarDef *, VarDef *>> pardeferred;
     // The right-hand side of a whole assignment runs while the array's new
     // contents are built over its old ones (§4.4), so nothing it runs may
     // use the array: name it, or a reference to it, directly or in a

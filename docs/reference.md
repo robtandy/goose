@@ -4156,15 +4156,18 @@ What the body may touch:
   variable, and the body reaches it no other way but for its `.len`:
   `c[0] = a[0]` beside `let c = a.chunk(k, 4)` is an error, since `a[0]` is
   another iteration's, and so is `a[k]` beside `b[k]` for two slices of one
-  array, which may start at different elements. Where `a` is a parameter,
-  which may be any array its callers pass, a global or another array that
-  may be the same one is not read in the body either.
+  array, which may start at different elements. A byte view (`bytes_of`)
+  may be of any array, so it counts as a view of `a` too. Where `a` is a
+  parameter, which may be any array its callers pass, a global or another
+  array that may be the same one is not read in the body either. Whether
+  two parameters are two arrays depends on every call of the function, so
+  the check waits for the whole program.
   A `par for` in another's body is held to the outer one's rules too: it
   writes only what the outer iteration owns.
 * **Reductions.** An integer of the caller's accumulated by one operation,
   `+=` (with `-=`, `++` and `--`), `|=`, `&=` or `^=`, and used no other way
-  in the body, is kept per chunk of iterations and added up in order once
-  they all end. A float sum is not a reduction, since its rounding would
+  in the body (not even read through a reference to it), is kept per chunk
+  of iterations and added up in order once they all end. A float sum is not a reduction, since its rounding would
   depend on how the iterations are cut; write `partial[k] = acc` and add
   the parts up after the loop.
 * **No other effects.** No `print`, `exit`, queue, worker or pool, and none

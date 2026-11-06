@@ -4227,16 +4227,27 @@ runs and `FinishParFor` judges once they have settled.
   (`ParMayAlias`) not to be of one element type; every use but a part's own
   name and a builtin `.len` or `.cap` (`partuses`, `ParLengthUse`) to reach
   no part's storage (`ParRootsOf`: the variable's storage and what it holds,
-  or where it points), and no read-back either; and a reduction's variable
-  to be used only by its updates (`redtargets`). Whether a root may be a
-  part's storage is `ParMayAlias`'s: the root itself; anything where the
-  alternative is inexact and outside the part's scope (`WithinDepth`);
-  and, where either is a parameter's class, which stands for storage the
-  activation's callers handed it, any global, variable of a function around
-  it or other class, but for a class of the same specialization where both
-  are exact in its key (`ClassSpecOf`, `RootArg::exact`). A use or read-back
-  counts only where what it reaches may hold a run of the part's elements
-  (`ParUseReaches`, `ParHoldsRun`).
+  or where it points, and where the references held there lead, closed
+  transitively, since a callee handed it may follow them), and no read-back
+  either; and a reduction's variable to be used only by its updates
+  (`redtargets`), and reached through no other use or read-back that may
+  lead to it (`ParReachesVar`: a plain reference to its type, or what
+  holds or points at references). Whether a root may be a part's storage,
+  or a reduction, is `ParMayAlias`'s, which follows `MayAliasRoots`: the
+  root itself; anything where the alternative is inexact and outside the
+  root's scope (`WithinDepth`); and, where either is a parameter's class,
+  which stands for storage the activation's callers handed it, any global,
+  variable of a function around it or other class. Two classes of one
+  specialization are `AL_DEFER` while every call so far gave both arrays
+  apart (`ClassSpecOf`: `RootArg::exact` and `concrete`, never a holder's
+  view class): exactness and concreteness are not part of the key, so a
+  later call reusing the specialization may still weaken them. The
+  conflict goes on `growconflicts` (deduplicated by `pardeferred`), and
+  `ResolveGrowConflicts` reports it unless both are still concrete and
+  exact once `SettleParamRootExactness` has seen every call. A use or
+  read-back counts only where what it reaches may hold a run of the
+  part's elements (`ParUseReaches`, `ParPointeeReaches`, `ParHoldsRun`),
+  which a `u8` pointee, a byte view of any array, always may.
 * **Replay.** What a check does that a par for judges -- a use, a
   reduction's update, a part, a part's own name, a length -- goes to the
   par fors on the stack through `ParApply`, which also records it with

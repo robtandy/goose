@@ -303,7 +303,7 @@ inline void TypeCheck::ReadBackLVal(LVal &lv) {
             }))
             lv.writable = false;
         if ((int)frames.size() - 1 == Par().frame || frames.back().isfunval)
-            ParReadBack(lv, PointeeOf(lv.type));
+            ParReadBack(lv, lv.type);
     }
 }
 
