@@ -510,6 +510,10 @@ struct Optimizer {
         function<void(Node *, int)> rec = [&](Node *n, int d) {
             if (!n) return;
             info.nodecount++;
+            // A par for runs on the pool from a function of its own
+            // (CodeGen::OutlineParLoops), which a global initializer's body
+            // gives it none of: the body holding one stays a call.
+            if (auto fl = Is<ForLoop>(n); fl && fl->ispar) noin = true;
             if (Is<Block>(n)) info.nest = max(info.nest, ++d);   // Its children sit inside it.
             if (auto c = Is<Call>(n)) {
                 auto callee = [&](FnSpec *k) {

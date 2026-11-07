@@ -43,27 +43,49 @@ inline void CodeGen::ParDeclared(Node *n, set<VarDef *> &out) {
     RunChildren(n, [&](Node *ch) { ParDeclared(ch, out); });
 }
 
-// Every `par for` of a live body, outlined (see above). A par for in the body
-// of another is outlined from the function that one became, in turn.
+// Every `par for` of a live body, outlined (see above), wherever it stands as
+// a statement: in a block, as a match's arm, or as an if's else, which the
+// optimizer may have folded a block of one statement into. A par for in the
+// body of another is outlined from the function that one became, in turn.
+// One no walk reaches -- in a global initializer, which no function holds --
+// runs as a plain loop, after the checks its fork would make
+// (ForLoop::CgStmt, EmitChunkAtChecks).
 inline void CodeGen::OutlineParLoops() {
     vector<FnSpec *> work;
     for (auto sp : ast.fnspecs)
         if (sp->live && sp->body) work.push_back(sp);
     for (size_t wi = 0; wi < work.size(); wi++) {
         auto sp = work[wi];
-        function<void(Node *)> walk = [&](Node *n) {
+        function<void(Node *)> walk;
+        auto stmt = [&](Node *&st) {
+            if (auto fl = st ? Is<ForLoop>(st) : nullptr; fl && fl->ispar)
+                st = OutlineParLoop(sp, fl, work);
+            else
+                walk(st);
+        };
+        walk = [&](Node *n) {
             if (!n || Is<FunVal>(n)) return;
             if (auto b = Is<Block>(n)) {
-                for (auto &st : b->stmts) {
-                    if (auto fl = Is<ForLoop>(st); fl && fl->ispar)
-                        st = OutlineParLoop(sp, fl, work);
-                    else
-                        walk(st);
+                for (auto &st : b->stmts) stmt(st);
+                stmt(b->tail);
+                return;
+            }
+            if (auto m = Is<MatchExpr>(n)) {
+                walk(m->scrutinee);
+                for (auto &arm : m->arms) {
+                    walk(arm.expansion);
+                    for (auto &pi : arm.pat.items) {
+                        walk(pi.lo);
+                        walk(pi.hi);
+                    }
+                    stmt(arm.body);
                 }
-                if (auto fl = Is<ForLoop>(b->tail); fl && fl->ispar)
-                    b->tail = OutlineParLoop(sp, fl, work);
-                else
-                    walk(b->tail);
+                return;
+            }
+            if (auto x = Is<IfExpr>(n)) {
+                walk(x->cond);
+                walk(x->thenb);
+                stmt(x->elseb);
                 return;
             }
             RunChildren(n, walk);
@@ -205,6 +227,25 @@ inline vector<string> CodeGen::ParParamTypes(FnSpec *sp) {
     return out;
 }
 
+// chunk_at's bounds, checked once, before any iteration of fl runs (§4.4):
+// at its fork, or where it runs as a plain loop, unoutlined.
+inline void CodeGen::EmitChunkAtChecks(ForLoop *fl, Line line) {
+    for (auto &[a, b] : fl->chunkats) {
+        auto al = VarLoc(a);
+        if (al.t->kind == TY_REF) DerefLoc(al);
+        auto av = ArrayView(al);
+        auto alen = T();
+        L("int64_t ", alen, " = ", av.len, ";");
+        auto bl = VarLoc(b);
+        if (bl.t->kind == TY_REF) DerefLoc(bl);
+        auto bv = ArrayView(bl);
+        auto blen = T();
+        L("int64_t ", blen, " = ", bv.len, ";");
+        L("gs_check_chunk_offsets((const void *)(", bv.elems, "), ", blen, ", ", alen, ", ",
+          LocArgs(line), ");");
+    }
+}
+
 // The fork of a par for, standing where it was (OutlineParLoops).
 inline vector<string> CodeGen::EmitParFor(Call *c) {
     auto fl = c->parfor;
@@ -235,21 +276,7 @@ inline vector<string> CodeGen::EmitParFor(Call *c) {
         lo = "(int64_t)0";
         hi = seqlen;
     }
-    // chunk_at's bounds, checked once, before any iteration runs (§4.4).
-    for (auto &[a, b] : fl->chunkats) {
-        auto al = VarLoc(a);
-        if (al.t->kind == TY_REF) DerefLoc(al);
-        auto av = ArrayView(al);
-        auto alen = T();
-        L("int64_t ", alen, " = ", av.len, ";");
-        auto bl = VarLoc(b);
-        if (bl.t->kind == TY_REF) DerefLoc(bl);
-        auto bv = ArrayView(bl);
-        auto blen = T();
-        L("int64_t ", blen, " = ", bv.len, ";");
-        L("gs_check_chunk_offsets((const void *)(", bv.elems, "), ", blen, ", ", alen, ", ",
-          LocArgs(line), ");");
-    }
+    EmitChunkAtChecks(fl, line);
     auto n = T();
     L("uint64_t ", n, " = ", hi, " > ", lo, " ? (uint64_t)", hi, " - (uint64_t)", lo, " : 0;");
     // What the function takes beyond the chunk: the sequence, then its free

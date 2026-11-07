@@ -1464,6 +1464,7 @@ struct CodeGen {
     map<string, ParThunk> parthunks;
     static void ParDeclared(Node *n, set<VarDef *> &out);
     void OutlineParLoops();
+    void EmitChunkAtChecks(ForLoop *fl, Line line);
     Node *OutlineParLoop(FnSpec *sp, ForLoop *fl, vector<FnSpec *> &work);
     vector<string> ParParamTypes(FnSpec *sp);
     vector<string> EmitParFor(Call *c);

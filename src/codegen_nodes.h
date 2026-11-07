@@ -986,6 +986,9 @@ inline void While::CgStmt(CodeGen &cg) {
 }
 
 inline void ForLoop::CgStmt(CodeGen &cg) {
+    // A par for no function holds, which runs here as a plain loop, makes
+    // the checks its fork would first (CodeGen::OutlineParLoops).
+    if (ispar) cg.EmitChunkAtChecks(this, line);
     if (cg.BulkDefaultLoop(this)) return;
     auto d = Dst {};
     CodeGen::ViewScope vs(cg, hoistrefs, hoistfields);

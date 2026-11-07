@@ -259,6 +259,15 @@ place, all printing the same:
 * `threads/par_for_recursive_scratch.goose`: a recursive function whose
   `par for` keeps a large fixed local across its call back into the cycle,
   which stays native in the outlined body as in a plain loop.
+* `threads/par_for_arms.goose`: `par for`s standing as a match's arms,
+  braced or not, and as an if's branches in one, each forked.
+* `runtime/par_for_chunk_at_global.goose`,
+  `par_for_chunk_at_global_block.goose`, `par_for_chunk_at_arm.goose` and
+  `par_for_chunk_at_arm_braced.goose`: `chunk_at` offsets that fall,
+  checked before any iteration runs, at every optimization level and
+  thread count, natively and under TinyCC, where the `par for` is in a
+  function a global initializer calls, in a global initializer itself, and
+  a match's arm, unbraced and braced.
 * `threads/par_for_abort.goose`: an abort in one iteration ends the
   program with its message, whichever thread runs it.
 * `threads/par_for_contained.goose`: in a contained worker, a `par for`

@@ -5973,8 +5973,9 @@ is appended to the buffer and freed (`AppendMessage`, as
 `thread_wait(id, msg)` appends its message).
 
 **`par for`.** Before anything is named, `OutlineParLoops`
-(`codegen_par.h`) makes each `par for` of a live body a function of its
-own: a synthesized `SFunction` nested in the body's, whose one
+(`codegen_par.h`) makes each `par for` of a live body -- a statement of a
+block, a match's arm or an if's else, which the optimizer may have folded
+a block of one statement into -- a function of its own: a synthesized `SFunction` nested in the body's, whose one
 specialization takes the chunk's first index and the one past its last at
 the counter's type (and, for a range's index binder, the iterations before
 the chunk; `ForLoop::parix`), or for a loop over an array or slice
@@ -5984,7 +5985,11 @@ header becomes the range of the two parameters, and an array loop walks the
 slice from `ForLoop::parlo` to `parhi`. What the loop declares is the new
 function's (`VarDef::ownerspec`), so `CollectSpecs` finds its free
 variables as a nested function's, which pass as such a function's do
-(§6.4). Where the body's function is a member of a recursive cycle, the
+(§6.4). The optimizer inlines no body holding a `par for`
+(`Optimizer::Scan`), so a global initializer's call of one stays a call;
+one written in a global initializer itself, which no function holds, runs
+as a plain loop, after the checks its fork would make
+(`EmitChunkAtChecks`, from `ForLoop::CgStmt`). Where the body's function is a member of a recursive cycle, the
 new one is too (`FnSpec::incycle`, its `cyclelink` the member): the body
 was checked as the member's, so its large fixed locals stay native
 (`LargeFixedOnStack`) and it holds no data stack across a call into the
