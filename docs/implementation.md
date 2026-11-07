@@ -5992,7 +5992,12 @@ variables as a nested function's, which pass as such a function's do
 (`Optimizer::Scan`), so a global initializer's call of one stays a call;
 one written in a global initializer itself, which no function holds, runs
 as a plain loop, after the checks its fork would make
-(`EmitChunkAtChecks`, from `ForLoop::CgStmt`). Where the body's function is a member of a recursive cycle, the
+(`EmitChunkAtChecks`, from `ForLoop::CgStmt`). Those checks are of every
+`chunk_at` of the loop's bounds by its index (`ForLoop::chunkats`), owned
+or only read (`ParChunkCheck`), against the array's length where it is a
+variable from outside the body; and the arrays and bounds they read are
+free variables of the function the fork stands in (`CollectSpecs`), where
+the optimizer may have taken every other name of them out. Where the body's function is a member of a recursive cycle, the
 new one is too (`FnSpec::incycle`, its `cyclelink` the member): the body
 was checked as the member's, so its large fixed locals stay native
 (`LargeFixedOnStack`) and it holds no data stack across a call into the

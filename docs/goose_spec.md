@@ -4872,10 +4872,13 @@ grown, shrunk or assigned meanwhile.
   iterations would abort, which one's message is reported is unspecified.
   In a contained worker (above), it ends that worker once every iteration
   that is running has ended, and its `thread_wait(id, msg)` takes the
-  message. A `par for` whose body takes `a.chunk_at(b, k)` as an
-  iteration's part checks the offsets in `b` before any iteration runs,
-  none below zero, falling or past `a.len`, and aborts as `chunk_at` does
-  where one is.
+  message. A `par for k in b.len - 1` whose body takes `a.chunk_at(b, k)`,
+  as an iteration's part or only to read it, checks the offsets in `b`
+  before any iteration runs, none below zero, falling or past `a.len` (or
+  only none below zero or falling, where `a` is no variable from outside
+  the body), and aborts as `chunk_at` does where one is, whichever runs the
+  iterations then take, and wherever the loop stands -- the body of a
+  function, a match's arm, a global initializer.
 * **Running.** The program has one pool of threads for its `par for`s, made
   at the first loop that can use it, of `GOOSE_THREADS` workers where that
   environment variable is a positive count and of `hardware_threads()`

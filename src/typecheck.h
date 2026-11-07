@@ -2286,6 +2286,11 @@ struct TypeCheck {
         Roots seqroots;
         VarDef *seqvar = nullptr;
         TypeExpr *seqelem = nullptr;
+        // a.chunk_at(bounds, k) of the loop's bounds by its index, the
+        // iterations' own runs or only read: the array, where it is a
+        // variable from outside the body (else null), and the bounds, which
+        // the fork checks whole (ForLoop::chunkats, ParChunkCheck).
+        vector<pair<VarDef *, VarDef *>> chunkchecks;
     };
     // The par fors whose bodies are being checked, innermost last. A null
     // entry is a body that is checked for no par for, between them.
@@ -2362,6 +2367,7 @@ struct TypeCheck {
         return vd && (vd == Par().ordinal || vd == Par().ordinal2);
     }
     bool ParChunkPart(Call *c, const BuiltinDef &d, vector<Node *> &args, VarDef *&owned);
+    void ParChunkCheck(vector<Node *> &args);
     bool SameParExpr(Node *a, Node *b);
     Roots ParRootsOf(VarDef *vd);
     [[noreturn]] void ParWriteError(Node *at, VarDef *vd, const char *what);

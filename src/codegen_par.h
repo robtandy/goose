@@ -231,11 +231,16 @@ inline vector<string> CodeGen::ParParamTypes(FnSpec *sp) {
 // at its fork, or where it runs as a plain loop, unoutlined.
 inline void CodeGen::EmitChunkAtChecks(ForLoop *fl, Line line) {
     for (auto &[a, b] : fl->chunkats) {
-        auto al = VarLoc(a);
-        if (al.t->kind == TY_REF) DerefLoc(al);
-        auto av = ArrayView(al);
-        auto alen = T();
-        L("int64_t ", alen, " = ", av.len, ";");
+        // Against the array's length, or only as non-decreasing from 0 where
+        // the array is no variable from outside the body (ParChunkCheck).
+        string alen = "INT64_MAX";
+        if (a) {
+            auto al = VarLoc(a);
+            if (al.t->kind == TY_REF) DerefLoc(al);
+            auto av = ArrayView(al);
+            alen = T();
+            L("int64_t ", alen, " = ", av.len, ";");
+        }
         auto bl = VarLoc(b);
         if (bl.t->kind == TY_REF) DerefLoc(bl);
         auto bv = ArrayView(bl);

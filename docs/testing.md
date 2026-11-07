@@ -260,6 +260,14 @@ place, all printing the same:
 * `threads/par_for_recursive_scratch.goose`: a recursive function whose
   `par for` keeps a large fixed local across its call back into the cycle,
   which stays native in the outlined body as in a plain loop.
+* `threads/par_for_chunk_at_dead.goose`: `chunk_at` in a branch no
+  iteration takes, whose arrays the fork's check still reads, in a nested
+  function and in the function that declares them.
+* `runtime/par_for_chunk_at_readonly.goose`,
+  `par_for_chunk_at_readonly_param.goose` and
+  `par_for_chunk_at_readonly_expr.goose`: falling offsets checked at the
+  fork where the iterations only read the runs, of a const global, a const
+  slice parameter, and a slice the body takes.
 * `threads/par_for_arms.goose`: `par for`s standing as a match's arms,
   braced or not, and as an if's branches in one, each forked.
 * `runtime/par_for_chunk_at_global.goose`,

@@ -474,6 +474,25 @@ inline bool TypeCheck::ParChunkPart(Call *c, const BuiltinDef &d, vector<Node *>
     return true;
 }
 
+// a.chunk_at(bounds, k) in a par for's body, bounds the loop's and k its
+// index, checked: the fork checks the bounds whole before any iteration runs
+// (§4.4), whichever runs the iterations take -- against a's length where a
+// is a variable from outside the body, whether the iterations own its runs
+// or only read them, and as non-decreasing from 0 where a is anything else.
+inline void TypeCheck::ParChunkCheck(vector<Node *> &args) {
+    if (!InPar() || args.size() != 3) return;
+    auto kid = Is<Ident>(args[2]);
+    auto bid = Is<Ident>(args[1]);
+    if (!kid || !bid || !kid->vdef || !bid->vdef || !ParOrdinal(kid->vdef)) return;
+    if (!SameParExpr(args[1], Par().bounds)) return;
+    auto id = Is<Ident>(args[0]);
+    auto a = id && id->vdef && ParCaptured(id->vdef) ? id->vdef : nullptr;
+    auto &cc = Par().chunkchecks;
+    for (auto &[x, y] : cc)
+        if (x == a && y == bid->vdef) return;
+    cc.push_back({ a, bid->vdef });
+}
+
 [[noreturn]] inline void TypeCheck::ParWriteError(Node *at, VarDef *vd, const char *what) {
     if (ParBinder(vd))
         Error(at, cat(what, " ", vd->name, " in a par for: ", vd->name, " tells the "
@@ -896,14 +915,17 @@ inline void TypeCheck::FinishParFor(ForLoop *x, ParCtx &ctx) {
         for (auto &[v, o] : x->reductions) known = known || v == rv;
         if (!known) x->reductions.push_back({ rv, op });
     }
+    auto checkbounds = [&](VarDef *a, VarDef *b) {
+        auto known = false;
+        for (auto &[av, bv] : x->chunkats) known = known || (av == a && bv == b);
+        if (!known) x->chunkats.push_back({ a, b });
+    };
     for (auto &p : ctx.parts) {
         if (p.form != PF_CHUNK_AT || !p.var) continue;
         auto b = Is<Ident>(p.key);
-        if (!b || !b->vdef) continue;
-        auto known = false;
-        for (auto &[a, bv] : x->chunkats) known = known || (a == p.var && bv == b->vdef);
-        if (!known) x->chunkats.push_back({ p.var, b->vdef });
+        if (b && b->vdef) checkbounds(p.var, b->vdef);
     }
+    for (auto &[a, b] : ctx.chunkchecks) checkbounds(a, b);
 }
 
 }  // namespace goose

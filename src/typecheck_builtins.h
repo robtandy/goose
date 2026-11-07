@@ -922,6 +922,9 @@ inline Val TypeCheck::CheckChunk(Call *c, const BuiltinDef &d, vector<Node *> &a
         else
             lv.writable = false;
     }
+    // Owned or only read, chunk_at of the loop's own bounds has them checked
+    // whole at the fork, before any iteration runs (§4.4).
+    if (d.kind == B_CHUNK_AT) ParChunkCheck(args);
     auto v = SliceVal(lv, elem, c->line);
     // What an adapting receiver (a limited array) constructs from.
     c->rettypes.push_back(v.type);
