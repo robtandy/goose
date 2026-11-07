@@ -242,7 +242,8 @@ place, all printing the same:
   body's own variables, copies of them and references to those, written
   through in the body and in functions it calls, the slice field of one
   through a reference to its slot, and a format overload writing what one
-  refers to; a reference to a slice of another array read beside the
+  refers to; a reference into a pool read beside the parts of an array that
+  is no pool; a reference to a slice of another array read beside the
   parts of one; and a root struct's component owned by the iterations
   while the body reads another, and the owned one's length.
 * `threads/par_for_recursive_nested.goose`: a nested recursive function
@@ -324,6 +325,9 @@ body;
 `slice_ref_holder_callee`: a reference to a slice variable viewing the
 partitioned array, read in the body, by a function taking `i64[:]&`, by a
 nested function, and through a holder handed to a function;
+`pool_ref_callee` and `pool_ref_reused`: a holder of a reference into the
+pool a parameter's parts lie in, read through by a function, its
+specialization made in the loop and before it;
 `binder_alias` and `seq_shifted`: the loop's own reference binder pointing
 at an element another iteration owns, and a part of another view of the
 sequence, one element on; `row_cells` and `row_cells_seq`: the cells of a

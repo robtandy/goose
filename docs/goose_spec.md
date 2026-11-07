@@ -4822,7 +4822,8 @@ grown, shrunk or assigned meanwhile.
   resizes, unless that array is fixed-size): not through the variable, nor through
   another reference or slice that may point into it, read out of storage in
   the body included, nor through a byte view (`bytes_of`), which may view
-  any array's elements, nor as `chunk_at`'s bounds. A parameter stands for
+  any array's elements, nor through a reference into a pool (§3.9), which
+  points into the pool wherever it is held, nor as `chunk_at`'s bounds. A parameter stands for
   storage its callers hand the function, which may be a global's, a
   variable's of a function around it, or another parameter's where some
   call does not give the two arrays apart, each named exactly (§9.2); as

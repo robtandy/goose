@@ -332,6 +332,39 @@ inline bool TypeCheck::SameParExpr(Node *a, Node *b) {
     return false;
 }
 
+// The pools the relative references a value of type t holds point into
+// (§3.9), and those of what a reference or slice it holds leads to: a `T&<w
+// in pool>` points into the global pool, wherever it is held. One measured
+// from where it lies points within the storage that holds it.
+inline void TypeCheck::ParRelPools(TypeExpr *t, vector<VarDef *> &out,
+                                   vector<TypeExpr *> &seen) {
+    if (!t) return;
+    for (auto s : seen) if (s == t) return;
+    seen.push_back(t);
+    switch (t->kind) {
+        case TY_REF:
+            if (t->ref->lenstorage >= 0 && t->ref->pool &&
+                find(out.begin(), out.end(), t->ref->pool) == out.end())
+                out.push_back(t->ref->pool);
+            ParRelPools(t->ref->sub, out, seen);
+            return;
+        case TY_SLICE: ParRelPools(t->sub, out, seen); return;
+        case TY_ARRAY: ParRelPools(t->arr->sub, out, seen); return;
+        case TY_STRUCT: case TY_ENUM: case TY_VARIANT:
+            EachField(t, [&](TypeExpr *ft) { ParRelPools(ft, out, seen); });
+            return;
+        default: return;
+    }
+}
+
+// Whether a value of type t holds, or leads to, a reference into a pool.
+inline bool TypeCheck::ParHoldsPoolRef(TypeExpr *t) {
+    vector<VarDef *> pools;
+    vector<TypeExpr *> seen;
+    ParRelPools(t, pools, seen);
+    return !pools.empty();
+}
+
 // Where vd's value may reach: its own storage and what the references it
 // holds point at, or, for a reference or slice, where it points.
 inline Roots TypeCheck::ParRootsOf(VarDef *vd) {
@@ -342,6 +375,20 @@ inline Roots TypeCheck::ParRootsOf(VarDef *vd) {
         r.Set(vd, true);
         if (vd->type && HoldsPlainRef(vd->type)) r.Add(vd->contents);
     }
+    // The pools its relative references, and those of what it leads to,
+    // point into, which a callee handed it may read through them (§3.9).
+    auto addpools = [&](TypeExpr *t) {
+        vector<VarDef *> pools;
+        vector<TypeExpr *> seen;
+        ParRelPools(t, pools, seen);
+        for (auto p : pools) {
+            RootAlt a;
+            a.root = p;
+            a.exact = true;
+            r.Add(a);
+        }
+    };
+    addpools(vd->type);
     // And where the references held in that storage lead, and so on: a
     // callee handed vd may read them out and follow them. A slot holding a
     // reference or slice -- a variable a reference to a slice names, say --
@@ -350,6 +397,7 @@ inline Roots TypeCheck::ParRootsOf(VarDef *vd) {
     for (size_t i = 0; i < r.alts.size(); i++) {
         auto x = r.alts[i].root;
         if (!x || x == vd) continue;
+        if (x->type) addpools(x->type);
         if (x->type && IsRefOrSlice(x->type)) {
             r.Add(x->ref.AsRoots());
             continue;
@@ -628,8 +676,8 @@ inline bool TypeCheck::ParHoldsRun(TypeExpr *t, TypeExpr *e) {
 // array's elements; or point at references, which lead anywhere
 // (ParRootsOf takes their roots).
 inline bool TypeCheck::ParPointeeReaches(TypeExpr *p, TypeExpr *e) {
-    return !p || !e || IsU8(p) || IsRefOrSlice(p) || HoldsPlainRef(p) || MayHoldValueOf(e, p) ||
-           ParHoldsRun(p, e);
+    return !p || !e || IsU8(p) || IsRefOrSlice(p) || HoldsPlainRef(p) || ParHoldsPoolRef(p) ||
+           MayHoldValueOf(e, p) || ParHoldsRun(p, e);
 }
 
 // Whether what a use of vd reaches may be a part's storage of elements of
@@ -639,8 +687,8 @@ inline bool TypeCheck::ParPointeeReaches(TypeExpr *p, TypeExpr *e) {
 inline bool TypeCheck::ParUseReaches(VarDef *vd, TypeExpr *e) {
     auto t = vd->type;
     if (!t || !e) return true;
-    if (IsRefOrSlice(t)) return ParPointeeReaches(PointeeOf(t), e);
-    return HoldsPlainRef(t) || ParHoldsRun(t, e);
+    if (IsRefOrSlice(t) && !IsRelRef(t)) return ParPointeeReaches(PointeeOf(t), e);
+    return HoldsPlainRef(t) || ParHoldsPoolRef(t) || ParHoldsRun(t, e);
 }
 
 // Whether a value of type t may lead to rv, an integer variable (a

@@ -4257,8 +4257,9 @@ runs and `FinishParFor` judges once they have settled.
   no part's storage (`ParRootsOf`: the variable's storage and what it holds,
   or where it points, and where the references and slices held there lead
   -- a slice variable a reference names, a holder's contents, a class's
-  view of its caller's slot or holder -- closed transitively, since a
-  callee handed it may follow them), and no read-back
+  view of its caller's slot or holder, the pool a reference `in` one points
+  into (`ParRelPools`) -- closed transitively, since a callee handed it
+  may follow them), and no read-back
   either; and a reduction's variable to be used only by its updates
   (`redtargets`), and reached through no other use or read-back that may
   lead to it (`ParReachesVar`: a plain reference to its type, or what
@@ -4283,7 +4284,8 @@ runs and `FinishParFor` judges once they have settled.
   are still exact and `parconcrete` once every call has been seen. A use or
   read-back counts only where what it reaches may hold a run of the
   part's elements (`ParUseReaches`, `ParPointeeReaches`, `ParHoldsRun`),
-  which a `u8` pointee, a byte view of any array, always may.
+  which a `u8` pointee, a byte view of any array, always may, and so does
+  a value holding a reference into a pool (`ParHoldsPoolRef`).
 * **The sequence.** A loop over an array or a slice reads its sequence's
   elements, each iteration its own: `ParCtx::seqroots` keeps where they lie
   (with `seqvar` and `seqelem`), and `FinishParFor` takes any part but the

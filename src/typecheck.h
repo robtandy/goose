@@ -2351,6 +2351,8 @@ struct TypeCheck {
     void ParLengthUse(Node *at, VarDef *vd);
     bool ParLengthExempt(VarDef *vd);
     bool ParHoldsRun(TypeExpr *t, TypeExpr *e);
+    void ParRelPools(TypeExpr *t, vector<VarDef *> &out, vector<TypeExpr *> &seen);
+    bool ParHoldsPoolRef(TypeExpr *t);
     bool ParElemsOverlap(TypeExpr *a, TypeExpr *b);
     bool ParPointeeReaches(TypeExpr *p, TypeExpr *e);
     bool ParUseReaches(VarDef *vd, TypeExpr *e);

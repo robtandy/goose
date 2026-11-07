@@ -10,6 +10,14 @@
 // a slice of another array is read beside the parts of one.
 struct H { r: i64& }
 
+// A reference into a pool (§3.9), read beside the parts of an array that is
+// no pool.
+var pool: i64[>..] = [];
+
+struct Link { r: i64&<u32 in pool> }
+
+fn deref(l: Link) -> i64 { l.r }
+
 struct HS { s: i64[:] }
 
 fn bumps(s: i64[:]) { s[0] += 1; }
@@ -67,6 +75,11 @@ fn main() {
     var dbl: i64[8] = [0, 0, 0, 0, 0, 0, 0, 0];
     par for k in 8 { dbl[k] = get(k) * 2; }
     print(dbl);
+    pool.push(40);
+    let l = Link { r: pool[0] };
+    var near: i64[4] = [0, 0, 0, 0];
+    par for k in 4 { near[k] = deref(l) + k; }
+    print(near);
     var seen: i64[4] = [0, 0, 0, 0];
     par for k in 4 {
         var mine: i64[2] = [k, k];
