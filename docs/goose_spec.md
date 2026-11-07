@@ -4816,7 +4816,9 @@ grown, shrunk or assigned meanwhile.
   reaches every component, and `s.field` the one it names alone. One storage is cut one way: by element, or by
   `chunk` of one `n`, or by `chunk_at` of one `b`. The body then reaches that
   storage no other way but for its length (an array's or slice's `.len` or
-  `.cap`, not a field of the name): not through the variable, nor through
+  `.cap`, not a field of the name, and not the length of an array a
+  reference leads to, which may lie in an element an iteration owns and
+  resizes, unless that array is fixed-size): not through the variable, nor through
   another reference or slice that may point into it, read out of storage in
   the body included, nor through a byte view (`bytes_of`), which may view
   any array's elements, nor as `chunk_at`'s bounds. A parameter stands for

@@ -486,9 +486,11 @@ inline Val Dot::Check(TypeCheck &tc, TypeExpr *) {
             member = bd->kind;
             // An array's length, which no iteration of a par for can change,
             // is read beside the parts of it the iterations write
-            // (FinishParFor); a field of the name is no length.
+            // (FinishParFor); a field of the name is no length, and the
+            // header of an array a reference leads to may lie in an element
+            // an iteration owns (ParLengthExempt).
             if (auto id = Is<Ident>(obj); id && id->vdef && tc.InPar()) {
-                tc.ParLengthUse(obj, id->vdef);
+                if (tc.ParLengthExempt(id->vdef)) tc.ParLengthUse(obj, id->vdef);
             } else if (auto od = Is<Dot>(obj); od && tc.InPar()) {
                 // A component's, owner.field.len (NoteParComponent).
                 auto oid = Is<Ident>(od->obj);

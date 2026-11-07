@@ -4243,7 +4243,10 @@ runs and `FinishParFor` judges once they have settled.
   to be taken through one variable and cut one way (`ParPart::var`, `form`,
   `key`, `by`), and parts whose roots may be one storage
   (`ParMayAlias`) not to be of one element type; every use but a part's own
-  name and a builtin `.len` or `.cap` (`partuses`, `ParLengthUse`) to reach
+  name and a builtin `.len` or `.cap` (`partuses`, `ParLengthUse`, of a
+  variable's own header or a fixed-size array's static length alone,
+  `ParLengthExempt`: the header of an array a reference leads to may lie in
+  an element an iteration owns and resizes) to reach
   no part's storage (`ParRootsOf`: the variable's storage and what it holds,
   or where it points, and where the references and slices held there lead
   -- a slice variable a reference names, a holder's contents, a class's

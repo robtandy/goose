@@ -289,10 +289,12 @@ through a reference to it, an array of them handed to a callee, a holder,
 a reference read out of storage in the body, and the loop's own binder),
 R2 (`chunk_alias`,
 `chunk_whole_read`, `element_alias`, `bounds_alias`, `chunk_two_ways`,
-`field_named_len`, `shifted_index`, `shifted_chunk`, `param_global_alias`
+`field_named_len`, `len_through_ref`, `shifted_index`, `shifted_chunk`,
+`param_global_alias`
 and `reused_alias`: a partitioned array read another way, an element of
 it or the whole of it, or cut two ways; an element's field named `len`,
-which is no length; two views of one array from different starts, by
+which is no length, and the length of a row's cells read through a
+reference while the iterations own the rows; two views of one array from different starts, by
 index and by chunk; a parameter's elements owned beside a read of a global
 the parameter may be, directly and through a function reused from another
 loop; `reuse_inexact_after`, `reuse_inexact_before` and

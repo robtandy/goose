@@ -223,6 +223,21 @@ inline void TypeCheck::ParLengthUse(Node *at, VarDef *vd) {
     ParApply(n);
 }
 
+// Whether x.len or x.cap, x the variable vd, reads a header no iteration of
+// a par for can change: the variable's own -- a slice's, or an array's,
+// which the body sees read-only -- or the static length of a fixed-size
+// array a reference leads to. The header of any other array a reference
+// leads to lies where the reference points, maybe in an element an
+// iteration owns and may resize (a row's cells, say), so reading it is a
+// use of the reference like any other.
+inline bool TypeCheck::ParLengthExempt(VarDef *vd) {
+    auto t = vd->type;
+    if (!t) return false;
+    if (t->kind != TY_REF) return true;
+    auto p = t->ref->sub;
+    return p && p->kind == TY_ARRAY && p->arr->akind == A_FIXED;
+}
+
 // A reference or slice of type t read out of storage in a par for's body,
 // which may point at r: what it reads or writes there may be a part of
 // another iteration, or a reduction (FinishParFor), for every par for whose
