@@ -26,6 +26,8 @@ fn format(out: u8[>..]&, t: Tally&) {
 
 fn first(s: i64[:]&) -> i64 { s[0] }
 
+fn get(x: const i64&) -> i64 { x }
+
 fn bump(h: H) { h.r += 1; }
 
 fn bumpref(h: H&) { h.r += 2; }
@@ -57,6 +59,14 @@ fn main() {
     var s = S { first: [1, 2, 3, 4, 5, 6, 7, 8], second: [5, 6] };
     par for &x in s.first { x = x + s.second[0] + s.first.len; }
     print(s.first);
+    // A nested function reading the other component, its length too.
+    fn peek() -> i64 { s.second.len + s.second[0] }
+    par for &x in s.first { x = x + peek(); }
+    print(s.first);
+    // The iteration's index, lent read-only to a function.
+    var dbl: i64[8] = [0, 0, 0, 0, 0, 0, 0, 0];
+    par for k in 8 { dbl[k] = get(k) * 2; }
+    print(dbl);
     var seen: i64[4] = [0, 0, 0, 0];
     par for k in 4 {
         var mine: i64[2] = [k, k];

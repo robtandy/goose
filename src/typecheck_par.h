@@ -33,6 +33,18 @@ inline bool TypeCheck::ParCaptured(const VarDef *vd) {
     return InPar() && vd && (vd->isglobal || vd->depth <= Par().depth);
 }
 
+// Whether vd is a binder that tells the iterations of a par for whose body is
+// being checked apart (ParCtx::ordinal, ordinal2, shifted): a[k] and
+// a.chunk(k, n) are the iteration's own by it (§4.3 R2), so nothing in the
+// body, or a function it calls, may write it, through a reference either.
+inline bool TypeCheck::ParBinder(const VarDef *vd) {
+    for (auto i = (int)parctx.size() - 1; vd && i >= 0 && parctx[i]; i--) {
+        auto &c = *parctx[i];
+        if (vd == c.ordinal || vd == c.ordinal2 || vd == c.shifted) return true;
+    }
+    return false;
+}
+
 // The par fors whose bodies are being checked that see vd from outside,
 // innermost first, up to a body checked for none (a null entry). A par for
 // in another's body sees what the outer one sees from outside, and more.
@@ -94,7 +106,11 @@ inline void TypeCheck::NoteParComponent(Dot *d, const LVal &lv) {
     auto id = Is<Ident>(d->obj);
     if (!id || !id->vdef || !lv.Exact()) return;
     auto c = lv.Root();
-    if (c && c->componentowner == id->vdef) parcomponents[id] = c;
+    // But a component holding a reference leads where that points, which
+    // the owner's contents say (ParRootsOf of the owner), not the component.
+    if (c && c->componentowner == id->vdef && c->type && !IsRefOrSlice(c->type) &&
+        !HoldsPlainRef(c->type))
+        parcomponents[id] = c;
 }
 
 // Whether everything a value with roots r leads to is storage of the par
@@ -404,6 +420,11 @@ inline bool TypeCheck::ParChunkPart(Call *c, const BuiltinDef &d, vector<Node *>
 }
 
 [[noreturn]] inline void TypeCheck::ParWriteError(Node *at, VarDef *vd, const char *what) {
+    if (ParBinder(vd))
+        Error(at, cat(what, " ", vd->name, " in a par for: ", vd->name, " tells the "
+                      "iterations apart, each owning a[", vd->name, "] or a.chunk(", vd->name,
+                      ", n) by it, so nothing may change it (docs/design/child_threads.md "
+                      "§4.3 R2)"));
     if (vd->isglobal)
         Error(at, cat(what, " ", vd->name, " in a par for: a global is read-only in a par for's "
                       "body and in every function it calls, since every iteration may run at "

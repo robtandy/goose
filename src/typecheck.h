@@ -2323,7 +2323,10 @@ struct TypeCheck {
     bool ParCaptured(const VarDef *vd);
     template<typename F> void EachParSeeing(const VarDef *vd, F f);
     bool ParCapturedAround(const VarDef *vd);
-    bool ParView(const VarDef *vd) { return ParCaptured(vd) && vd != parowned; }
+    bool ParView(const VarDef *vd) {
+        return (ParCaptured(vd) || ParBinder(vd)) && vd != parowned;
+    }
+    bool ParBinder(const VarDef *vd);
     void NoteParUse(Node *at, VarDef *vd);
     void StartParFor(ForLoop *x, ParCtx &ctx);
     void ParPass(ForLoop *x, ParCtx &ctx);

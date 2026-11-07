@@ -496,7 +496,8 @@ inline Val Dot::Check(TypeCheck &tc, TypeExpr *) {
                 auto oid = Is<Ident>(od->obj);
                 auto pc = oid ? tc.parcomponents.find(oid) : tc.parcomponents.end();
                 if (pc != tc.parcomponents.end() && oid->vdef &&
-                    pc->second->componentowner == oid->vdef)
+                    pc->second->componentowner == oid->vdef &&
+                    tc.ParLengthExempt(pc->second))
                     tc.ParLengthUse(oid, oid->vdef);
             }
             Val v;

@@ -4231,7 +4231,9 @@ runs and `FinishParFor` judges once they have settled.
   (`SameParExpr`). `parowned` names `a` while its path is checked, which
   the view then leaves writable; the part is kept (`ParPart`) with the one
   root the path has, where it is exact, flat and no global's, and refused
-  otherwise. The element `par for &x` binds is a part of the sequence's
+  otherwise. The binders that tell the iterations apart read read-only in
+  the body and every function checked for it (`ParBinder`, part of
+  `ParView`), so no reference to one writes it. The element `par for &x` binds is a part of the sequence's
   root, made by `CheckFor` from the header's provenance.
 * **Nesting.** A `par for` in another's body is part of that body: a name,
   a part or a reduction in the inner body counts for every loop on
@@ -4301,7 +4303,9 @@ runs and `FinishParFor` judges once they have settled.
   way around, as one storage; but `s.field`, the owner's name with a path
   to one component alone, uses only that component (`NoteParComponent`
   records it in `parcomponents`, which `FinishParFor` reads in the owner's
-  place), and `s.field.len` is a length (`ParLengthUse`).
+  place), but for a component that holds a reference, which leads where
+  the owner's contents say, and `s.field.len` is a length (`ParLengthUse`)
+  where `ParLengthExempt` takes the component's as one.
 * **Replay.** What a check does that a par for judges -- a use, a
   reduction's update, a part, a part's own name, a length -- goes to the
   par fors on the stack through `ParApply`, which also records it with

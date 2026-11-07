@@ -314,6 +314,12 @@ partitioned array, as a parameter and read out of a holder;
 `root_component`, `root_component_slice` and `root_owner_callee`: a root
 struct's component partitioned by element and through a slice, beside a
 read of it through the owner, and the whole owner handed to a callee;
+`root_ref_component` and `root_ref_component_len`: a root struct's
+reference component read by a nested function, leading to a reduction,
+and to a row's cells whose length the iterations change; `key_ref_index`,
+`key_ref_chunk` and `key_ref_direct`: the iteration's index written
+through a reference, by a callee, for an index and a chunk, and in the
+body;
 `slice_ref_alias`, `slice_ref_callee`, `slice_ref_nested` and
 `slice_ref_holder_callee`: a reference to a slice variable viewing the
 partitioned array, read in the body, by a function taking `i64[:]&`, by a

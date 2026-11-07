@@ -4798,7 +4798,8 @@ grown, shrunk or assigned meanwhile.
   binder); and `a.chunk(k, n)` where the loop is `par for k in n` or
   `par for k in 0..n` with `n` written alike, or `a.chunk_at(b, k)` where
   the loop is `par for k in b.len - 1`, `b` a variable, and any slice bound
-  to one of these. Each is writable where `a` is writable outside the body,
+  to one of these. Nothing in the body, or a function it calls, writes `k`,
+  through a reference to it either: each iteration owns these by it. Each is writable where `a` is writable outside the body,
   its elements are fixed-size and flat (§1.1), it lies in one storage the
   compiler knows exactly (§9.2) that is not a global's, and no `par for`
   whose body this loop is in sees `a` from outside too, since each of that
