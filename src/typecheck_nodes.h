@@ -87,6 +87,7 @@ inline Val Ident::Check(TypeCheck &tc, TypeExpr *) {
         vdef = vd;
         if (tc.deferbodies) tc.NoteDeferMention(vd);
         tc.RequireAssigned(vd, this);
+        tc.NoteParUse(this, vd);
         Val v;
         auto t = vd->narrowed ? vd->narrowed : vd->type;
         v.type = tc.LoadType(t);
@@ -107,7 +108,8 @@ inline Val Ident::Check(TypeCheck &tc, TypeExpr *) {
         } else {
             v.Set(vd, true);
             v.byteview = vd->contentbyteview;
-            v.writable = !vd->copybind && !(vd->type && vd->type->cq);
+            // A par for's body sees what is outside it read-only (§4.3 R1).
+            v.writable = !vd->copybind && !(vd->type && vd->type->cq) && !tc.ParView(vd);
             v.reusable = vd->reusable;
             v.nonneg = vd->nonneg;
             if (vd->nonneg) v.nonnegfrom = vd;
@@ -482,6 +484,22 @@ inline Val Dot::Check(TypeCheck &tc, TypeExpr *) {
     if (auto bd = LookupBuiltin(name); bd && (bd->flags & BF_PROPERTY)) {
         if (RecvKindOf(t) & bd->recv) {
             member = bd->kind;
+            // An array's length, which no iteration of a par for can change,
+            // is read beside the parts of it the iterations write
+            // (FinishParFor); a field of the name is no length, and the
+            // header of an array a reference leads to may lie in an element
+            // an iteration owns (ParLengthExempt).
+            if (auto id = Is<Ident>(obj); id && id->vdef && tc.InPar()) {
+                if (tc.ParLengthExempt(id->vdef)) tc.ParLengthUse(obj, id->vdef);
+            } else if (auto od = Is<Dot>(obj); od && tc.InPar()) {
+                // A component's, owner.field.len (NoteParComponent).
+                auto oid = Is<Ident>(od->obj);
+                auto pc = oid ? tc.parcomponents.find(oid) : tc.parcomponents.end();
+                if (pc != tc.parcomponents.end() && oid->vdef &&
+                    pc->second->componentowner == oid->vdef &&
+                    tc.ParLengthExempt(pc->second))
+                    tc.ParLengthUse(oid, oid->vdef);
+            }
             Val v;
             assert(bd->rets[0] == 'i');
             v.type = tc.ast.inttypes[IS_I64];

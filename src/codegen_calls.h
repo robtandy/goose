@@ -35,6 +35,8 @@ inline void CodeGen::EmitSlidePrefix(const string &base, IntStorage ls, const st
 }
 
 inline vector<string> CodeGen::EmitCall(Call *c, Dst d0, vector<Dst> *alldst) {
+    // A par for, outlined: its fork (OutlineParLoops).
+    if (c->parfor) return EmitParFor(c);
     // An element-run destination for a variable-array result: builtins
     // and tag dispatch have no element-run form, so take the value form
     // and slide its length prefix out -- a builtin builds the value in the

@@ -44,6 +44,12 @@ inline TypeCheck::LVal TypeCheck::CheckLValue(Node *n) {
         // is a copy (§9.5). Whether the variable itself is assigned is up
         // to its binding alone (`let`, a copy: WholeWritable, §4.4).
         lv.writable = !vd->copybind && !(vd->type && vd->type->cq);
+        // A par for's body sees what is outside it read-only (§4.3 R1).
+        NoteParUse(n, vd);
+        if (ParView(vd)) {
+            lv.writable = false;
+            lv.parfrom = vd;
+        }
         lv.letbound = !vd->isvar;
         lv.letname = vd->name;
         lv.copyof = vd->copybind ? vd : nullptr;
@@ -72,9 +78,17 @@ inline TypeCheck::LVal TypeCheck::CheckLValue(Node *n) {
         return lv;
     }
     if (auto ix = Is<Index>(n)) {
-        auto lv = LValueBase(ix->obj);
-        DerefLValue(lv, ix->obj);
-        SliceProvenance(lv, ix->obj);
+        // a[k] in a par for's body, k the iteration's index: an element the
+        // iteration owns, of an array from outside the body (§4.3 R2).
+        VarDef *owned = nullptr, *by = nullptr;
+        auto part = ParIndexPart(ix, owned, by);
+        LVal lv;
+        {
+            Saved<VarDef *> po(parowned, part ? owned : parowned);
+            lv = LValueBase(ix->obj);
+            DerefLValue(lv, ix->obj);
+            SliceProvenance(lv, ix->obj);
+        }
         TypeExpr *elem;
         if (lv.type->kind == TY_SLICE) {
             elem = lv.type->sub;
@@ -91,6 +105,18 @@ inline TypeCheck::LVal TypeCheck::CheckLValue(Node *n) {
         if (lv.intemp) NoRelRefTempRead(ix->obj, lv.type, elem);
         CheckIntAny(ix->idx);
         if (lv.type->cq) lv.writable = false;   // An element of a const value.
+        if (part) {
+            // Owned where it is a flat element of one known storage, which
+            // the rest of the body then reaches no other way (FinishParFor);
+            // read-only as anything else from outside the body otherwise.
+            auto root = lv.Exact() ? lv.Root() : nullptr;
+            if (lv.writable && root && !root->isglobal && IsFlat(elem)) {
+                AddParPart(owned, root, PF_ELEMENT, nullptr, n, ix->obj, elem, by);
+            } else if (lv.writable) {
+                lv.writable = false;
+                lv.parfrom = owned;
+            }
+        }
         lv.letbound = false;
         lv.type = elem;
         lv.var = nullptr;
@@ -257,6 +283,7 @@ inline void TypeCheck::ReadBackLVal(LVal &lv) {
     auto slotread = lv.isslot && SlotReadable(lv.type);
     auto rb = ReadBackRoot(lv.type, lv, lv.byteview, lv.intemp ? &lv.contents : nullptr,
                            slotread, true);
+    auto pathwritable = lv.writable;
     lv.TakeAlts(rb);
     for (auto &a : lv.alts) a.slotread = slotread;
     lv.freshview = false;
@@ -264,6 +291,20 @@ inline void TypeCheck::ReadBackLVal(LVal &lv) {
     lv.intemp = false;
     lv.writable = lv.isslot ? SlotLoadWritable(lv.type, lv.writable)
                             : lv.writable && !lv.type->cq;
+    // In a par for's body nothing launders writability (§4.3 R1): what is
+    // read out of storage the body cannot write, or may point at storage
+    // the body sees read-only -- a copy of a holder from outside it holds
+    // what that holder does -- is read-only (ParReadOnlyAlt). And where it
+    // may point, the loop judges against the parts its iterations own
+    // (FinishParFor): read in the body itself, or in a function value of
+    // it, since what a callee reads out of storage it was handed is the
+    // caller's argument's.
+    if (InPar()) {
+        if (!pathwritable || lv.Any([&](const RootAlt &a) { return ParReadOnlyAlt(a); }))
+            lv.writable = false;
+        if ((int)frames.size() - 1 == Par().frame || frames.back().isfunval)
+            ParReadBack(lv, lv.type);
+    }
 }
 
 // How writable a reference or slice loaded out of a field or an element of
@@ -712,6 +753,7 @@ inline void TypeCheck::ResolveMemberLValue(LVal &lv, Dot *d) {
             auto parent = lv.AsRoots();
             if (step(inst->st->fields, inst->ftypes, true)) {
                 lv.TakeAlts(ProjectRoots(parent, t, d->fieldidx));
+                if (InPar()) NoteParComponent(d, lv);
                 return;
             }
         } else if (step(inst->st->fields, inst->ftypes, FieldsInFrame(d))) return;
