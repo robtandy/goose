@@ -1695,9 +1695,14 @@ inline FnSpec *TypeCheck::GetOrCreateSpec(MatchInfo &mi, vector<Val> &argvals, N
         for (size_t i = 0; i < views.size(); i++)
             if (auto r = vroots[i]) views[i].parconcrete = !vclasses[i] && apart(r);
     }
-    // A call in a par for's body is checked under its rules (FnSpec::inpar).
+    // A call in a par for's body is checked under its rules (FnSpec::inpar),
+    // for a nested function as the loop's body sees what it names, which is
+    // where the loop lies in the text: every specialization's copy of one
+    // loop is the same one there (ForLoop::parorigin), so a nested recursive
+    // function's call from its own loop reuses what that call checks.
     auto inpar = InPar();
     auto parloop = inpar && sf->isnested ? Par().loop : nullptr;
+    if (parloop && parloop->parorigin) parloop = parloop->parorigin;
     for (auto spec : sf->specs) {
         // A reuse would merge an exemplar's call into what the real calls
         // agreed on (CheckExemplars).

@@ -4809,7 +4809,9 @@ grown, shrunk or assigned meanwhile.
   outside. Parts of one storage taken through two variables are taken
   through two views of it, which may start at different elements, and
   overlap from one iteration to the next however they are cut: `a[k]` beside
-  `b[k]`, with `a` and `b` slices of one array, is an error. A root
+  `b[k]`, with `a` and `b` slices of one array, is an error, and so is
+  `b[k]` in `par for v, k in a`, whose iterations each read their element of
+  `a`. A root
   struct's owner holds its components' storage (§3.9): a use of the owner
   reaches every component, and `s.field` the one it names alone. One storage is cut one way: by element, or by
   `chunk` of one `n`, or by `chunk_at` of one `b`. The body then reaches that
@@ -4833,7 +4835,8 @@ grown, shrunk or assigned meanwhile.
   or `^=`, directly or by a nested function the body calls, where the body
   reads and writes it no other way: not by name, nor through a reference
   that may point at it, or a holder or an array of references that may
-  lead to one, read in the body or handed to a function it calls. Each
+  lead to one, read in the body -- the loop's own binder, read out of its
+  sequence, included -- or handed to a function it calls. Each
   chunk of iterations (below)
   accumulates its own, from the operation's identity, and the loop
   combines them into the variable in chunk order once every iteration has

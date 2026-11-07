@@ -2147,6 +2147,13 @@ inline void TypeCheck::CheckFor(ForLoop *x) {
                 iterprov.writable = false;
             }
         }
+        if (x->iterkind == IK_ARRAY || x->iterkind == IK_SLICE) {
+            auto id = Is<Ident>(x->iter);
+            par.hasseq = true;
+            par.seqroots = iterprov.AsRoots();
+            par.seqvar = id ? id->vdef : nullptr;
+            par.seqelem = elemtype;
+        }
     }
     auto seqprov = iterprov;
     auto head = SaveFlow();
@@ -2165,6 +2172,14 @@ inline void TypeCheck::CheckFor(ForLoop *x) {
                     iterprov.writable = false;
                 if ((int)frames.size() - 1 == Par().frame || frames.back().isfunval)
                     ParReadBack(iterprov, bindtype);
+            }
+            // A par for's own binder is read out of the sequence, which every
+            // iteration sees, so it is as read-only as what the body reads
+            // from outside it (§4.3 R1), and judged as a read-back of the
+            // body's against the loop's parts and reductions (FinishParFor).
+            if (x->ispar) {
+                iterprov.writable = false;
+                par.readbacks.push_back({ iterprov.AsRoots(), bindtype, x });
             }
         }
         auto vd = NewVar(x->var, bindtype, x->line, false, x->vdef);

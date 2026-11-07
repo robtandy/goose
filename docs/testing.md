@@ -245,6 +245,10 @@ place, all printing the same:
   refers to; a reference to a slice of another array read beside the
   parts of one; and a root struct's component owned by the iterations
   while the body reads another, and the owned one's length.
+* `threads/par_for_recursive_nested.goose`: a nested recursive function
+  whose own `par for` calls it again, which must compile to a bounded
+  number of specializations and give the same result at every thread
+  count.
 * `threads/par_for_abort.goose`: an abort in one iteration ends the
   program with its message, whichever thread runs it.
 * `threads/par_for_contained.goose`: in a contained worker, a `par for`
@@ -273,10 +277,11 @@ what a holder from outside the body, or a copy of one, refers to), the
 reductions (`float_reduction`,
 `reduction_mixed`, `reduction_read`, and `reused_reduction_read`, through
 a generic function reused from another loop; `reduction_alias`,
-`reduction_alias_callee`, `reduction_alias_holder` and
-`reduction_alias_readback`: a reduction read through a reference to it,
-an array of them handed to a callee, a holder, and a reference read out of
-storage in the body), R2 (`chunk_alias`,
+`reduction_alias_callee`, `reduction_alias_holder`,
+`reduction_alias_readback` and `reduction_binder`: a reduction read
+through a reference to it, an array of them handed to a callee, a holder,
+a reference read out of storage in the body, and the loop's own binder),
+R2 (`chunk_alias`,
 `chunk_whole_read`, `element_alias`, `bounds_alias`, `chunk_two_ways`,
 `field_named_len`, `shifted_index`, `shifted_chunk`, `param_global_alias`
 and `reused_alias`: a partitioned array read another way, an element of
@@ -298,7 +303,10 @@ read of it through the owner, and the whole owner handed to a callee;
 `slice_ref_alias`, `slice_ref_callee`, `slice_ref_nested` and
 `slice_ref_holder_callee`: a reference to a slice variable viewing the
 partitioned array, read in the body, by a function taking `i64[:]&`, by a
-nested function, and through a holder handed to a function; `nested_alias` and `nested_outer_write`: an outer loop's
+nested function, and through a holder handed to a function;
+`binder_alias` and `seq_shifted`: the loop's own reference binder pointing
+at an element another iteration owns, and a part of another view of the
+sequence, one element on; `nested_alias` and `nested_outer_write`: an outer loop's
 partitioned array read in an inner loop's body, and an inner loop's
 element of what the outer loop sees from outside, which every outer
 iteration writes), R3 (`print`, `qput` in a callee, `exit`, `thread_pool`),

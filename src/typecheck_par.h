@@ -734,6 +734,29 @@ inline void TypeCheck::FinishParFor(ForLoop *x, ParCtx &ctx) {
             }
         }
     }
+    // Each iteration of a loop over a sequence reads its own element of it:
+    // a part that may be another view of the sequence's storage, from
+    // another start, may be another iteration's element. The element `par
+    // for &x` binds, and a[k] of the sequence's own variable by the loop's
+    // index, are the iteration's own.
+    if (ctx.hasseq)
+        for (auto &p : ctx.parts) {
+            if (p.at == x) continue;
+            if (p.var && p.var == ctx.seqvar && p.form == PF_ELEMENT && !p.by) continue;
+            auto kin = !p.elem || !ctx.seqelem || MaySameType(p.elem, ctx.seqelem) ||
+                       IsU8(p.elem) || IsU8(ctx.seqelem);
+            if (!kin) continue;
+            for (auto &a : ctx.seqroots.alts) {
+                FnSpec *sp = nullptr;
+                auto al = ParMayAlias(a, p.root, ctx, sp);
+                clash(al, sp, a.root, p.root, p.at, [&] {
+                    return cat("a par for's iterations each read their element of the sequence "
+                               "and own ", formname(p), " here, which may be a view of the "
+                               "sequence's storage from another start, so that one iteration "
+                               "writes what another reads (docs/design/child_threads.md §4.4)");
+                });
+            }
+        }
     // A reference or slice read out of storage in the body may lead to the
     // storage of a part, or to a reduction, whatever the variable whose
     // storage it was read out of.

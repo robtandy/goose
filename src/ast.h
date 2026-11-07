@@ -1379,6 +1379,11 @@ NODE(ForLoop)
     // iter names), and the iteration count before the chunk, where a range's
     // or count's index binder counts from it.
     VarDef *parlo = nullptr, *parhi = nullptr, *parix = nullptr;
+    // The loop in the function's own text this one is a copy of (Clone1),
+    // null for that one: a specialization of a nested function called in a
+    // `par for`'s body is keyed by it (FnSpec::parloop), which every copy of
+    // a body -- each specialization's own -- shares.
+    ForLoop *parorigin = nullptr;
     string_view var;
     string_view idxvar;         // Optional second binding; empty if absent.
     // The integer types written for a range's or count's binder and for an

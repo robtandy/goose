@@ -255,6 +255,7 @@ inline Node *ForLoop::Clone1(Ast &ast) const {
     f->vartype = ast.CloneExpansionType(vartype);
     f->idxtype = ast.CloneExpansionType(idxtype);
     f->ispar = ispar;
+    f->parorigin = parorigin ? parorigin : const_cast<ForLoop *>(this);
     return f;
 }
 

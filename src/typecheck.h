@@ -2277,6 +2277,15 @@ struct TypeCheck {
             Node *at = nullptr;
         };
         vector<ParRead> readbacks;
+        // A loop over an array or a slice: where the sequence's elements lie,
+        // of what type, and the variable that names it, if one does. Each
+        // iteration reads its own element, the element `par for &x` binds
+        // being its part, and another view of that storage may be another
+        // iteration's element (FinishParFor).
+        bool hasseq = false;
+        Roots seqroots;
+        VarDef *seqvar = nullptr;
+        TypeExpr *seqelem = nullptr;
     };
     // The par fors whose bodies are being checked, innermost last. A null
     // entry is a body that is checked for no par for, between them.

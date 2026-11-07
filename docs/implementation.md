@@ -4209,7 +4209,10 @@ runs and `FinishParFor` judges once they have settled.
 * **Specializations.** A call made while `parctx` holds a loop makes or
   reuses a specialization with `FnSpec::inpar`, and for a nested function,
   whose body may name the loop's variables, `FnSpec::parloop` too, both part
-  of the key; such a body is checked under the loop's rules, so it writes no
+  of the key. `parloop` is the loop of the text (`ForLoop::parorigin`, which
+  `Clone1` sets on every copy), not a specialization's copy of it, so a
+  nested recursive function called from its own loop reuses the
+  specialization that call is in rather than making one per copy; such a body is checked under the loop's rules, so it writes no
   global and none of the loop's enclosing functions' variables, whichever
   call first reached it. A body checked for no par for pushes a barrier
   (a null `parctx` entry) for its check.
@@ -4271,6 +4274,15 @@ runs and `FinishParFor` judges once they have settled.
   read-back counts only where what it reaches may hold a run of the
   part's elements (`ParUseReaches`, `ParPointeeReaches`, `ParHoldsRun`),
   which a `u8` pointee, a byte view of any array, always may.
+* **The sequence.** A loop over an array or a slice reads its sequence's
+  elements, each iteration its own: `ParCtx::seqroots` keeps where they lie
+  (with `seqvar` and `seqelem`), and `FinishParFor` takes any part but the
+  element `par for &x` binds and `a[k]` of the sequence's own variable by
+  the loop's index as one that may be another iteration's element, where
+  its root may be the sequence's. A reference or slice binder is read out
+  of the sequence before the body's `ParScope` is pushed, so `CheckFor`
+  makes it read-only and records it as one of the loop's read-backs
+  itself, which its parts and reductions are judged against.
 * **Root structs.** A root struct's owner holds its components' storage
   (§3.9), so `ParMayAlias` takes an owner and a component of it, either
   way around, as one storage; but `s.field`, the owner's name with a path
