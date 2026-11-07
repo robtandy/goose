@@ -4212,7 +4212,12 @@ runs and `FinishParFor` judges once they have settled.
   of the key. `parloop` is the loop of the text (`ForLoop::parorigin`, which
   `Clone1` sets on every copy), not a specialization's copy of it, so a
   nested recursive function called from its own loop reuses the
-  specialization that call is in rather than making one per copy; such a body is checked under the loop's rules, so it writes no
+  specialization that call is in rather than making one per copy. A
+  function handed a function value that names variables of its own -- a
+  nested function, or a block -- is keyed by the loop too, since what the
+  value may write, and where it may return to, depends on which loop the
+  call is in. A case function a dispatch reuses is held to the loop's exits
+  as an ordinary call's callee is (`ParCallNeeds`, from `TryDispatch`); such a body is checked under the loop's rules, so it writes no
   global and none of the loop's enclosing functions' variables, whichever
   call first reached it. A body checked for no par for pushes a barrier
   (a null `parctx` entry) for its check.

@@ -1269,6 +1269,12 @@ inline Val TypeCheck::TryDispatch(Call *c, vector<SFunction *> &cands, FnSpec *e
             first = spec;
         }
         c->dispatch.push_back(spec);
+        // As an ordinary call's in a par for's body (CheckCall): a reused case
+        // may return out of the functions around the loop (§4.3 R4).
+        if (InPar()) {
+            ParEffect(c, -1, mi.sf);
+            ParCallNeeds(c, spec);
+        }
     }
     // A case taking a non-fixed-size variant by value gets a copy of the
     // argument, taken before the tag is read and held to the end of the call
@@ -1699,9 +1705,14 @@ inline FnSpec *TypeCheck::GetOrCreateSpec(MatchInfo &mi, vector<Val> &argvals, N
     // for a nested function as the loop's body sees what it names, which is
     // where the loop lies in the text: every specialization's copy of one
     // loop is the same one there (ForLoop::parorigin), so a nested recursive
-    // function's call from its own loop reuses what that call checks.
+    // function's call from its own loop reuses what that call checks. So is
+    // one handed a function value that names variables of its own -- a nested
+    // function, or a block -- which the function calls: what the value may
+    // write, and where it may return to, depend on the loop too.
     auto inpar = InPar();
-    auto parloop = inpar && sf->isnested ? Par().loop : nullptr;
+    auto closure = false;
+    for (auto &fv : mi.fnvals) closure = closure || fv.second.fv || fv.second.env;
+    auto parloop = inpar && (sf->isnested || closure) ? Par().loop : nullptr;
     if (parloop && parloop->parorigin) parloop = parloop->parorigin;
     for (auto spec : sf->specs) {
         // A reuse would merge an exemplar's call into what the real calls

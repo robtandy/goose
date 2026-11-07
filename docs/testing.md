@@ -249,6 +249,9 @@ place, all printing the same:
   whose own `par for` calls it again, which must compile to a bounded
   number of specializations and give the same result at every thread
   count.
+* `threads/par_for_closure_loops.goose`: a generic function handed a
+  nested function of a `par for`'s body, called twice there, beside an
+  inner `par for` that reads what it writes.
 * `threads/par_for_reused_depth.goose`: a function with a `par for` over
   an array of its own, reused from two `par for`s of a caller, the second
   inside more blocks, where its array is no caller's.
@@ -273,6 +276,9 @@ through a reference or slice a plain `for` in the body binds out of an
 array from outside it; `holder_copy`, `holder_incdec`, `ref_array_copy`
 and `global_holder_copy`: through a reference read out of a copy the body
 makes of a holder, an array of references or a global holder;
+`closure_reuse`: a generic function handed a nested function, checked for
+an outer loop whose body the nested function's variable is in, called
+again in an inner loop that sees it from outside;
 `holder_callee`, `holder_copy_callee`, `holder_ref_callee` and
 `ref_array_callee`: in a function the body hands a holder, a copy of one,
 a reference to a copy, or an array of references; `holder_slice_ref` and
@@ -319,7 +325,9 @@ row owned beside the rows, as parts and as the sequence; `nested_alias` and `nes
 partitioned array read in an inner loop's body, and an inner loop's
 element of what the outer loop sees from outside, which every outer
 iteration writes), R3 (`print`, `qput` in a callee, `exit`, `thread_pool`),
-R4 (`break`, `return`, `return_from`), and `sequential_elems`, a `par for`
+R4 (`break`, `return`, `return_from`, and `dispatch_return_reuse`: case
+functions checked where a block's return stays in the outer loop's body,
+dispatched again from an inner loop it would leave), and `sequential_elems`, a `par for`
 over elements of variable size.
 
 The slicing members `a.chunk(k, n)` and `a.chunk_at(bounds, k)` (spec
