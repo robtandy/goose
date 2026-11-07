@@ -249,6 +249,9 @@ place, all printing the same:
   whose own `par for` calls it again, which must compile to a bounded
   number of specializations and give the same result at every thread
   count.
+* `threads/par_for_reused_depth.goose`: a function with a `par for` over
+  an array of its own, reused from two `par for`s of a caller, the second
+  inside more blocks, where its array is no caller's.
 * `threads/par_for_recursive_scratch.goose`: a recursive function whose
   `par for` keeps a large fixed local across its call back into the cycle,
   which stays native in the outlined body as in a plain loop.

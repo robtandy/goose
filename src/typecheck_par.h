@@ -155,7 +155,11 @@ inline void TypeCheck::ParApply(const ParNote &n) {
 
 // Every specialization being checked above the outermost par for on the
 // stack, and checked for it, records n: a call that later reuses it in a
-// par for's body, whose loop no check of it saw, replays n there.
+// par for's body, whose loop no check of it saw, replays n there. But not
+// where n's variable is the specialization's own, declared in its frame or
+// one above (VarDef::depth past the frame's scopebase): no loop of a caller
+// sees that from outside, whatever its depth now -- a loop in the callee's
+// own body, which saw it, is checked again with the body.
 inline void TypeCheck::ParRecord(const ParNote &n) {
     auto base = -1;
     for (auto i = (int)parctx.size() - 1; i >= 0 && parctx[i]; i--) base = parctx[i]->frame;
@@ -163,6 +167,7 @@ inline void TypeCheck::ParRecord(const ParNote &n) {
     for (auto i = (int)frames.size() - 1; i > base; i--) {
         auto &f = frames[i];
         if (f.isfunval || !f.spec || !f.spec->inpar) continue;
+        if (n.var && !n.var->isglobal && n.var->depth > f.scopebase) continue;
         auto &notes = parnotes[f.spec];
         auto known = false;
         for (auto &m : notes)

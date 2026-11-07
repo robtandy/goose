@@ -4301,7 +4301,11 @@ runs and `FinishParFor` judges once they have settled.
   A call that reuses a specialization in a par for's body replays its
   record there (`ParReplay`, from `GetOrCreateSpec`), so a generic
   function checked in one par for and called again from another, a nested
-  function's reduction it is handed included, counts for both. It adds the reductions and the `chunk_at` pairs to what
+  function's reduction it is handed included, counts for both. What
+  concerns a variable of the specialization's own (declared in its frame or
+  above, `VarDef::depth` past the frame's `scopebase`) is not recorded: no
+  caller's loop sees it from outside, whatever its depth then, and the
+  callee's own loops are checked again with its body. It adds the reductions and the `chunk_at` pairs to what
   the loop holds for codegen, which an earlier check of the same loop (a
   recursive cycle's round) may have found through a function this one
   reused.
