@@ -464,7 +464,15 @@ inline Prov TypeCheck::SlotView(const Prov &p, TypeExpr *slice) {
         ReadBackLVal(lv);
         out.Add(lv);
         out.byteview = out.byteview || lv.byteview;
+        // In a par for's body, as the read-back says (ReadBackLVal).
+        if (InPar()) out.writable = out.writable && lv.writable;
     }
+    // In a par for's body nothing launders writability (§4.3 R1): a slice a
+    // slot holds is read-only where it may lead to storage the body sees
+    // read-only, however writable the reference to the slot is -- a copy of
+    // a holder from outside the body holds what that holder does.
+    if (InPar() && out.Any([&](const RootAlt &a) { return ParReadOnlyAlt(a); }))
+        out.writable = false;
     return out;
 }
 

@@ -237,9 +237,10 @@ place, all printing the same:
   global reused beside the parts of a local array.
 * `threads/par_for_holders.goose`: holders and arrays of references to the
   body's own variables, copies of them and references to those, written
-  through in the body and in functions it calls; and a root struct's
-  component owned by the iterations while the body reads another, and the
-  owned one's length.
+  through in the body and in functions it calls, the slice field of one
+  through a reference to its slot, and a format overload writing what one
+  refers to; and a root struct's component owned by the iterations while
+  the body reads another, and the owned one's length.
 * `threads/par_for_abort.goose`: an abort in one iteration ends the
   program with its message, whichever thread runs it.
 * `threads/par_for_contained.goose`: in a contained worker, a `par for`
@@ -260,7 +261,12 @@ and `global_holder_copy`: through a reference read out of a copy the body
 makes of a holder, an array of references or a global holder;
 `holder_callee`, `holder_copy_callee`, `holder_ref_callee` and
 `ref_array_callee`: in a function the body hands a holder, a copy of one,
-a reference to a copy, or an array of references), the reductions (`float_reduction`,
+a reference to a copy, or an array of references; `holder_slice_ref` and
+`holder_slice_ref_param`: in a function handed a reference to the slice
+field of a copy of a holder, as the slice and as the reference;
+`format_hook` and `format_hook_copy`: in a format overload `str` hands
+what a holder from outside the body, or a copy of one, refers to), the
+reductions (`float_reduction`,
 `reduction_mixed`, `reduction_read`, and `reused_reduction_read`, through
 a generic function reused from another loop; `reduction_alias`,
 `reduction_alias_callee`, `reduction_alias_holder` and

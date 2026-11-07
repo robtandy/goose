@@ -1114,6 +1114,16 @@ inline void TypeCheck::CheckRenderable(Call *c, const char *what, TypeExpr *t, N
             auto hascontents = TempContents(value, contents);
             v.TakeAlts(ReadBackRoot(ft, v, value.byteview, hascontents ? &contents : nullptr));
             v.writable = SlotLoadWritable(ft, value.writable);
+            // In a par for's body nothing launders writability (§4.3 R1), as
+            // ReadBackLVal reads it: a reference or slice read out of storage
+            // the body cannot write, or that may point at storage it sees
+            // read-only, is read-only for the format overload it is handed.
+            if (InPar()) {
+                if (!value.writable || v.Any([&](const RootAlt &a) { return ParReadOnlyAlt(a); }))
+                    v.writable = false;
+                if ((int)frames.size() - 1 == Par().frame || frames.back().isfunval)
+                    ParReadBack(v, ft);
+            }
         }
         CheckRenderable(c, what, ft, at, seen, v, out);
     };

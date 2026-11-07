@@ -4192,7 +4192,9 @@ runs and `FinishParFor` judges once they have settled.
   body cannot write, or that may point at storage the body sees read-only,
   is read-only (`ReadBackLVal`, and `PointeeWritable`, which reads a slot's
   reference back as `ReadBackLVal` does, so a copy of a holder from outside
-  the body holds what the original does). Where a read-back may point is
+  the body holds what the original does; `SlotView`, the slice a reference
+  to a slot loads; and `CheckRenderable`, the parts it hands a format
+  overload). Where a read-back may point is
   `ParReadOnlyAlt`'s: a variable from outside the body or a global; any
   bound, which may be anything outside its scope; a class of the loop's
   function or of one around it; and a class of a specialization checked

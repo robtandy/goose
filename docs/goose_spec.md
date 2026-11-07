@@ -4780,7 +4780,9 @@ grown, shrunk or assigned meanwhile.
   through one, whatever the type of the slot it is loaded from. Nor through
   one read out of a copy the body makes of a holder or an array of
   references from outside it, which holds what the original does: what a
-  reference read out of storage may point at, it is as read-only as. A
+  reference read out of storage may point at, it is as read-only as, and
+  so is the slice a slot holds, loaded through a reference to the slot,
+  and a part `print` or `str` hands a format overload (§3.7). A
   function the body calls is checked for the body, as a specialization of
   its own (§10.2), under the same rule: it writes no global, and no
   variable of a function around the loop, and writes through what it reads
