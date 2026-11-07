@@ -1647,6 +1647,54 @@ inline FnSpec *TypeCheck::GetOrCreateSpec(MatchInfo &mi, vector<Val> &argvals, N
                                 (!owner || (!external && r->ownerspec && within(r->ownerspec, owner)));
         }
     }
+    // The same, over every argument and view, for a par for's judgement of
+    // two classes apart (RootArg::parconcrete): a slice beside a class may
+    // be the array that class stands for, whatever its kind.
+    {
+        auto callerclass = [&](VarDef *r) -> FnSpec * {
+            for (auto fi = (int)frames.size() - 1; r && fi >= 0; fi--)
+                for (size_t j = 0; frames[fi].spec && j < frames[fi].spec->params.size(); j++)
+                    if (ProjectedFrom(r, frames[fi].spec->params[j]->ref.Root()))
+                        return frames[fi].spec;
+            return nullptr;
+        };
+        vector<VarDef *> vroots(views.size(), nullptr);
+        vector<FnSpec *> vclasses(views.size(), nullptr);
+        for (size_t i = 0; i < views.size(); i++) {
+            if (views[i].cls <= 0) continue;
+            vroots[i] = argvals[i].held.Root();
+            vclasses[i] = callerclass(vroots[i]);
+        }
+        FnSpec *powner = nullptr;
+        auto pexternal = false;
+        auto noteclass = [&](FnSpec *cs) {
+            if (!cs) return;
+            pexternal = pexternal || (powner && cs != powner);
+            powner = cs;
+        };
+        for (size_t i = 0; i < roots.size(); i++) if (argroots[i]) noteclass(classes[i].first);
+        for (size_t i = 0; i < views.size(); i++) if (vroots[i]) noteclass(vclasses[i]);
+        // A global's, a function's variable's, or a class of another kind
+        // (a view's): any of them may be what a class beside it stands for,
+        // but for a variable inside that class's activation.
+        auto apart = [&](VarDef *r) {
+            if (IsTemp(r)) return true;
+            if (IsClassRoot(r) || (!r->isglobal && !r->ownerspec)) return false;
+            return !powner || (!pexternal && r->ownerspec && within(r->ownerspec, powner));
+        };
+        auto others = true;
+        for (size_t i = 0; i < roots.size(); i++)
+            if (argroots[i] && !classes[i].first && !apart(argroots[i])) others = false;
+        for (size_t i = 0; i < views.size(); i++)
+            if (vroots[i] && !vclasses[i] && !apart(vroots[i])) others = false;
+        for (size_t i = 0; i < roots.size(); i++)
+            if (auto r = argroots[i])
+                roots[i].parconcrete = classes[i].first ? !pexternal && others : apart(r);
+        // A view's class keeps no `via`: one standing for a class is never
+        // known apart.
+        for (size_t i = 0; i < views.size(); i++)
+            if (auto r = vroots[i]) views[i].parconcrete = !vclasses[i] && apart(r);
+    }
     // A call in a par for's body is checked under its rules (FnSpec::inpar).
     auto inpar = InPar();
     auto parloop = inpar && sf->isnested ? Par().loop : nullptr;
@@ -1727,9 +1775,12 @@ inline FnSpec *TypeCheck::GetOrCreateSpec(MatchInfo &mi, vector<Val> &argvals, N
             auto &sr = spec->roots[i];
             sr.exact = sr.exact && roots[i].exact;
             sr.concrete = sr.concrete && roots[i].concrete && rootsok;
+            sr.parconcrete = sr.parconcrete && roots[i].parconcrete && rootsok;
             for (auto &v : roots[i].via)
                 if (find(sr.via.begin(), sr.via.end(), v) == sr.via.end()) sr.via.push_back(v);
             if (rootsok) spec->views[i].exact = spec->views[i].exact && views[i].exact;
+            auto &sv = spec->views[i];
+            sv.parconcrete = sv.parconcrete && views[i].parconcrete && rootsok;
         }
         if (spec->inprogress) {
             for (auto v : spec->narrowedenv)

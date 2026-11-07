@@ -2097,6 +2097,15 @@ struct RootArg {
     // them (GetOrCreateSpec). ANDed over call sites and not part of the key,
     // like `exact`.
     bool concrete = false;
+    // As `concrete`, over every argument and view at the call site rather
+    // than the fat references alone, for a par for's judgement of two classes
+    // as storage apart (TypeCheck::ParMayAlias): a class of a parameter of P
+    // beside only variables of P's activation, temporaries and other classes
+    // of P; a temporary; a global or a function's variable beside no class
+    // of a parameter, or only classes of one P it lies inside the activation
+    // of. ANDed over call sites, settled through `via` for a class, and not
+    // part of the key.
+    bool parconcrete = false;
     // For a class: the specialization and index of each parameter it stood
     // for at some call site. It stays concrete only while all of those are
     // concrete and exact, which SettleParamRootExactness settles.

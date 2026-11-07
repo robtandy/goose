@@ -6,7 +6,8 @@
 // own the elements of one while the body reads another, and the length of
 // the one they own. The slice a holder of the body's own holds is written
 // through a reference to its slot, and a format overload str runs writes
-// through the reference a holder of the body's own hands it.
+// through the reference a holder of the body's own hands it. A reference to
+// a slice of another array is read beside the parts of one.
 struct H { r: i64& }
 
 struct HS { s: i64[:] }
@@ -22,6 +23,8 @@ fn format(out: u8[>..]&, t: Tally&) {
     t.n += 1;
     out.append("t");
 }
+
+fn first(s: i64[:]&) -> i64 { s[0] }
 
 fn bump(h: H) { h.r += 1; }
 
@@ -65,4 +68,12 @@ fn main() {
         seen[k] = 1000 * mine[0] + t.n + 100 * text.len;
     }
     print(seen);
+    // A reference to a slice of another array than the one the iterations
+    // own is read freely, in the body and by a function handed it.
+    var ys: i64[4] = [5, 6, 7, 8];
+    let v = ys[1..4];
+    let r = &v;
+    var zs: i64[4] = [0, 0, 0, 0];
+    par for k in 4 { zs[k] = first(r) + r[k % 3]; }
+    print(zs);
 }

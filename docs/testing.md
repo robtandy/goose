@@ -234,13 +234,17 @@ place, all printing the same:
 * `threads/par_for_reused.goose`: a generic function handed a nested
   function that reduces a variable, called from three `par for`s in turn,
   each of which must add its own count exactly, and a helper reading a
-  global reused beside the parts of a local array.
+  global reused beside the parts of a local array; a two-array kernel
+  called both ways around, directly and through another function, and
+  one reading through a reference to a slice of another array, which the
+  settled check of parameters apart must accept.
 * `threads/par_for_holders.goose`: holders and arrays of references to the
   body's own variables, copies of them and references to those, written
   through in the body and in functions it calls, the slice field of one
   through a reference to its slot, and a format overload writing what one
-  refers to; and a root struct's component owned by the iterations while
-  the body reads another, and the owned one's length.
+  refers to; a reference to a slice of another array read beside the
+  parts of one; and a root struct's component owned by the iterations
+  while the body reads another, and the owned one's length.
 * `threads/par_for_abort.goose`: an abort in one iteration ends the
   program with its message, whichever thread runs it.
 * `threads/par_for_contained.goose`: in a contained worker, a `par for`
@@ -283,11 +287,18 @@ the parameter may be, directly and through a function reused from another
 loop; `reuse_inexact_after`, `reuse_inexact_before` and
 `reuse_inexact_via`: two parameters a later call, an earlier one, or the
 calls of a function passing its own parameters on, may give one array;
+`param_global_same` and `param_outer_same`: a function passing its own
+parameter beside a global, or beside a variable of the function it is
+nested in, which its caller makes the same array;
 `byte_view_alias` and `byte_view_readback`: a byte view that may be of the
 partitioned array, as a parameter and read out of a holder;
 `root_component`, `root_component_slice` and `root_owner_callee`: a root
 struct's component partitioned by element and through a slice, beside a
-read of it through the owner, and the whole owner handed to a callee; `nested_alias` and `nested_outer_write`: an outer loop's
+read of it through the owner, and the whole owner handed to a callee;
+`slice_ref_alias`, `slice_ref_callee`, `slice_ref_nested` and
+`slice_ref_holder_callee`: a reference to a slice variable viewing the
+partitioned array, read in the body, by a function taking `i64[:]&`, by a
+nested function, and through a holder handed to a function; `nested_alias` and `nested_outer_write`: an outer loop's
 partitioned array read in an inner loop's body, and an inner loop's
 element of what the outer loop sees from outside, which every outer
 iteration writes), R3 (`print`, `qput` in a callee, `exit`, `thread_pool`),

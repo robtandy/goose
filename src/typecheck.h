@@ -3016,8 +3016,7 @@ struct TypeCheck {
     Alias MayAliasRoots(VarDef *a, bool aexact, VarDef *b, bool bexact);
     Alias MayAliasRoots(VarDef *a, bool aexact, VarDef *b, bool bexact, FnSpec *current);
     // A growth of, or a use of (CheckBuiltUses), a root the call sites have
-    // to tell apart from the one under construction; or a use in a par for's
-    // body of a root they have to tell apart from a part's (FinishParFor).
+    // to tell apart from the one under construction.
     struct GrowConflict {
         Node *at = nullptr;
         FnSpec *spec = nullptr;
@@ -3026,11 +3025,14 @@ struct TypeCheck {
         string msg;
     };
     vector<GrowConflict> growconflicts;
+    // A use in a par for's body of a root the call sites have to tell apart
+    // from a part's, or from a reduction's (FinishParFor, ResolveParConflicts).
+    vector<GrowConflict> parconflicts;
     // Whether a value with alternative `a` may lead to `root`, a part's
     // storage or a reduction, in the par for of ctx: AL_DEFER for two
     // classes of `defer`, which only its call sites can tell apart.
     Alias ParMayAlias(const RootAlt &a, VarDef *root, ParCtx &ctx, FnSpec *&defer);
-    // The par for conflicts left to ResolveGrowConflicts, once each.
+    // The par for conflicts left to ResolveParConflicts, once each.
     set<tuple<Node *, FnSpec *, VarDef *, VarDef *>> pardeferred;
     // The right-hand side of a whole assignment runs while the array's new
     // contents are built over its old ones (§4.4), so nothing it runs may
@@ -3304,6 +3306,7 @@ struct TypeCheck {
         CheckRoot([&] { CheckGlobalShrinks(); });
         CheckRoot([&] { SettleParamRootExactness(); });
         CheckRoot([&] { ResolveGrowConflicts(); });
+        CheckRoot([&] { ResolveParConflicts(); });
         CheckRoot([&] { VerifyLiterals(); });
         CheckRoot([&] { ReportRedundantCasts(); });
         CheckRoot([&] { CheckDefers(); });
@@ -3353,13 +3356,46 @@ struct TypeCheck {
             changed = false;
             for (auto spec : ast.fnspecs)
                 for (auto &ra : spec->roots)
-                    for (auto [p, j] : ra.via)
+                    for (auto [p, j] : ra.via) {
                         if (ra.concrete && (j >= (int)p->roots.size() || !p->roots[j].concrete ||
                                             !p->roots[j].exact)) {
                             ra.concrete = false;
                             changed = true;
                         }
+                        // And as a par for asks it (RootArg::parconcrete).
+                        if (ra.parconcrete &&
+                            (j >= (int)p->roots.size() || !p->roots[j].parconcrete ||
+                             !p->roots[j].exact)) {
+                            ra.parconcrete = false;
+                            changed = true;
+                        }
+                    }
         }
+    }
+
+    // A par for's body's use of storage beside a part, both in classes of one
+    // specialization that every call so far gave arrays apart (ParMayAlias):
+    // an error unless every call that reached it did, now that all are seen
+    // (SettleParamRootExactness). A view's class counts as its parameter's
+    // view says.
+    void ResolveParConflicts() {
+        auto distinct = [&](FnSpec *sp, VarDef *cr) {
+            auto found = false;
+            for (size_t i = 0; sp && i < sp->params.size(); i++) {
+                if (i < sp->roots.size() && ProjectedFrom(cr, sp->params[i]->ref.Root())) {
+                    if (!sp->roots[i].parconcrete || !sp->roots[i].exact) return false;
+                    found = true;
+                }
+                if (auto v = ViewClassOf(sp, i); v && ProjectedFrom(cr, v)) {
+                    if (!sp->views[i].parconcrete || !sp->views[i].exact) return false;
+                    found = true;
+                }
+            }
+            return found;
+        };
+        for (auto &pc : parconflicts)
+            if (!distinct(pc.spec, pc.grown) || !distinct(pc.spec, pc.built))
+                CheckItem([&] { Error(pc.at, pc.msg); });
     }
 
     void CheckUnreached(SFunction *sf) {

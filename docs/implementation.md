@@ -4242,8 +4242,10 @@ runs and `FinishParFor` judges once they have settled.
   (`ParMayAlias`) not to be of one element type; every use but a part's own
   name and a builtin `.len` or `.cap` (`partuses`, `ParLengthUse`) to reach
   no part's storage (`ParRootsOf`: the variable's storage and what it holds,
-  or where it points, and where the references held there lead, closed
-  transitively, since a callee handed it may follow them), and no read-back
+  or where it points, and where the references and slices held there lead
+  -- a slice variable a reference names, a holder's contents, a class's
+  view of its caller's slot or holder -- closed transitively, since a
+  callee handed it may follow them), and no read-back
   either; and a reduction's variable to be used only by its updates
   (`redtargets`), and reached through no other use or read-back that may
   lead to it (`ParReachesVar`: a plain reference to its type, or what
@@ -4254,12 +4256,18 @@ runs and `FinishParFor` judges once they have settled.
   which stands for storage the activation's callers handed it, any global,
   variable of a function around it or other class. Two classes of one
   specialization are `AL_DEFER` while every call so far gave both arrays
-  apart (`ClassSpecOf`: `RootArg::exact` and `concrete`, never a holder's
-  view class): exactness and concreteness are not part of the key, so a
-  later call reusing the specialization may still weaken them. The
-  conflict goes on `growconflicts` (deduplicated by `pardeferred`), and
-  `ResolveGrowConflicts` reports it unless both are still concrete and
-  exact once `SettleParamRootExactness` has seen every call. A use or
+  apart (`ClassSpecOf`: `RootArg::exact` and `parconcrete`, of the
+  parameter or of its view). `parconcrete` is `concrete` taken over every
+  argument and view of a call rather than its fat references alone, since
+  a slice beside a class may be the array that class stands for: a class
+  of P is apart beside only variables inside P's activation, temporaries
+  and other classes of P, and a global or a function's variable beside
+  no class but those of one P it lies inside. Neither it nor exactness is
+  part of the key, so a later call reusing the specialization may still
+  weaken them; `SettleParamRootExactness` settles it through `via`, as
+  `concrete`. The conflict goes on `parconflicts` (deduplicated by
+  `pardeferred`), and `ResolveParConflicts` reports it unless both classes
+  are still exact and `parconcrete` once every call has been seen. A use or
   read-back counts only where what it reaches may hold a run of the
   part's elements (`ParUseReaches`, `ParPointeeReaches`, `ParHoldsRun`),
   which a `u8` pointee, a byte view of any array, always may.

@@ -6,7 +6,8 @@
 // exactly n; the helper scale, which reads a global, is reused beside
 // the parts of a local array, which no global is; and shift, whose calls
 // all pass two arrays apart, each named exactly, keeps writing one while
-// reading the other, whichever way around they come.
+// reading the other, whichever way around they come, as add_view does
+// through a reference to a slice of another array.
 let FACTOR = 3;
 
 fn run<F>() { F(); }
@@ -20,6 +21,10 @@ fn shift(dst: i64[:], src: const i64[:]) {
 }
 
 fn shift_on(x: i64[:], y: i64[:]) { shift(x, y); }
+
+// The slice behind a reference to a slice slot is a view of its own, apart
+// from the other parameter where every call passes another array.
+fn add_view(xs: i64[:], r: i64[:]&) { par for k in xs.len { xs[k] += r[k % r.len]; } }
 
 fn main() {
     var total = 0;
@@ -42,4 +47,7 @@ fn main() {
     shift_on(a, b);
     shift_on(b, a);
     print(a, " ", b);
+    var w = b[0..4];
+    add_view(a, w);
+    print(a);
 }

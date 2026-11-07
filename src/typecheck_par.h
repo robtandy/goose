@@ -307,11 +307,20 @@ inline Roots TypeCheck::ParRootsOf(VarDef *vd) {
         if (vd->type && HoldsPlainRef(vd->type)) r.Add(vd->contents);
     }
     // And where the references held in that storage lead, and so on: a
-    // callee handed vd may read them out and follow them.
+    // callee handed vd may read them out and follow them. A slot holding a
+    // reference or slice -- a variable a reference to a slice names, say --
+    // leads where that points; a holder, where what it holds does; and a
+    // parameter's class, where the view of its caller's slot or holder does.
     for (size_t i = 0; i < r.alts.size(); i++) {
         auto x = r.alts[i].root;
-        if (!x || x == vd || (x->type && !HoldsPlainRef(x->type))) continue;
-        r.Add(x->contents);
+        if (!x || x == vd) continue;
+        if (x->type && IsRefOrSlice(x->type)) {
+            r.Add(x->ref.AsRoots());
+            continue;
+        }
+        if (!x->type || HoldsPlainRef(x->type)) r.Add(x->contents);
+        if (!x->type && x->heldslice) r.Add(x->heldslice->ref.AsRoots());
+        if (!x->type && x->heldholder) r.Add(x->heldholder->contents);
     }
     return r;
 }
@@ -487,12 +496,11 @@ inline void TypeCheck::ParCallNeeds(Node *at, FnSpec *callee) {
 }
 
 // The specialization whose parameter's class r is, on the compile-time path,
-// and whether its calls so far all gave that parameter one root exactly, an
-// array other than every other argument's (RootArg::exact, concrete): only
-// then may another such class of it be other storage, which the calls yet
-// to come may still deny (ResolveGrowConflicts). The contents of a holder
-// parameter (a view class) are never known apart. Null where no frame's
-// specialization has r as a class.
+// and whether its calls so far all gave that parameter, or its view, one root
+// exactly, an array other than every other argument's (RootArg::exact,
+// parconcrete): only then may another such class of it be other storage,
+// which the calls yet to come may still deny (ResolveParConflicts). Null
+// where no frame's specialization has r as a class.
 inline FnSpec *TypeCheck::ClassSpecOf(VarDef *r, bool &distinct) {
     distinct = false;
     for (auto i = (int)frames.size() - 1; i >= 0; i--) {
@@ -501,8 +509,10 @@ inline FnSpec *TypeCheck::ClassSpecOf(VarDef *r, bool &distinct) {
         auto view = false;
         auto p = ClassParam(sp, r, view);
         if (p < 0) continue;
-        distinct = !view && p < (int)sp->roots.size() && sp->roots[p].exact &&
-                   sp->roots[p].concrete;
+        distinct = view ? p < (int)sp->views.size() && sp->views[p].exact &&
+                              sp->views[p].parconcrete
+                        : p < (int)sp->roots.size() && sp->roots[p].exact &&
+                              sp->roots[p].parconcrete;
         return sp;
     }
     return nullptr;
@@ -622,12 +632,12 @@ inline void TypeCheck::FinishParFor(ForLoop *x, ParCtx &ctx) {
     };
     // A use or a part that may reach storage x, where y lies: an error where
     // the two may be one storage, and where only the call sites can tell
-    // (two classes of one specialization), one ResolveGrowConflicts reports
+    // (two classes of one specialization), one ResolveParConflicts reports
     // unless every call reaching it passed them arrays apart.
     auto clash = [&](Alias al, FnSpec *sp, VarDef *xr, VarDef *yr, Node *at, auto msg) {
         if (al == AL_YES) Error(at, msg());
         if (al == AL_DEFER && pardeferred.insert({ at, sp, xr, yr }).second)
-            growconflicts.push_back({ at, sp, xr, yr, msg() });
+            parconflicts.push_back({ at, sp, xr, yr, msg() });
     };
     auto redmsg = [&](string what, VarDef *rv, Node *first) {
         return cat(what, " may point at ", rv->name, ", a reduction of this par for (",
