@@ -4777,10 +4777,16 @@ grown, shrunk or assigned meanwhile.
   body (§9.5), as a by-value `for` binding is: it is not assigned, grown,
   shrunk or written by a member operation, and nothing is written through a
   reference or slice read out of it, or loaded out of storage reached
-  through one, whatever the type of the slot it is loaded from. A function
-  the body calls is checked for the body, as a specialization of its own
-  (§10.2), under the same rule: it writes no global, and no variable of a
-  function around the loop. What the body declares itself it writes
+  through one, whatever the type of the slot it is loaded from. Nor through
+  one read out of a copy the body makes of a holder or an array of
+  references from outside it, which holds what the original does: what a
+  reference read out of storage may point at, it is as read-only as. A
+  function the body calls is checked for the body, as a specialization of
+  its own (§10.2), under the same rule: it writes no global, and no
+  variable of a function around the loop, and writes through what it reads
+  out of an argument only where everything the argument leads to, through
+  the references it holds too, is the body's own at every call that
+  reaches the specialization. What the body declares itself it writes
   freely. The exceptions are the places R2 gives an iteration and the
   reductions below.
 * **R2: what one iteration owns is writable.** Three places are written by
@@ -4801,7 +4807,9 @@ grown, shrunk or assigned meanwhile.
   outside. Parts of one storage taken through two variables are taken
   through two views of it, which may start at different elements, and
   overlap from one iteration to the next however they are cut: `a[k]` beside
-  `b[k]`, with `a` and `b` slices of one array, is an error. One storage is cut one way: by element, or by
+  `b[k]`, with `a` and `b` slices of one array, is an error. A root
+  struct's owner holds its components' storage (§3.9): a use of the owner
+  reaches every component, and `s.field` the one it names alone. One storage is cut one way: by element, or by
   `chunk` of one `n`, or by `chunk_at` of one `b`. The body then reaches that
   storage no other way but for its length (an array's or slice's `.len` or
   `.cap`, not a field of the name): not through the variable, nor through

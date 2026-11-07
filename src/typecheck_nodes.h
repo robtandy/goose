@@ -487,8 +487,16 @@ inline Val Dot::Check(TypeCheck &tc, TypeExpr *) {
             // An array's length, which no iteration of a par for can change,
             // is read beside the parts of it the iterations write
             // (FinishParFor); a field of the name is no length.
-            if (auto id = Is<Ident>(obj); id && id->vdef && tc.InPar())
+            if (auto id = Is<Ident>(obj); id && id->vdef && tc.InPar()) {
                 tc.ParLengthUse(obj, id->vdef);
+            } else if (auto od = Is<Dot>(obj); od && tc.InPar()) {
+                // A component's, owner.field.len (NoteParComponent).
+                auto oid = Is<Ident>(od->obj);
+                auto pc = oid ? tc.parcomponents.find(oid) : tc.parcomponents.end();
+                if (pc != tc.parcomponents.end() && oid->vdef &&
+                    pc->second->componentowner == oid->vdef)
+                    tc.ParLengthUse(oid, oid->vdef);
+            }
             Val v;
             assert(bd->rets[0] == 'i');
             v.type = tc.ast.inttypes[IS_I64];

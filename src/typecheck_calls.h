@@ -1479,6 +1479,7 @@ inline FnSpec *TypeCheck::GetOrCreateSpec(MatchInfo &mi, vector<Val> &argvals, N
         ra.reusable = CarriesPool(pt) ? argvals[i].reusable : 0;
         ra.exact = ar.Exact();
         ra.heldexact = holder && ra.exact && !sf->isrec;
+        ra.parlocal = !sf->isrec && ParLocalReach(ar);
         // Any root the argument may have that holds a grow-shrink array, or
         // for a reference to a slice one that slice may point into. A root
         // that only bounds a reference or slice argument stands for what it
@@ -1546,6 +1547,7 @@ inline FnSpec *TypeCheck::GetOrCreateSpec(MatchInfo &mi, vector<Val> &argvals, N
         va.reusable = CarriesPool(pt->ref->sub) ? hp.reusable : 0;
         va.exact = hp.Exact();
         va.heldexact = pt->ref->sub->kind != TY_SLICE && hp.Exact();
+        va.parlocal = !sf->isrec && ParLocalReach(hp);
         auto contents = pt->ref->sub;
         auto gsroot = hp.Any([&](const RootAlt &a) { return IsGrowShrinkRoot(a.root); });
         auto holder = contents->kind != TY_SLICE;
@@ -3192,6 +3194,18 @@ inline void TypeCheck::CheckSpecBodyOnce(FnSpec *spec, vector<Val> *argvals, Lin
         h->ref.reusable = va.reusable;
         h->ref.byteview = va.byteview;
         h->ref.freshview = va.byteview;
+    }
+    // A par for's body writes through what it reads out of a class only
+    // where every call reaching this specialization passed storage of the
+    // body's own there (RootArg::parlocal, ParReadOnlyAlt).
+    {
+        vector<char> local(classroots.size(), 1);
+        for (auto &ra : spec->roots)
+            if (ra.cls > 0) local[ra.cls] = local[ra.cls] && ra.parlocal;
+        for (auto &va : spec->views)
+            if (va.cls > 0) local[va.cls] = local[va.cls] && va.parlocal;
+        for (size_t k = 1; k < classroots.size(); k++)
+            if (classroots[k]) classroots[k]->parlocal = local[k];
     }
     // A class whose arguments were each read through one parameter class,
     // a pool class or one threaded exactly, points into the storage that

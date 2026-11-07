@@ -4189,8 +4189,21 @@ runs and `FinishParFor` judges once they have settled.
   write is `ParAssign`'s: an integer reduction, recorded with its operation
   class, or an error. In a par for's body nothing launders writability
   through storage either: a reference or slice read out of storage the
-  body cannot write, or that may point at storage outside it, is read-only
-  (`ReadBackLVal`, `PointeeWritable`).
+  body cannot write, or that may point at storage the body sees read-only,
+  is read-only (`ReadBackLVal`, and `PointeeWritable`, which reads a slot's
+  reference back as `ReadBackLVal` does, so a copy of a holder from outside
+  the body holds what the original does). Where a read-back may point is
+  `ParReadOnlyAlt`'s: a variable from outside the body or a global; any
+  bound, which may be anything outside its scope; a class of the loop's
+  function or of one around it; and a class of a specialization checked
+  for the body, unless every call reaching it passed storage of the body's
+  own (`VarDef::parlocal`, from `RootArg::parlocal`, part of the key, which
+  `ParLocalReach` sets where everything the argument leads to, through the
+  references held there too, is exact and the body's; never for a
+  recursive function, as `heldexact`). So a callee handed a holder, an
+  array of references, or a reference to either, from outside the body or
+  copied from there, writes through what it reads out of it no more than
+  the body may.
 * **Specializations.** A call made while `parctx` holds a loop makes or
   reuses a specialization with `FnSpec::inpar`, and for a nested function,
   whose body may name the loop's variables, `FnSpec::parloop` too, both part
@@ -4248,6 +4261,12 @@ runs and `FinishParFor` judges once they have settled.
   read-back counts only where what it reaches may hold a run of the
   part's elements (`ParUseReaches`, `ParPointeeReaches`, `ParHoldsRun`),
   which a `u8` pointee, a byte view of any array, always may.
+* **Root structs.** A root struct's owner holds its components' storage
+  (§3.9), so `ParMayAlias` takes an owner and a component of it, either
+  way around, as one storage; but `s.field`, the owner's name with a path
+  to one component alone, uses only that component (`NoteParComponent`
+  records it in `parcomponents`, which `FinishParFor` reads in the owner's
+  place), and `s.field.len` is a length (`ParLengthUse`).
 * **Replay.** What a check does that a par for judges -- a use, a
   reduction's update, a part, a part's own name, a length -- goes to the
   par fors on the stack through `ParApply`, which also records it with

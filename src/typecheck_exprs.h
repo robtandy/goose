@@ -293,14 +293,14 @@ inline void TypeCheck::ReadBackLVal(LVal &lv) {
                             : lv.writable && !lv.type->cq;
     // In a par for's body nothing launders writability (§4.3 R1): what is
     // read out of storage the body cannot write, or may point at storage
-    // from outside the body, is read-only. And where it may point, the loop
-    // judges against the parts its iterations own (FinishParFor): read in
-    // the body itself, or in a function value of it, since what a callee
-    // reads out of storage it was handed is the caller's argument's.
+    // the body sees read-only -- a copy of a holder from outside it holds
+    // what that holder does -- is read-only (ParReadOnlyAlt). And where it
+    // may point, the loop judges against the parts its iterations own
+    // (FinishParFor): read in the body itself, or in a function value of
+    // it, since what a callee reads out of storage it was handed is the
+    // caller's argument's.
     if (InPar()) {
-        if (!pathwritable || lv.Any([&](const RootAlt &a) {
-                return a.root && ParCaptured(a.root);
-            }))
+        if (!pathwritable || lv.Any([&](const RootAlt &a) { return ParReadOnlyAlt(a); }))
             lv.writable = false;
         if ((int)frames.size() - 1 == Par().frame || frames.back().isfunval)
             ParReadBack(lv, lv.type);
@@ -753,6 +753,7 @@ inline void TypeCheck::ResolveMemberLValue(LVal &lv, Dot *d) {
             auto parent = lv.AsRoots();
             if (step(inst->st->fields, inst->ftypes, true)) {
                 lv.TakeAlts(ProjectRoots(parent, t, d->fieldidx));
+                if (InPar()) NoteParComponent(d, lv);
                 return;
             }
         } else if (step(inst->st->fields, inst->ftypes, FieldsInFrame(d))) return;

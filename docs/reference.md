@@ -4146,7 +4146,9 @@ What the body may touch:
   every global, is read-only inside it: no assignment, push, resize or
   other write, and no write through a reference or slice read out of it.
   A function the body calls is checked again for the body, under the same
-  rules, so it writes no global either.
+  rules, so it writes no global either. A copy of a holder or an array of
+  references from outside the body is no way around this: the references
+  read out of it point where the original's do, and are as read-only.
 * **What an iteration owns.** The element `par for &x in a` binds;
   `a[k]`, where `k` is the loop's binder or index; and `a.chunk(k, n)` in
   `par for k in n`, or `a.chunk_at(bounds, k)` in
@@ -4161,7 +4163,8 @@ What the body may touch:
   parameter, which may be any array its callers pass, a global or another
   array that may be the same one is not read in the body either. Whether
   two parameters are two arrays depends on every call of the function, so
-  the check waits for the whole program.
+  the check waits for the whole program. A root struct's owner reaches all
+  of its components, and `s.first` only that one.
   A `par for` in another's body is held to the outer one's rules too: it
   writes only what the outer iteration owns.
 * **Reductions.** An integer of the caller's accumulated by one operation,

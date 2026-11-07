@@ -2326,6 +2326,15 @@ struct TypeCheck {
     void ParReplay(FnSpec *spec);
     void ParReadBack(const Roots &r, TypeExpr *t);
     FnSpec *ClassSpecOf(VarDef *r, bool &distinct);
+    int ParClassFrame(VarDef *x);
+    [[noreturn]] void ParLoadedWriteError(Node *at, const char *what);
+    void NoteParComponent(Dot *d, const LVal &lv);
+    // Names of a root struct's owner, in par for bodies, whose paths reach
+    // one component alone (owner.field): FinishParFor judges each as a use
+    // of the component, in the owner's place (NoteParComponent).
+    unordered_map<Node *, VarDef *> parcomponents;
+    bool ParReadOnlyAlt(const RootAlt &a);
+    bool ParLocalReach(const Roots &r);
     void ParReduce(Node *at, VarDef *vd, TType cls, Node *name);
     void ParLengthUse(Node *at, VarDef *vd);
     bool ParHoldsRun(TypeExpr *t, TypeExpr *e);

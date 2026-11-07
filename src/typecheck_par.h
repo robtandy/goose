@@ -50,6 +50,71 @@ inline bool TypeCheck::ParCapturedAround(const VarDef *vd) {
     return n > 1;
 }
 
+// The frame whose specialization has x as a parameter's class, or a
+// component of one (ClassParam), innermost first; -1 where none has.
+inline int TypeCheck::ParClassFrame(VarDef *x) {
+    for (auto i = (int)frames.size() - 1; i >= 0; i--) {
+        auto sp = frames[i].spec;
+        if (!sp || frames[i].isfunval) continue;
+        auto view = false;
+        if (ClassParam(sp, x, view) >= 0) return i;
+    }
+    return -1;
+}
+
+// Whether a reference or slice with alternative a, in a par for's body or a
+// function checked for it, may lead to storage the body sees read-only
+// (§4.3 R1), and so carries no writable provenance, however writable the
+// slot it was read out of: a variable from outside the body or a global
+// (ParCaptured); anything outside its scope, for a bound, which outside
+// static data's includes every global; a class of the loop's function or of
+// one around it, which stands for its callers' storage; and a class of a
+// function checked for the body, unless every call reaching it passed
+// storage of the body's own (VarDef::parlocal), of which a component of the
+// class is part. Static data is read-only by its type.
+inline bool TypeCheck::ParReadOnlyAlt(const RootAlt &a) {
+    if (!InPar()) return false;
+    auto x = a.root;
+    if (!x) return !a.exact;
+    if (IsClassRoot(x)) {
+        if (ParClassFrame(x) <= Par().frame) return true;
+        auto base = x;
+        while (base->componentowner) base = base->componentowner;
+        return !base->parlocal;
+    }
+    return !a.exact || ParCaptured(x);
+}
+
+// owner.field, d, of a root struct (§3.9) in a par for's body, lv the path
+// to the field: where the identifier names the owner and the path reaches
+// one component of it alone, that is all the name reaches there, which
+// FinishParFor judges in the owner's place -- a use of the owner reaches
+// every component.
+inline void TypeCheck::NoteParComponent(Dot *d, const LVal &lv) {
+    auto id = Is<Ident>(d->obj);
+    if (!id || !id->vdef || !lv.Exact()) return;
+    auto c = lv.Root();
+    if (c && c->componentowner == id->vdef) parcomponents[id] = c;
+}
+
+// Whether everything a value with roots r leads to is storage of the par
+// for's body, each place named exactly, through the references held there
+// too, which a callee handed it may read out and follow (RootArg::parlocal).
+// A class's own summary says what leads on from it.
+inline bool TypeCheck::ParLocalReach(const Roots &r) {
+    if (!InPar()) return false;
+    Roots all = r;
+    for (size_t i = 0; i < all.alts.size(); i++) {
+        auto a = all.alts[i];
+        if (ParReadOnlyAlt(a)) return false;
+        auto x = a.root;
+        if (!x || IsClassRoot(x) || !x->type) continue;
+        if (IsRefOrSlice(x->type)) all.Add(x->ref.AsRoots());
+        else if (HoldsPlainRef(x->type)) all.Add(x->contents);
+    }
+    return true;
+}
+
 // A name in the body (or in a function checked for it) that reads or writes
 // vd, a variable from outside it: FinishParFor judges each, for every par
 // for whose body the name is in that sees vd from outside.
@@ -322,6 +387,19 @@ inline bool TypeCheck::ParChunkPart(Call *c, const BuiltinDef &d, vector<Node *>
                   "an integer accumulated by one operation, make it a reduction (x += ...)"));
 }
 
+// A write through a reference read out of a slot at `at` in a par for's
+// body, or a function checked for it, which ReadBackLVal leaves read-only
+// though the slot's type does not: the reference may point at storage the
+// body sees read-only (ParReadOnlyAlt).
+[[noreturn]] inline void TypeCheck::ParLoadedWriteError(Node *at, const char *what) {
+    Error(at, cat(what, " this reference in a par for: it is read out of storage, and may "
+                  "point at a variable from outside the body or at a global, which every "
+                  "iteration sees and may run beside the others, so the body may only read "
+                  "it (docs/design/child_threads.md §4.3 R1); a copy of a holder from outside "
+                  "the body holds what that holder does, and a function the body hands one "
+                  "is checked as the body is"));
+}
+
 // `x op= v`, `x++`, `x--` or `x = v` (op T_ASSIGN), `x .= r` (T_DOTASSIGN),
 // on x, a variable from outside the body as a whole: a reduction of an
 // integer local by an associative operation (§4.6), or no write at all.
@@ -446,6 +524,9 @@ inline TypeCheck::Alias TypeCheck::ParMayAlias(const RootAlt &a, VarDef *root, P
     defer = nullptr;
     auto r = a.root;
     if (r == root) return AL_YES;
+    // A root struct's owner holds its components' storage (§3.9): what
+    // reaches the owner reaches every one of them.
+    if (r && root && (ProjectedFrom(root, r) || ProjectedFrom(r, root))) return AL_YES;
     // Static data, and a const global's storage, are read-only, and no
     // writable part lies in either.
     if (!r || !root || (r->isglobal && r->type && r->type->cq)) return AL_NO;
@@ -591,7 +672,12 @@ inline void TypeCheck::FinishParFor(ForLoop *x, ParCtx &ctx) {
     }
     for (auto &[at, vd] : ctx.uses) {
         if (ctx.partuses.count(at)) continue;
-        auto roots = ParRootsOf(vd);
+        // A name of a root struct's owner whose path reaches one component
+        // alone uses that component (NoteParComponent).
+        auto pc = parcomponents.find(at);
+        auto reach = pc != parcomponents.end() && pc->second->componentowner == vd ? pc->second
+                                                                                  : vd;
+        auto roots = ParRootsOf(reach);
         for (auto &p : ctx.parts) {
             auto mine = vd == p.var;
             auto msg = [&] {
@@ -607,7 +693,7 @@ inline void TypeCheck::FinishParFor(ForLoop *x, ParCtx &ctx) {
                                : string());
             };
             if (mine) Error(at, msg());
-            auto reaches = ParUseReaches(vd, p.elem);
+            auto reaches = ParUseReaches(reach, p.elem);
             for (auto &a : roots.alts) {
                 FnSpec *sp = nullptr;
                 auto al = a.root == p.root ? AL_YES
@@ -628,7 +714,7 @@ inline void TypeCheck::FinishParFor(ForLoop *x, ParCtx &ctx) {
                 continue;
             }
             // Nor read it through a reference or what holds one.
-            if (!ParReachesVar(vd->type, rv)) continue;
+            if (!ParReachesVar(reach->type, rv)) continue;
             for (auto &a : roots.alts) {
                 FnSpec *sp = nullptr;
                 auto al = ParMayAlias(a, rv, ctx, sp);

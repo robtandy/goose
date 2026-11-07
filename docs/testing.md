@@ -235,6 +235,11 @@ place, all printing the same:
   function that reduces a variable, called from three `par for`s in turn,
   each of which must add its own count exactly, and a helper reading a
   global reused beside the parts of a local array.
+* `threads/par_for_holders.goose`: holders and arrays of references to the
+  body's own variables, copies of them and references to those, written
+  through in the body and in functions it calls; and a root struct's
+  component owned by the iterations while the body reads another, and the
+  owned one's length.
 * `threads/par_for_abort.goose`: an abort in one iteration ends the
   program with its message, whichever thread runs it.
 * `threads/par_for_contained.goose`: in a contained worker, a `par for`
@@ -250,7 +255,12 @@ per rule: R1 (`write_captured`, `push_captured`, `callee_write`,
 by a member, through a reference a callee is given, as a global in a
 callee, by a nested function, through a reference loaded out of it, and
 through a reference or slice a plain `for` in the body binds out of an
-array from outside it), the reductions (`float_reduction`,
+array from outside it; `holder_copy`, `holder_incdec`, `ref_array_copy`
+and `global_holder_copy`: through a reference read out of a copy the body
+makes of a holder, an array of references or a global holder;
+`holder_callee`, `holder_copy_callee`, `holder_ref_callee` and
+`ref_array_callee`: in a function the body hands a holder, a copy of one,
+a reference to a copy, or an array of references), the reductions (`float_reduction`,
 `reduction_mixed`, `reduction_read`, and `reused_reduction_read`, through
 a generic function reused from another loop; `reduction_alias`,
 `reduction_alias_callee`, `reduction_alias_holder` and
@@ -268,7 +278,10 @@ loop; `reuse_inexact_after`, `reuse_inexact_before` and
 `reuse_inexact_via`: two parameters a later call, an earlier one, or the
 calls of a function passing its own parameters on, may give one array;
 `byte_view_alias` and `byte_view_readback`: a byte view that may be of the
-partitioned array, as a parameter and read out of a holder; `nested_alias` and `nested_outer_write`: an outer loop's
+partitioned array, as a parameter and read out of a holder;
+`root_component`, `root_component_slice` and `root_owner_callee`: a root
+struct's component partitioned by element and through a slice, beside a
+read of it through the owner, and the whole owner handed to a callee; `nested_alias` and `nested_outer_write`: an outer loop's
 partitioned array read in an inner loop's body, and an inner loop's
 element of what the outer loop sees from outside, which every outer
 iteration writes), R3 (`print`, `qput` in a callee, `exit`, `thread_pool`),

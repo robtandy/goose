@@ -1816,6 +1816,12 @@ struct VarDef {
     // inexact root at the class stands for beside the class's own storage
     // (TypeCheck::BoundReach).
     vector<TypeExpr *> classreach;
+    // Synthetic class roots only, of a specialization checked for a par
+    // for's body (FnSpec::inpar): every call reaching it passed storage of
+    // that body's own here, and what references held there lead to is the
+    // body's too (RootArg::parlocal). Otherwise the class may be storage the
+    // body sees read-only (§4.3 R1), and so is what is read out of it.
+    bool parlocal = false;
     // Synthetic roots only (classes, a render's buffer): element types the
     // storage they stand for holds only as the elements of one array, so
     // that a reference to one rooted there is an element of that array
@@ -2077,6 +2083,13 @@ struct RootArg {
     // deepest of them. Never set for a recursive function, whose back edges
     // reuse its body whatever they pass (§7.8).
     bool heldexact = false;
+    // At a call in a par for's body (FnSpec::inpar): the argument leads only
+    // to storage of the body's own, each place named exactly, through the
+    // references it holds or points at too (TypeCheck::ParLocalReach). Part
+    // of the key: the body writes through what it reads out of the class only
+    // where every call says so (VarDef::parlocal). Never set for a recursive
+    // function, whose back edges reuse its body whatever they pass (§7.8).
+    bool parlocal = false;
     // The argument is a different array from every other concrete argument at
     // its call site: a global or a function's variable with no class of a
     // parameter beside it, a variable created inside the activation whose
@@ -2115,7 +2128,7 @@ struct RootArg {
                writable == o.writable && reusable == o.reusable &&
                growshrink == o.growshrink && gsvia == o.gsvia && slotread == o.slotread &&
                byteview == o.byteview && pool == o.pool && heldexact == o.heldexact &&
-               unknown == o.unknown;
+               unknown == o.unknown && parlocal == o.parlocal;
     }
 };
 

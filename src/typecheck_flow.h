@@ -2153,7 +2153,7 @@ inline void TypeCheck::CheckFor(ForLoop *x) {
             // storage from outside it is read-only, and judged against the
             // parts of the par for's iterations.
             if (InPar()) {
-                if (iterprov.Any([&](const RootAlt &a) { return a.root && ParCaptured(a.root); }))
+                if (iterprov.Any([&](const RootAlt &a) { return ParReadOnlyAlt(a); }))
                     iterprov.writable = false;
                 if ((int)frames.size() - 1 == Par().frame || frames.back().isfunval)
                     ParReadBack(iterprov, bindtype);
@@ -2937,8 +2937,11 @@ inline void TypeCheck::CheckAssign(Assign *a) {
     // (a narrowed optional included, since lv.type is the narrowed type)
     // writes the pointee; rebinding is `.=`.
     if (IsPlainRef(lv.type)) {
-        if (lv.parfrom && !PointeeWritable(lv, a))
-            ParWriteError(a, lv.parfrom, "cannot write through");
+        if (!PointeeWritable(lv, a)) {
+            if (lv.parfrom) ParWriteError(a, lv.parfrom, "cannot write through");
+            // Read-only only by a par for's rule (§4.3 R1).
+            if (InPar() && !lv.var && !lv.type->cq) ParLoadedWriteError(a, "cannot write through");
+        }
         if (a->op == T_ASSIGN) PointeeAssign(a, lv, held);
         else CompoundAssign(a, lv.type->ref->sub, PointeeWritable(lv, a));
         a->pointee = true;
@@ -3077,8 +3080,13 @@ inline bool TypeCheck::PointeeWritable(LVal &lv, Node *at) {
     // Read out of a slot: writable unless the slot's type says const, the
     // only way a read-only reference got into it (§9.5). In a par for's body
     // nothing launders writability: a reference read out of storage the
-    // body cannot write is read-only too (§4.3 R1).
-    return !lv.type->cq && !(InPar() && !lv.writable);
+    // body cannot write, or that may point at storage the body sees
+    // read-only, is read-only too (§4.3 R1), as ReadBackLVal reads it.
+    if (lv.type->cq) return false;
+    if (!InPar()) return true;
+    auto rb = lv;
+    ReadBackLVal(rb);
+    return rb.writable;
 }
 
 // `r = v` through the reference at lv, whose pointee is the location `at`
@@ -3320,6 +3328,8 @@ inline void TypeCheck::CheckIncDec(IncDec *x) {
         if (lv.var) RequireAssigned(lv.var, x);
     }
     if (!writable && lv.parfrom) ParWriteError(x, lv.parfrom, "cannot modify through");
+    if (!writable && InPar() && IsPlainRef(lv.type) && !lv.var && !lv.type->cq)
+        ParLoadedWriteError(x, "cannot modify through");
     if (!writable) Error(x, "cannot modify through this path (const, or a read-only "
                             "instantiation, §9.5)");
     if (!IsIntT(st))
