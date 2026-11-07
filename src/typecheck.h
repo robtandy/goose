@@ -2347,6 +2347,7 @@ struct TypeCheck {
     void ParReduce(Node *at, VarDef *vd, TType cls, Node *name);
     void ParLengthUse(Node *at, VarDef *vd);
     bool ParHoldsRun(TypeExpr *t, TypeExpr *e);
+    bool ParElemsOverlap(TypeExpr *a, TypeExpr *b);
     bool ParPointeeReaches(TypeExpr *p, TypeExpr *e);
     bool ParUseReaches(VarDef *vd, TypeExpr *e);
     bool ParReachesVar(TypeExpr *t, VarDef *rv);

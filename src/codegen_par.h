@@ -95,6 +95,13 @@ inline Node *CodeGen::OutlineParLoop(FnSpec *sp, ForLoop *fl, vector<FnSpec *> &
     pspec->uses = 1;
     pspec->retsknown = true;
     pspec->inpar = true;
+    // The body of a recursive cycle's member is the cycle's, as the member
+    // is (§7.8), whatever function it runs in now: its large fixed locals
+    // stay native (LargeFixedOnStack), and it holds no data stack across a
+    // call into the cycle (NoStackAcrossCycleCall, BoundStacks), which the
+    // checker held the member's body to.
+    pspec->incycle = sp->incycle;
+    if (sp->incycle) pspec->cyclelink = sp;
     sf->specs.push_back(pspec);
     auto param = [&](const char *name, TypeExpr *t) {
         auto v = ast.NewVarDef();

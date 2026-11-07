@@ -4283,6 +4283,11 @@ runs and `FinishParFor` judges once they have settled.
   of the sequence before the body's `ParScope` is pushed, so `CheckFor`
   makes it read-only and records it as one of the loop's read-backs
   itself, which its parts and reductions are judged against.
+* **Element types.** Two parts, or a part and the sequence's elements, of
+  types neither of which holds the other by value lie apart in any one
+  storage, as two fields' arrays do (`ParElemsOverlap`); where one holds
+  the other -- the rows of an array and the cells of a row -- or either is
+  bytes, they may overlap.
 * **Root structs.** A root struct's owner holds its components' storage
   (§3.9), so `ParMayAlias` takes an owner and a component of it, either
   way around, as one storage; but `s.field`, the owner's name with a path
@@ -5961,8 +5966,13 @@ header becomes the range of the two parameters, and an array loop walks the
 slice from `ForLoop::parlo` to `parhi`. What the loop declares is the new
 function's (`VarDef::ownerspec`), so `CollectSpecs` finds its free
 variables as a nested function's, which pass as such a function's do
-(§6.4). The function is outlined again from, so a `par for` in its body is
-outlined in turn; its own loop is a plain one. Where the loop stood, a
+(§6.4). Where the body's function is a member of a recursive cycle, the
+new one is too (`FnSpec::incycle`, its `cyclelink` the member): the body
+was checked as the member's, so its large fixed locals stay native
+(`LargeFixedOnStack`) and it holds no data stack across a call into the
+cycle (`NoStackAcrossCycleCall`, `BoundStacks`). The function is outlined
+again from, so a `par for` in its body is outlined in turn; its own loop
+is a plain one. Where the loop stood, a
 call to the function with `Call::parfor` set stands, which `EmitParFor`
 emits as the fork: the range's ends, or the sequence's view, evaluated once;
 the offsets of each `chunk_at` part checked whole

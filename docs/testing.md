@@ -249,6 +249,9 @@ place, all printing the same:
   whose own `par for` calls it again, which must compile to a bounded
   number of specializations and give the same result at every thread
   count.
+* `threads/par_for_recursive_scratch.goose`: a recursive function whose
+  `par for` keeps a large fixed local across its call back into the cycle,
+  which stays native in the outlined body as in a plain loop.
 * `threads/par_for_abort.goose`: an abort in one iteration ends the
   program with its message, whichever thread runs it.
 * `threads/par_for_contained.goose`: in a contained worker, a `par for`
@@ -306,7 +309,8 @@ partitioned array, read in the body, by a function taking `i64[:]&`, by a
 nested function, and through a holder handed to a function;
 `binder_alias` and `seq_shifted`: the loop's own reference binder pointing
 at an element another iteration owns, and a part of another view of the
-sequence, one element on; `nested_alias` and `nested_outer_write`: an outer loop's
+sequence, one element on; `row_cells` and `row_cells_seq`: the cells of a
+row owned beside the rows, as parts and as the sequence; `nested_alias` and `nested_outer_write`: an outer loop's
 partitioned array read in an inner loop's body, and an inner loop's
 element of what the outer loop sees from outside, which every outer
 iteration writes), R3 (`print`, `qput` in a callee, `exit`, `thread_pool`),

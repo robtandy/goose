@@ -562,6 +562,15 @@ inline TypeCheck::Alias TypeCheck::ParMayAlias(const RootAlt &a, VarDef *root, P
     return AL_YES;
 }
 
+// Whether runs of elements of types a and b, in one storage, may overlap:
+// where they are of one type, where one holds the other by value -- the
+// cells of a row beside the rows -- and where either is bytes, which a byte
+// view cuts out of anything. Elements of two types neither of which holds
+// the other lie apart, as two fields' arrays do.
+inline bool TypeCheck::ParElemsOverlap(TypeExpr *a, TypeExpr *b) {
+    return !a || !b || MayHoldValueOf(a, b) || MayHoldValueOf(b, a) || IsU8(a) || IsU8(b);
+}
+
 // Whether storage of type t holds a run of elements of type e, which a part
 // of type e is: an array of them, or of what holds one, by value. Any array
 // may be a run of bytes, which a byte view (bytes_of) cuts out of it.
@@ -664,9 +673,7 @@ inline void TypeCheck::FinishParFor(ForLoop *x, ParCtx &ctx) {
             }
             // Two views that may be of one storage may start at different
             // elements of it, whatever their cuts.
-            auto kin = !a.elem || !b.elem || MaySameType(a.elem, b.elem) || IsU8(a.elem) ||
-                       IsU8(b.elem);
-            if (!kin) continue;
+            if (!ParElemsOverlap(a.elem, b.elem)) continue;
             RootAlt ra;
             ra.root = b.root;
             ra.exact = true;
@@ -743,9 +750,7 @@ inline void TypeCheck::FinishParFor(ForLoop *x, ParCtx &ctx) {
         for (auto &p : ctx.parts) {
             if (p.at == x) continue;
             if (p.var && p.var == ctx.seqvar && p.form == PF_ELEMENT && !p.by) continue;
-            auto kin = !p.elem || !ctx.seqelem || MaySameType(p.elem, ctx.seqelem) ||
-                       IsU8(p.elem) || IsU8(ctx.seqelem);
-            if (!kin) continue;
+            if (!ParElemsOverlap(p.elem, ctx.seqelem)) continue;
             for (auto &a : ctx.seqroots.alts) {
                 FnSpec *sp = nullptr;
                 auto al = ParMayAlias(a, p.root, ctx, sp);
