@@ -234,7 +234,8 @@ place, all printing the same:
 * `threads/par_for_reused.goose`: a generic function handed a nested
   function that reduces a variable, called from three `par for`s in turn,
   each of which must add its own count exactly, and a helper reading a
-  global reused beside the parts of a local array; a two-array kernel
+  global reused beside the parts of a local array; a kernel reading a
+  global `let` slice no function can bind again; a two-array kernel
   called both ways around, directly and through another function, and
   one reading through a reference to a slice of another array, which the
   settled check of parameters apart must accept.
@@ -334,6 +335,8 @@ body;
 `slice_ref_holder_callee`: a reference to a slice variable viewing the
 partitioned array, read in the body, by a function taking `i64[:]&`, by a
 nested function, and through a holder handed to a function;
+`global_view_rebound`: a global `var` slice a kernel reads, bound after
+the kernel's first call to the array its iterations own;
 `pool_ref_callee` and `pool_ref_reused`: a holder of a reference into the
 pool a parameter's parts lie in, read through by a function, its
 specialization made in the loop and before it;

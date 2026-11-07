@@ -10,6 +10,14 @@
 // through a reference to a slice of another array.
 let FACTOR = 3;
 
+// A global slice no function can bind again views the one array it is
+// given, which is no parameter's (kernel_view).
+const SEED: i64[4] = [1, 2, 3, 4];
+
+let VIEW: const i64[:] = SEED;
+
+fn kernel_view(dst: i64[:]) { par for k in dst.len { dst[k] = VIEW[(k + 1) % 4] + 1; } }
+
 fn run<F>() { F(); }
 
 fn twice<F>() { F(); F(); }
@@ -50,4 +58,8 @@ fn main() {
     var w = b[0..4];
     add_view(a, w);
     print(a);
+    var kv: i64[4] = [0, 0, 0, 0];
+    kernel_view(kv);
+    kernel_view(kv);
+    print(kv);
 }

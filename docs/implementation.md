@@ -4255,7 +4255,10 @@ runs and `FinishParFor` judges once they have settled.
   `ParLengthExempt`: the header of an array a reference leads to may lie in
   an element an iteration owns and resizes) to reach
   no part's storage (`ParRootsOf`: the variable's storage and what it holds,
-  or where it points, and where the references and slices held there lead
+  or where it points -- for a global `var` reference or slice, which any
+  function may bind, all it can be given (`GlobalVarRead`), not the
+  bindings checked so far, as a reused check must stand on every later
+  call -- and where the references and slices held there lead
   -- a slice variable a reference names, a holder's contents, a class's
   view of its caller's slot or holder, the pool a reference `in` one points
   into (`ParRelPools`) -- closed transitively, since a callee handed it

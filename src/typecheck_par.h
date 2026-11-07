@@ -369,8 +369,15 @@ inline bool TypeCheck::ParHoldsPoolRef(TypeExpr *t) {
 // holds point at, or, for a reference or slice, where it points.
 inline Roots TypeCheck::ParRootsOf(VarDef *vd) {
     Roots r;
+    // Where a reference or slice variable points: its bindings, but for a
+    // global `var` one, which any function may bind, checked after the body
+    // or not -- a later call reusing the body's check must stand on all it
+    // can be given (GlobalVarRead).
+    auto pointsat = [&](VarDef *x) {
+        return BoundAnywhere(x) ? GlobalVarRead(x).AsRoots() : x->ref.AsRoots();
+    };
     if (vd->type && IsRefOrSlice(vd->type)) {
-        r.Add(vd->ref.AsRoots());
+        r.Add(pointsat(vd));
     } else {
         r.Set(vd, true);
         if (vd->type && HoldsPlainRef(vd->type)) r.Add(vd->contents);
@@ -399,7 +406,7 @@ inline Roots TypeCheck::ParRootsOf(VarDef *vd) {
         if (!x || x == vd) continue;
         if (x->type) addpools(x->type);
         if (x->type && IsRefOrSlice(x->type)) {
-            r.Add(x->ref.AsRoots());
+            r.Add(pointsat(x));
             continue;
         }
         if (!x->type || HoldsPlainRef(x->type)) r.Add(x->contents);
